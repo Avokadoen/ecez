@@ -81,7 +81,7 @@ pub inline fn initFromMetaData(
     var owned_type_sizes: [max_types]usize = undefined;
     std.mem.copy(usize, owned_type_sizes[0..], type_sizes);
     var owned_type_hashes: [max_types]u64 = undefined;
-    std.mem.copy(usize, owned_type_hashes[0..], type_hashes);
+    std.mem.copy(u64, owned_type_hashes[0..], type_hashes);
     return Archetype{
         .allocator = allocator,
         .type_count = type_sizes.len,
@@ -101,7 +101,7 @@ pub inline fn deinit(self: *Archetype) void {
 }
 
 pub inline fn registerEntity(self: *Archetype, entity: Entity, components: []const []const u8) !void {
-    std.debug.assert(self.type_hashes.len == components.len); // type poisoning occured
+    std.debug.assert(self.type_count == components.len); // type poisoning occured
 
     const value = self.entities.count();
     try self.entities.put(entity, value);
@@ -242,8 +242,7 @@ test "initFromTypes() produce expected arche type" {
     var archetype = try initFromTypes(testing.allocator, &type_arr);
     defer archetype.deinit();
 
-    try testing.expectEqual(type_arr.len, archetype.type_hashes.len);
-    try testing.expectEqual(type_arr.len, archetype.type_sizes.len);
+    try testing.expectEqual(type_arr.len, archetype.type_count);
     try testing.expectEqual(type_arr.len, archetype.components.len);
 
     inline for (type_arr) |T, i| {
@@ -266,8 +265,7 @@ test "initFromMetaData() produce expected arche type" {
     var archetype = try initFromMetaData(testing.allocator, type_sizes[0..], type_hashes[0..]);
     defer archetype.deinit();
 
-    try testing.expectEqual(type_arr.len, archetype.type_hashes.len);
-    try testing.expectEqual(type_arr.len, archetype.type_sizes.len);
+    try testing.expectEqual(type_arr.len, archetype.type_count);
     try testing.expectEqual(type_arr.len, archetype.components.len);
 
     inline for (type_arr) |T, i| {

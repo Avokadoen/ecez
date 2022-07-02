@@ -78,7 +78,7 @@ pub fn entityRefArchetype(self: ArcheTree, entity_ref: EntityRef) *Archetype {
 
 pub const VisitResult = union(enum) {
     step: void,
-    found: *Node,
+    found: usize,
     abort: void,
 };
 pub fn traverse(
@@ -86,31 +86,35 @@ pub fn traverse(
     context: anytype,
     comptime visit: fn (@TypeOf(context), *Node) VisitResult,
     comptime on_step_out: fn (@TypeOf(context), *Node) void,
-) ?*Node {
+) ?usize {
     const Context = @TypeOf(context);
     const step = struct {
-        fn func(s: *ArcheTree, c: Context, node: *Node) ?*Node {
+        fn func(s: *ArcheTree, c: Context, index: usize) VisitResult {
+            const node = &s.node_storage.items[index];
             // if the node visit is satisfied, end traversal
             switch (visit(c, node)) {
                 VisitResult.step => {},
-                VisitResult.found => |find| return find,
-                VisitResult.abort => return null,
+                VisitResult.found => |_| return VisitResult{ .found = index },
+                VisitResult.abort => return VisitResult.abort,
             }
-
             for (node.children_indices[0..node.child_count]) |child_index| {
-                if (func(s, c, &s.node_storage.items[child_index])) |find| {
-                    return find;
+                switch (func(s, c, child_index)) {
+                    VisitResult.step => {},
+                    else => |result| return result,
                 }
                 // used to backtrack side-effects on context relative to current node (if needed)
                 on_step_out(c, node);
             }
 
-            return null;
+            return VisitResult.abort;
         }
     }.func;
 
     // recursively traverse archetype tree beginning with root node
-    return step(self, context, &self.node_storage.items[0]);
+    switch (step(self, context, 0)) {
+        VisitResult.found => |index| return index,
+        else => return null,
+    }
 }
 
 /// Query a specific archtype and get a archetype pointer
@@ -118,23 +122,30 @@ pub fn traverse(
 /// added to the tree
 pub fn getArchetype(self: *ArcheTree, comptime Ts: []const type) !*Archetype {
     const sorted_types = comptime query.sortTypes(Ts);
-    var type_sizes: []usize = undefined;
-    var type_hashes: []u64 = undefined;
-    inline for (sorted_types) |T, i| {
-        type_sizes[i] = @sizeOf(T);
-        type_hashes[i] = query.hashType(T);
-    }
-    const type_query = query.Runtime.init(type_sizes, type_hashes);
+    const type_sizes = comptime blk: {
+        var sizes: [sorted_types.len]usize = undefined;
+        inline for (sorted_types) |T, i| {
+            sizes[i] = @sizeOf(T);
+        }
+        break :blk sizes;
+    };
+    const type_hashes = comptime blk: {
+        var hashes: [sorted_types.len]u64 = undefined;
+        inline for (sorted_types) |T, i| {
+            hashes[i] = query.hashType(T);
+        }
+        break :blk hashes;
+    };
+    const type_query = query.Runtime.init(type_sizes[0..], type_hashes[0..]);
     var visit_context = VisitContext{
-        .hashes = type_query.type_hashes[0..],
-        .index = 0,
-        .is_root = true,
+        .hashes = type_query.type_hashes[0..type_query.type_count],
+        .depth = 0,
         .last_visited_node = null,
     };
 
-    // if we find node we are looking, for return archetype
-    if (self.traverse(&visit_context, GetArchetypeTravler.visit, GetArchetypeTravler.on_step_out)) |node| {
-        return &node.archetype;
+    // if we find node we are looking for, return archetype
+    if (self.traverse(&visit_context, GetArchetypeTravler.visit, GetArchetypeTravler.on_step_out)) |node_index| {
+        return &self.node_storage.items[node_index].archetype;
     }
 
     // archetype does not exist yet and has to be constructed
@@ -142,7 +153,7 @@ pub fn getArchetype(self: *ArcheTree, comptime Ts: []const type) !*Archetype {
     var current_node = blk: {
         // if partial archetype exist i.e A + B exist, but not A B C
         if (visit_context.last_visited_node) |node| {
-            i = visit_context.index - 1;
+            i = visit_context.depth - 1;
             break :blk node;
         }
         i = 0;
@@ -166,8 +177,8 @@ pub fn getArchetype(self: *ArcheTree, comptime Ts: []const type) !*Archetype {
             .child_count = 0,
             .archetype = try Archetype.initFromMetaData(
                 self.allocator,
-                type_query.type_sizes[0..i],
-                type_query.type_hashes[0..i],
+                type_query.type_sizes[0 .. i + 1],
+                type_query.type_hashes[0 .. i + 1],
             ),
         });
         current_node = &self.node_storage.items[new_node_index];
@@ -219,7 +230,11 @@ pub fn getArchetypeRuntime(self: *ArcheTree, type_hashes: []const u64, type_size
             .type_hash = type_hashes[i],
             .children_indices = undefined,
             .child_count = 0,
-            .archetype = try Archetype.initFromMetaData(self.allocator, type_sizes[0..i], type_hashes[0..i]),
+            .archetype = try Archetype.initFromMetaData(
+                self.allocator,
+                type_sizes[0 .. i + 1],
+                type_hashes[0 .. i + 1],
+            ),
         });
         current_node = &self.node_storage.items[new_node_index];
     }
@@ -231,9 +246,8 @@ pub fn getArchetypeRuntime(self: *ArcheTree, type_hashes: []const u64, type_size
 /// Query all type subsets and get each archetype container relevant.
 /// Example:
 /// Archetype (A B C D) & Archetype (B D) & () has a common sub type of (B D)
-pub fn getTypeSubsets(self: *ArcheTree, allocator: Allocator, comptime Ts: []type) ![]*Archetype {
-    const Types = comptime query.sortTypes(Ts);
-    const type_query = comptime query.typeQuery(Types);
+pub fn getTypeSubsets(self: *ArcheTree, allocator: Allocator, comptime Ts: []const type) ![]*Archetype {
+    const type_query = comptime query.typeQuery(Ts);
     const TravelContext = struct {
         hashes: []const u64 = type_query[0..],
         hash_index: usize = 0,
@@ -281,26 +295,28 @@ pub fn getTypeSubsets(self: *ArcheTree, allocator: Allocator, comptime Ts: []typ
 
 const VisitContext = struct {
     hashes: []const u64,
-    index: usize,
-    is_root: bool,
+    depth: usize,
     last_visited_node: ?*Node,
 };
 const GetArchetypeTravler = struct {
     fn visit(context: *VisitContext, node: *Node) VisitResult {
-        defer context.is_root = false;
+        // skip root node
+        if (context.depth == 0) {
+            context.depth += 1;
+            return VisitResult.step;
+        }
+        if (context.depth > context.hashes.len) return VisitResult.abort;
 
-        if (context.index >= context.hashes.len) return VisitResult.abort;
-        if (context.is_root) return VisitResult.step;
-
-        const hash = context.hashes[context.index];
+        const hash = context.hashes[context.depth - 1];
         if (node.type_hash != hash) {
             return VisitResult.abort;
         }
         context.last_visited_node = node;
-        context.index += 1;
-        if (context.index == context.hashes.len) {
-            return VisitResult{ .found = node };
+        if (context.depth == context.hashes.len) {
+            // actual index is known by the caller
+            return VisitResult{ .found = 0 };
         }
+        context.depth += 1;
         return VisitResult.step;
     }
 
@@ -345,11 +361,10 @@ test "getArchetype() generate unique archetypes" {
     }
 
     // Brute force compare all results to ensure each result is unique
-    for (results) |result, index| {
-        var jndex: usize = 0;
-        while (jndex < results.len) : (jndex += 1) {
+    for (results) |result1, index| {
+        for (results) |result2, jndex| {
             if (index == jndex) continue;
-            try testing.expect(result != results[jndex]);
+            try testing.expect(result1 != result2);
         }
     }
 }
@@ -365,12 +380,11 @@ test "getArchetype() is order-independent" {
     const result1 = try tree.getArchetype(&[_]type{ A, B, C });
     const result2 = try tree.getArchetype(&[_]type{ A, C, B });
     const result3 = try tree.getArchetype(&[_]type{ C, A, B });
-
     try testing.expectEqual(result1, result2);
     try testing.expectEqual(result2, result3);
 }
 
-test "getTypeSubsets() subset retrieve all matching subsets" {
+test "getArchetype() does not generate duplicate nodes" {
     const A = struct {};
     const B = struct {};
     const C = struct {};
@@ -381,22 +395,54 @@ test "getTypeSubsets() subset retrieve all matching subsets" {
     var tree = try ArcheTree.init(testing.allocator);
     defer tree.deinit();
 
-    // Construct a suffienctly complex archetree
+    // Construct 6 base nodes
     _ = try tree.getArchetype(&[_]type{A});
     _ = try tree.getArchetype(&[_]type{B});
     _ = try tree.getArchetype(&[_]type{C});
     _ = try tree.getArchetype(&[_]type{D});
     _ = try tree.getArchetype(&[_]type{E});
     _ = try tree.getArchetype(&[_]type{F});
-    // create 4 relevant types (C D E F)
+    // Construct branch of 5 more nodes
     _ = try tree.getArchetype(&[_]type{ A, B, C, D, E, F });
-    // create 2 more relevant types (C D)
+    // Construct branch of 2 more nodes
     _ = try tree.getArchetype(&[_]type{ B, C, D });
-    // create 1 more relevant types (E)
+    // Construct branch of 1 more node
     _ = try tree.getArchetype(&[_]type{ B, C, E });
 
-    const results = try tree.getTypeSubsets(testing.allocator, &[_]type{ B, C });
-    defer testing.allocator.free(results);
-
-    try testing.expectEqual(results.len, 7);
+    try testing.expectEqual(@as(usize, 14), tree.node_storage.items.len);
 }
+
+// test "getTypeSubsets() subset retrieve all matching subsets" {
+//     const A = struct {};
+//     const B = struct {};
+//     const C = struct {};
+//     const D = struct {};
+//     const E = struct {};
+//     const F = struct {};
+
+//     var tree = try ArcheTree.init(testing.allocator);
+//     defer tree.deinit();
+
+//     // Construct a suffienctly complex archetree
+//     _ = try tree.getArchetype(&[_]type{A});
+//     _ = try tree.getArchetype(&[_]type{B});
+//     _ = try tree.getArchetype(&[_]type{C});
+//     _ = try tree.getArchetype(&[_]type{D});
+//     _ = try tree.getArchetype(&[_]type{E});
+//     _ = try tree.getArchetype(&[_]type{F});
+//     // create 4 relevant types (C D E F)
+//     _ = try tree.getArchetype(&[_]type{ A, B, C, D, E, F });
+//     // create 2 more relevant types (C D)
+//     _ = try tree.getArchetype(&[_]type{ B, C, D });
+//     // // create 1 more relevant type (E)
+//     // _ = try tree.getArchetype(&[_]type{ B, C, E });
+
+//     for (tree.node_storage.items[0..tree.node_storage.items.len]) |node| {
+//         std.debug.print("{any}\n", .{node.archetype.type_hashes[0..node.archetype.type_count]});
+//     }
+
+//     const results = try tree.getTypeSubsets(testing.allocator, &[_]type{ B, C });
+//     defer testing.allocator.free(results);
+
+//     try testing.expectEqual(results.len, 7);
+// }

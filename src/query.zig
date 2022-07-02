@@ -5,20 +5,33 @@ const hashfn: fn (str: []const u8) u64 = std.hash.Fnv1a_64.hash;
 const max_types = @import("Archetype.zig").max_types;
 
 pub fn sortTypes(comptime Ts: []const type) [Ts.len]type {
+    const TypeSortElem = struct {
+        original_index: usize,
+        hash: u64,
+    };
     const lessThan = struct {
-        fn func(context: void, comptime lhs: type, comptime rhs: type) bool {
+        fn func(context: void, lhs: TypeSortElem, rhs: TypeSortElem) bool {
             _ = context;
-            return hashType(lhs) < hashType(rhs);
+            return lhs.hash < rhs.hash;
         }
     }.func;
+    var sort_target: [Ts.len]TypeSortElem = undefined;
+    inline for (Ts) |T, i| {
+        sort_target[i] = TypeSortElem{
+            .original_index = i,
+            .hash = hashType(T),
+        };
+    }
+    comptime std.sort.sort(TypeSortElem, sort_target[0..], {}, lessThan);
     var types: [Ts.len]type = undefined;
-    std.mem.copy(type, types[0..], Ts);
-    std.sort.sort(type, types[0..], {}, lessThan);
+    for (sort_target) |s, i| {
+        types[i] = Ts[s.original_index];
+    }
     return types;
 }
 
 pub fn typeQuery(comptime Ts: []const type) [Ts.len]u64 {
-    const Types = sortTypes(Ts);
+    const Types = comptime sortTypes(Ts);
     var type_hashes: [Types.len]u64 = undefined;
     inline for (Types) |T, index| {
         type_hashes[index] = hashType(T);
@@ -44,9 +57,9 @@ pub const Runtime = struct {
             type_hash: u64,
         };
         const lessThan = struct {
-            fn func(context: void, comptime lhs: SortElem, comptime rhs: SortElem) bool {
+            fn func(context: void, lhs: SortElem, rhs: SortElem) bool {
                 _ = context;
-                return hashType(lhs.type_hash) < hashType(rhs.type_hash);
+                return lhs.type_hash < rhs.type_hash;
             }
         }.func;
 
@@ -57,7 +70,7 @@ pub const Runtime = struct {
                 .type_hash = type_hashes[i],
             };
         }
-        std.sort.sort(SortElem, sort_elements[0..type_sizes.len], .{}, lessThan);
+        std.sort.sort(SortElem, sort_elements[0..type_sizes.len], {}, lessThan);
 
         var sorted_type_sizes: [max_types]usize = undefined;
         var sorted_type_hashes: [max_types]u64 = undefined;
@@ -80,9 +93,39 @@ test "Runtime init() sort hashes and sizes" {
     const r = Runtime.init(sizes[0..], hashes[0..]);
 
     try testing.expect(r.type_count == sizes.len);
-    const expected_order = [_]usize{ 3, 2, 0, 1 };
-    for (expected_order) |order, i| {
-        try testing.expectEqual(r.type_sizes[i], sizes[order]);
-        try testing.expectEqual(r.type_hashes[i], hashes[order]);
+    const expected_index_order = [_]usize{ 2, 3, 1, 0 };
+    for (expected_index_order) |order, i| {
+        try testing.expectEqual(sizes[order], r.type_sizes[i]);
+        try testing.expectEqual(hashes[order], r.type_hashes[i]);
+    }
+}
+
+test "sortTypes() sorts" {
+    const A = struct {};
+    const B = struct {};
+    const C = struct {};
+    const types1 = [_]type{ A, B, C };
+    const types2 = [_]type{ C, A, B };
+
+    const sorted_types1 = comptime sortTypes(&types1);
+    const sorted_types2 = comptime sortTypes(&types2);
+
+    inline for (sorted_types1) |T, i| {
+        try testing.expectEqual(@typeName(T), @typeName(sorted_types2[i]));
+    }
+}
+
+test "typeQuery() is order independent" {
+    const A = struct {};
+    const B = struct {};
+    const C = struct {};
+    const types1 = [_]type{ A, B, C };
+    const types2 = [_]type{ C, A, B };
+
+    const q_types1 = typeQuery(&types1);
+    const q_types2 = typeQuery(&types2);
+
+    for (q_types1) |q, i| {
+        try testing.expectEqual(q, q_types2[i]);
     }
 }
