@@ -5,7 +5,7 @@ pub fn build(b: *std.build.Builder) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
     const mode = b.standardReleaseOptions();
 
-    const lib = b.addStaticLibrary("ezcs", "src/main.zig");
+    const lib = b.addStaticLibrary("ecez", "src/main.zig");
     lib.setBuildMode(mode);
     lib.install();
 
