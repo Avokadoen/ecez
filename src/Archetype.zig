@@ -228,7 +228,7 @@ pub fn hasComponent(self: Archetype, comptime T: type) bool {
     return true;
 }
 
-inline fn componentIndex(self: Archetype, type_hash: u64) !usize {
+pub inline fn componentIndex(self: Archetype, type_hash: u64) !usize {
     for (self.type_hashes[0..self.type_count]) |hash, i| {
         if (hash == type_hash) return i;
     }

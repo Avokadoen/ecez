@@ -83,6 +83,41 @@ pub fn setComponent(self: *World, entity: Entity, comptime T: type, component: T
     self.entity_references.items[entity.id].tree_node_index = get_result.node_index;
 }
 
+pub fn removeComponent(self: *World, entity: Entity, comptime T: type) !void {
+    const current_archetype = self.archetree.entityRefArchetype(self.entity_references.items[entity.id]);
+    const remove_type_index = try current_archetype.componentIndex(comptime query.hashType(T));
+
+    var type_sizes: [Archetype.max_types]usize = undefined;
+    std.mem.copy(usize, type_sizes[0..], current_archetype.type_sizes[0..remove_type_index]);
+    var type_hashes: [Archetype.max_types]u64 = undefined;
+    std.mem.copy(u64, type_hashes[0..], current_archetype.type_hashes[0..remove_type_index]);
+
+    // if remove element is not the last element, swap element with last element and shift array left
+    if (remove_type_index < current_archetype.type_count - 1) {
+        std.mem.copy(
+            u64,
+            type_hashes[remove_type_index..],
+            current_archetype.type_hashes[remove_type_index + 1 .. current_archetype.type_count],
+        );
+        std.mem.copy(
+            usize,
+            type_sizes[remove_type_index..],
+            current_archetype.type_sizes[remove_type_index + 1 .. current_archetype.type_count],
+        );
+    }
+
+    // get the new entity archetype
+    const get_result = try self.archetree.getArchetypeAndIndexRuntime(
+        type_sizes[0 .. current_archetype.type_count - 1],
+        type_hashes[0 .. current_archetype.type_count - 1],
+    );
+
+    try current_archetype.moveEntity(entity, get_result.archetype);
+
+    // update the entity reference
+    self.entity_references.items[entity.id].tree_node_index = get_result.node_index;
+}
+
 test "create() entity works" {
     var world = try World.init(testing.allocator);
     defer world.deinit();
@@ -116,6 +151,32 @@ test "setComponent() component moves entity to correct archetype" {
     const entity_archetype = try world.archetree.getArchetype(&[_]type{ A, B });
     const stored_a = try entity_archetype.getComponent(entity1, A);
     try testing.expectEqual(a, stored_a);
+    const stored_b = try entity_archetype.getComponent(entity1, B);
+    try testing.expectEqual(b, stored_b);
+}
+
+test "removeComponent() component moves entity to correct archetype" {
+    const A = struct {};
+    const B = struct { some_value: u8 };
+
+    var world = try World.init(testing.allocator);
+    defer world.deinit();
+
+    const entity1 = try world.createEntity();
+    // entity is now a void entity (no components)
+
+    const a = A{};
+    try world.setComponent(entity1, A, a);
+    // entity is now of archetype (A)
+
+    const b = B{ .some_value = 42 };
+    try world.setComponent(entity1, B, b);
+    // entity is now of archetype (A B)
+
+    try world.removeComponent(entity1, A);
+    // entity is now of archetype (B)
+
+    const entity_archetype = try world.archetree.getArchetype(&[_]type{B});
     const stored_b = try entity_archetype.getComponent(entity1, B);
     try testing.expectEqual(b, stored_b);
 }
