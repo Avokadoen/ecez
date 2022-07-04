@@ -18,6 +18,13 @@ const Node = struct {
     archetype: ?Archetype,
 };
 
+/// In the event of a successful retrieval of Archetype you get a GetArchetypeResult
+pub const GetArchetypeResult = struct {
+    /// The archetype node index, can be used to update entity references
+    node_index: usize,
+    archetype: *Archetype,
+};
+
 allocator: Allocator,
 node_storage: std.ArrayList(Node),
 
@@ -72,41 +79,55 @@ pub fn deinit(self: ArcheTree) void {
 }
 
 pub fn voidType(self: ArcheTree) *Archetype {
-    return &self.node_storage.items[0].archetype;
+    return &(self.node_storage.items[0].archetype orelse unreachable);
 }
 
 pub fn entityRefArchetype(self: ArcheTree, entity_ref: EntityRef) *Archetype {
-    return &self.node_storage.items[entity_ref.tree_node_index].archetype;
+    return &(self.node_storage.items[entity_ref.tree_node_index].archetype orelse unreachable);
 }
 
-/// Query a specific archtype and get a archetype pointer
+/// Query a specific archtype and get a archetype pointer and the underlying archetype node index
 /// In the event that the archetype does not exist yet, the type will be constructed and
 /// added to the tree
 pub fn getArchetype(self: *ArcheTree, comptime Ts: []const type) !*Archetype {
-    const sorted_types = comptime query.sortTypes(Ts);
-    const type_sizes = comptime blk: {
-        var sizes: [sorted_types.len + 1]usize = undefined;
-        sizes[0] = 0;
-        inline for (sorted_types) |T, i| {
-            sizes[i + 1] = @sizeOf(T);
-        }
-        break :blk sizes;
-    };
-    const type_hashes = comptime blk: {
-        var hashes: [sorted_types.len + 1]u64 = undefined;
-        hashes[0] = 0;
-        inline for (sorted_types) |T, i| {
-            hashes[i + 1] = query.hashType(T);
-        }
-        break :blk hashes;
-    };
-    return self.getArchetypeRuntime(type_sizes[0..], type_hashes[0..]);
+    const result = try self.getArchetypeAndIndex(Ts);
+    return result.archetype;
 }
 
 /// Query a specific archtype and get a archetype pointer
 /// In the event that the archetype does not exist yet, the type will be constructed and
 /// added to the tree
 pub fn getArchetypeRuntime(self: *ArcheTree, type_sizes: []const usize, type_hashes: []const u64) !*Archetype {
+    const result = try self.getArchetypeAndIndexRuntime(type_sizes, type_hashes);
+    return result.archetype;
+}
+
+/// Query a specific archtype and get a archetype pointer and the underlying archetype node index
+/// In the event that the archetype does not exist yet, the type will be constructed and
+/// added to the tree
+pub fn getArchetypeAndIndex(self: *ArcheTree, comptime Ts: []const type) !GetArchetypeResult {
+    const sorted_types = comptime query.sortTypes(Ts);
+    const type_sizes = comptime blk: {
+        var sizes: [sorted_types.len]usize = undefined;
+        inline for (sorted_types) |T, i| {
+            sizes[i] = @sizeOf(T);
+        }
+        break :blk sizes;
+    };
+    const type_hashes = comptime blk: {
+        var hashes: [sorted_types.len]u64 = undefined;
+        inline for (sorted_types) |T, i| {
+            hashes[i] = query.hashType(T);
+        }
+        break :blk hashes;
+    };
+    return self.getArchetypeAndIndexRuntime(type_sizes[0..], type_hashes[0..]);
+}
+
+/// Query a specific archtype and get a archetype pointer and the underlying archetype node index
+/// In the event that the archetype does not exist yet, the type will be constructed and
+/// added to the tree
+pub fn getArchetypeAndIndexRuntime(self: *ArcheTree, type_sizes: []const usize, type_hashes: []const u64) !GetArchetypeResult {
     const type_query = query.Runtime.init(type_sizes[0..], type_hashes[0..]);
 
     const Result = union(enum) {
@@ -147,7 +168,10 @@ pub fn getArchetypeRuntime(self: *ArcheTree, type_sizes: []const usize, type_has
             // if we found the node
             if (node.type_hash == type_query.type_hashes[type_query.type_count - 1]) {
                 if (node.archetype) |*archetype| {
-                    return archetype;
+                    return GetArchetypeResult{
+                        .node_index = value.index,
+                        .archetype = archetype,
+                    };
                 }
                 node.archetype = try Archetype.initFromMetaData(
                     self.allocator,
@@ -155,15 +179,19 @@ pub fn getArchetypeRuntime(self: *ArcheTree, type_sizes: []const usize, type_has
                     type_query.type_sizes[1..type_query.type_count],
                     type_query.type_hashes[1..type_query.type_count],
                 );
-                return &(node.archetype orelse unreachable);
+                return GetArchetypeResult{
+                    .node_index = value.index,
+                    .archetype = &(node.archetype orelse unreachable),
+                };
             }
 
             // start creating new branch in tree
             var current_node = &self.node_storage.items[value.index];
+            var new_node_index: usize = undefined;
             var i = value.depth + 1;
             while (i < type_query.type_count) : (i += 1) {
                 std.debug.assert(current_node.child_count < node_max_children - 1);
-                const new_node_index = self.node_storage.items.len;
+                new_node_index = self.node_storage.items.len;
                 current_node.children_indices[current_node.child_count] = new_node_index;
                 current_node.child_count += 1;
 
@@ -182,7 +210,10 @@ pub fn getArchetypeRuntime(self: *ArcheTree, type_sizes: []const usize, type_has
                 });
                 current_node = &self.node_storage.items[new_node_index];
             }
-            return &(current_node.archetype orelse unreachable);
+            return GetArchetypeResult{
+                .node_index = new_node_index,
+                .archetype = &(current_node.archetype orelse unreachable),
+            };
         },
         .none => unreachable,
     }
@@ -405,5 +436,29 @@ test "getTypeSubsets() subset retrieve all matching subsets" {
         const results = try tree.getTypeSubsets(testing.allocator, &[_]type{ B, C });
         defer testing.allocator.free(results);
         try testing.expectEqual(@as(usize, 3), results.len);
+    }
+}
+
+test "getArchetypeAndIndex() give the correct node index" {
+    const A = struct {};
+    const B = struct {};
+    const C = struct {};
+    const D = struct {};
+    const E = struct {};
+    const F = struct {};
+
+    var tree = try ArcheTree.init(testing.allocator);
+    defer tree.deinit();
+
+    const type_arr = [_]type{ A, B, C, D, E, F };
+    var results: [type_arr.len]GetArchetypeResult = undefined;
+    inline for (type_arr) |T, i| {
+        results[i] = try tree.getArchetypeAndIndex(&[_]type{T});
+    }
+
+    // we expect each node index to be its index in the result array + 1
+    // the tree has a root node which occupy the 0 index, so the first node should be on index 1
+    for (results) |result, i| {
+        try testing.expectEqual(result.node_index, i + 1);
     }
 }

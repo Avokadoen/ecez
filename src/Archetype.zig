@@ -123,6 +123,8 @@ pub inline fn registerEntity(self: *Archetype, entity: Entity, components: []con
     }
 }
 
+/// moves an entity and it's components to dest archetype
+/// this operation is unsafe, because validation of dest archetype is not performend in any way
 pub inline fn moveEntity(self: *Archetype, entity: Entity, dest: *Archetype) !void {
     const moving_kv = self.entities.fetchSwapRemove(entity) orelse return error.EntityMissing;
 
@@ -149,21 +151,19 @@ pub inline fn moveEntity(self: *Archetype, entity: Entity, dest: *Archetype) !vo
         const value = dest.entities.count();
         try dest.entities.put(entity, value);
 
-        var dest_type_index: usize = 0;
-        for (self.components) |component, i| {
-            // assumption: type hashes are sorted
-            hash_loop: for (dest.type_hashes[dest_type_index..]) |hash, j| {
-                if (hash == self.type_hashes[i]) {
-                    dest_type_index = j;
-                    break :hash_loop;
-                }
-            }
-
-            const stride = self.type_sizes[i];
+        component_loop: for (dest.components) |*component, i| {
+            const stride = dest.type_sizes[i];
             const start = moving_kv.value * stride;
 
-            try dest.components[dest_type_index].appendSlice(component.items[start .. start + stride]);
-            appended_types += 1;
+            // if component exist in previous/current archetype we copy it over
+            for (self.type_hashes[0..self.type_count]) |hash, j| {
+                if (dest.type_hashes[i] == hash) {
+                    try component.appendSlice(self.components[j].items[start .. start + stride]);
+                    continue :component_loop;
+                }
+            }
+            // else we add zero bytes to the component storage (should be defined externally!)
+            try component.appendNTimes(0, stride);
         }
     }
 
@@ -171,6 +171,8 @@ pub inline fn moveEntity(self: *Archetype, entity: Entity, dest: *Archetype) !vo
     {
         // TODO: faster way of doing this
         for (self.entities.values()) |*component_index| {
+            // if the entity was located after removed entity, we shift it left
+            // to occupy vacant memory
             if (component_index.* > moving_kv.value) {
                 component_index.* -= 1;
             }
@@ -188,7 +190,7 @@ pub inline fn moveEntity(self: *Archetype, entity: Entity, dest: *Archetype) !vo
 }
 
 /// Assign a component value to the entity
-pub inline fn setComponent(self: Archetype, entity: Entity, comptime T: type, value: T) !void {
+pub fn setComponent(self: Archetype, entity: Entity, comptime T: type, value: T) !void {
     // Nothing to set
     if (@sizeOf(T) == 0) {
         return;
@@ -227,7 +229,7 @@ pub fn hasComponent(self: Archetype, comptime T: type) bool {
 }
 
 inline fn componentIndex(self: Archetype, type_hash: u64) !usize {
-    for (self.type_hashes) |hash, i| {
+    for (self.type_hashes[0..self.type_count]) |hash, i| {
         if (hash == type_hash) return i;
     }
     // TODO: redesign stuff so all of this can be compile time

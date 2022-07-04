@@ -74,13 +74,17 @@ pub const Runtime = struct {
 
         var sorted_type_sizes: [max_types]usize = undefined;
         var sorted_type_hashes: [max_types]u64 = undefined;
+        // insert void type
+        sorted_type_sizes[0] = 0;
+        sorted_type_hashes[0] = 0;
+        // insert the rest of the types
         for (sort_elements[0..type_sizes.len]) |elem, i| {
-            sorted_type_sizes[i] = elem.type_size;
-            sorted_type_hashes[i] = elem.type_hash;
+            sorted_type_sizes[i + 1] = elem.type_size;
+            sorted_type_hashes[i + 1] = elem.type_hash;
         }
 
         return Runtime{
-            .type_count = type_sizes.len,
+            .type_count = type_sizes.len + 1,
             .type_sizes = sorted_type_sizes,
             .type_hashes = sorted_type_hashes,
         };
@@ -92,11 +96,12 @@ test "Runtime init() sort hashes and sizes" {
     const hashes = [_]u64{ 4, 3, 1, 2 };
     const r = Runtime.init(sizes[0..], hashes[0..]);
 
-    try testing.expect(r.type_count == sizes.len);
+    // ignore void type
+    try testing.expect(r.type_count - 1 == sizes.len);
     const expected_index_order = [_]usize{ 2, 3, 1, 0 };
     for (expected_index_order) |order, i| {
-        try testing.expectEqual(sizes[order], r.type_sizes[i]);
-        try testing.expectEqual(hashes[order], r.type_hashes[i]);
+        try testing.expectEqual(sizes[order], r.type_sizes[i + 1]);
+        try testing.expectEqual(hashes[order], r.type_hashes[i + 1]);
     }
 }
 
