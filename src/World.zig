@@ -48,11 +48,38 @@ pub fn createEntity(self: *World) !Entity {
     return entity;
 }
 
-/// create a entity with known components to avoid unnecessary work done by the API compared
-/// with createEntity followed by multiple setComponent
-pub fn buildEntity(self: *World) !void {
-    _ = self;
-    return error.Unimplemented;
+/// Get a entity builder. A builder has the advantage of not having to dynamically moved
+/// to different archetypes while being constructure compared with createEntity() + addComponent()
+pub fn entityBuilder(self: *World) EntityBuilder {
+    return EntityBuilder.init(self.allocator);
+}
+
+/// initialize an entity using data supplied to a builder.
+/// The world struct takes ownership of the builder after this
+/// This means that the builder memory is invalidated afterwards
+pub fn fromEntityBuilder(self: *World, builder: *EntityBuilder) !Entity {
+    const get_result = try self.archetree.getArchetypeAndIndexRuntime(
+        builder.type_sizes[0..builder.type_count],
+        builder.type_hashes[0..builder.type_count],
+    );
+
+    const entity = Entity{ .id = @intCast(u32, self.entity_references.items.len) };
+    try self.entity_references.append(EntityRef{
+        .tree_node_index = get_result.node_index,
+    });
+    errdefer _ = self.entity_references.pop();
+
+    const components = builder.component_data.toOwnedSlice();
+    defer {
+        for (components) |component_bytes| {
+            builder.allocator.free(component_bytes);
+        }
+        builder.allocator.free(components);
+    }
+
+    try get_result.archetype.registerEntity(entity, components);
+
+    return entity;
 }
 
 /// Assign a component to an entity
@@ -118,6 +145,59 @@ pub fn removeComponent(self: *World, entity: Entity, comptime T: type) !void {
     self.entity_references.items[entity.id].tree_node_index = get_result.node_index;
 }
 
+pub const EntityBuilder = struct {
+    type_count: usize,
+    type_hashes: [Archetype.max_types]u64,
+    type_sizes: [Archetype.max_types]usize,
+
+    allocator: Allocator,
+    component_data: std.ArrayList([]u8),
+
+    /// Initialize a EntityBuilder, should only be called from World.zig
+    pub fn init(allocator: Allocator) EntityBuilder {
+        return EntityBuilder{
+            .type_count = 0,
+            .type_hashes = undefined,
+            .type_sizes = undefined,
+            .allocator = allocator,
+            .component_data = std.ArrayList([]u8).init(allocator),
+        };
+    }
+
+    /// Add component to entity
+    pub fn addComponent(self: *EntityBuilder, comptime T: type, component: T) !void {
+        const type_hash = query.hashType(T);
+        const type_size = @sizeOf(T);
+
+        const component_bytes = blk: {
+            const bytes = std.mem.asBytes(&component);
+            break :blk try self.allocator.dupe(u8, bytes);
+        };
+        errdefer self.allocator.free(component_bytes);
+
+        var type_index: ?usize = null;
+        for (self.type_hashes[0..self.type_count]) |hash, i| {
+            if (type_hash < hash) {
+                type_index = i;
+                break;
+            }
+        }
+
+        try self.component_data.resize(self.component_data.items.len + 1);
+        self.type_hashes[self.type_count] = type_hash;
+        self.type_sizes[self.type_count] = type_size;
+        self.component_data.items[self.type_count] = component_bytes;
+        self.type_count += 1;
+
+        // if we should move component order
+        if (type_index) |index| {
+            std.mem.rotate(u64, self.type_hashes[index..self.type_count], self.type_count - index - 1);
+            std.mem.rotate(usize, self.type_sizes[index..self.type_count], self.type_count - index - 1);
+            std.mem.rotate([]u8, self.component_data.items[index..self.type_count], self.type_count - index - 1);
+        }
+    }
+};
+
 test "create() entity works" {
     var world = try World.init(testing.allocator);
     defer world.deinit();
@@ -179,4 +259,66 @@ test "removeComponent() component moves entity to correct archetype" {
     const entity_archetype = try world.archetree.getArchetype(&[_]type{B});
     const stored_b = try entity_archetype.getComponent(entity1, B);
     try testing.expectEqual(b, stored_b);
+}
+
+test "world build entity using EntityBuilder" {
+    const A = struct {};
+    const B = struct { some_value: u8 };
+
+    var world = try World.init(testing.allocator);
+    defer world.deinit();
+
+    // build a entity using a builder
+    var builder = world.entityBuilder();
+    try builder.addComponent(A, .{});
+    try builder.addComponent(B, .{ .some_value = 42 });
+    const entity = try world.fromEntityBuilder(&builder);
+
+    // get expected archetype
+    const entity_archetype = try world.archetree.getArchetype(&[_]type{ A, B });
+    const entity_b = try entity_archetype.getComponent(entity, B);
+    try testing.expectEqual(B{ .some_value = 42 }, entity_b);
+}
+
+test "EntityBuilder addComponent() gradually sort" {
+    const A = struct { i: usize };
+    const B = struct {
+        i: usize,
+        @"1": usize = 0,
+    };
+    const C = struct {
+        i: usize,
+        @"1": usize = 0,
+        @"2": usize = 0,
+    };
+    const D = struct {
+        i: usize,
+        @"1": usize = 0,
+        @"3": usize = 0,
+    };
+    const E = struct {
+        i: usize,
+        @"1": usize = 0,
+        @"3": usize = 0,
+        @"4": usize = 0,
+    };
+    const types = [_]type{ A, B, C, D, E };
+
+    var builder = EntityBuilder.init(testing.allocator);
+    defer {
+        for (builder.component_data.items) |component_bytes| {
+            builder.allocator.free(component_bytes);
+        }
+        builder.component_data.deinit();
+    }
+    inline for (types) |T, i| {
+        try builder.addComponent(T, T{ .i = i });
+    }
+
+    try testing.expectEqual(builder.type_count, types.len);
+    inline for (query.sortTypes(&types)) |T, i| {
+        try testing.expectEqual(builder.type_hashes[i], query.hashType(T));
+        try testing.expectEqual(builder.type_sizes[i], @sizeOf(T));
+        try testing.expectEqual(builder.component_data.items[i].len, @sizeOf(T));
+    }
 }

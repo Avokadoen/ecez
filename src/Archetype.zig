@@ -201,7 +201,7 @@ pub fn setComponent(self: Archetype, entity: Entity, comptime T: type, value: T)
 
     const start = entity_index * @sizeOf(T);
     const end = entity_index * @sizeOf(T) + @sizeOf(T);
-    const bytes = std.mem.toBytes(value);
+    const bytes = std.mem.asBytes(&value);
 
     std.mem.copy(u8, self.components[component_index].items[start..end], bytes[0..]);
 }
