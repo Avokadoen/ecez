@@ -4,7 +4,13 @@ on:
   push:
     branches:
       - main
-  pull_request: { }
+    paths-ignore:
+      - '*.md'
+      - '.vscode/**'
+  pull_request:
+    paths-ignore:
+      - '*.md'
+      - '.vscode/**'
 
 permissions:
   contents: read
