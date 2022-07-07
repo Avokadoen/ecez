@@ -100,6 +100,12 @@ pub inline fn deinit(self: *Archetype) void {
     self.allocator.free(self.components);
 }
 
+/// Register a new entity in this archetype
+/// Parameters:
+///     - self: the archetype recieving the new entity
+///     - entity: the entity being registered
+///     - components: all the component data for this entity, care should be taken to
+///       maintain components order relative to the new archetype
 pub inline fn registerEntity(self: *Archetype, entity: Entity, components: []const []const u8) !void {
     std.debug.assert(self.type_count == components.len); // type poisoning occured
 
@@ -190,7 +196,7 @@ pub inline fn moveEntity(self: *Archetype, entity: Entity, dest: *Archetype) !vo
 }
 
 /// Assign a component value to the entity
-pub fn setComponent(self: Archetype, entity: Entity, comptime T: type, value: T) !void {
+pub inline fn setComponent(self: Archetype, entity: Entity, comptime T: type, value: T) !void {
     // Nothing to set
     if (@sizeOf(T) == 0) {
         return;
@@ -218,6 +224,51 @@ pub inline fn getComponent(self: Archetype, entity: Entity, comptime T: type) !T
     const start = entity_index * @sizeOf(T);
     const component_ptr = @ptrCast(*T, @alignCast(@alignOf(T), &self.components[component_index].items[start]));
     return component_ptr.*;
+}
+
+// Generate getComponentMemory() return type
+fn ComponentMemoryType(comptime type_count: usize, types: [type_count]type) type {
+    var fields: [type_count]std.builtin.Type.StructField = undefined;
+    inline for (types) |T, i| {
+        fields[i] = .{
+            .name = @typeName(T),
+            .field_type = []T,
+            .default_value = null,
+            .is_comptime = false,
+            .alignment = @alignOf(T),
+        };
+    }
+    const RtrTypeInfo = std.builtin.Type{ .Struct = .{
+        .layout = .Auto,
+        .fields = fields[0..],
+        .decls = &[0]std.builtin.Type.Declaration{},
+        .is_tuple = true,
+    } };
+    return @Type(RtrTypeInfo);
+}
+
+/// Retrieve the component slices relative to the requested types
+/// Ie. you can request component (A, C) from archetype (A, B, C) and get the slices for A and C
+pub fn getComponentMemory(self: *Archetype, comptime type_count: usize, types: [type_count]type) !ComponentMemoryType(type_count, types) {
+    comptime var rtr_type_hashes: [type_count]u64 = undefined;
+    inline for (types) |T, i| {
+        rtr_type_hashes[i] = comptime query.hashType(T);
+    }
+
+    var rtr_struct: ComponentMemoryType(type_count, types) = undefined;
+    var defined_fields: usize = 0;
+    inline for (rtr_type_hashes) |rtr_hash, i| {
+        inner: for (self.type_hashes[0..self.type_count]) |hash, j| {
+            if (hash == rtr_hash) {
+                const align_slice = std.mem.alignInSlice(self.components[j].items, @alignOf(types[i])).?;
+                @field(rtr_struct, @typeName(types[i])) = std.mem.bytesAsSlice(types[i], align_slice);
+                defined_fields += 1;
+                break :inner;
+            }
+        }
+    }
+    std.debug.assert(defined_fields == type_count);
+    return rtr_struct;
 }
 
 /// return true if the archetype contains type T, false otherwise
@@ -364,7 +415,7 @@ test "setComponent() overwrite initial value" {
         .a = 42,
         .b = .{ 1.234, 2.345, 3.456 },
     };
-    try archetype.registerEntity(mock_entity, &[_][]const u8{&std.mem.toBytes(a)});
+    try archetype.registerEntity(mock_entity, &[_][]const u8{std.mem.asBytes(&a)});
 
     try testing.expectEqual(a, try archetype.getComponent(mock_entity, A));
 }
@@ -379,4 +430,29 @@ test "hasComponent() return expected result" {
     try testing.expectEqual(true, archetype.hasComponent(A));
     const B = struct {};
     try testing.expectEqual(false, archetype.hasComponent(B));
+}
+
+test "getComponentMemory() give expected slices" {
+    const A = struct { a: usize };
+    const B = struct { b: f32 };
+    const C = struct { c: i64 };
+    const type_arr: [3]type = .{ A, B, C };
+
+    var archetype = try initFromTypes(testing.allocator, &type_arr);
+    defer archetype.deinit();
+
+    const mock_entity = Entity{ .id = 0 };
+    const a = A{ .a = 123 };
+    const b = B{ .b = 123.123 };
+    const c = C{ .c = -1 };
+    try archetype.registerEntity(mock_entity, &[_][]const u8{
+        std.mem.asBytes(&a),
+        std.mem.asBytes(&b),
+        std.mem.asBytes(&c),
+    });
+
+    const a_c_components = try archetype.getComponentMemory(2, [_]type{ A, C });
+
+    try testing.expectEqual(a, a_c_components.A[0]);
+    try testing.expectEqual(c, a_c_components.C[0]);
 }

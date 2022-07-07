@@ -12,8 +12,8 @@ const node_max_children = 16;
 
 const Node = struct {
     type_hash: u64,
-    children_indices: [node_max_children]usize,
     child_count: u8,
+    children_indices: [node_max_children]usize,
     // depending on if a node is in use or not, it has an archetype
     archetype: ?Archetype,
 };
@@ -235,14 +235,14 @@ pub fn getTypeSubsets(self: ArcheTree, allocator: Allocator, comptime Ts: []cons
 
             const new_hash_index = blk: {
                 // if current node hash matches the next required hash
-                if (hash_index < type_hashes.len and node.type_hash == type_hashes[hash_index]) {
+                if (hash_index < type_hashes.len - 1 and node.type_hash == type_hashes[hash_index]) {
                     break :blk hash_index + 1;
                 }
                 break :blk hash_index;
             };
 
             // if all type_hashes have been matched in current branch
-            if (new_hash_index == type_hashes.len) {
+            if (new_hash_index == type_hashes.len - 1 and node.type_hash == type_hashes[new_hash_index]) {
                 if (node.archetype) |*archetype| {
                     try found_archetypes.append(archetype);
                 }
@@ -398,7 +398,7 @@ test "getArchetype() does not generate duplicate nodes" {
     }
 }
 
-test "getTypeSubsets() subset retrieve all matching subsets" {
+test "getTypeSubsets() subset retrieve all matching subset" {
     const A = struct {};
     const B = struct {};
     const C = struct {};
