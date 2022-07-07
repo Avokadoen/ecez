@@ -231,7 +231,7 @@ fn ComponentMemoryType(comptime type_count: usize, types: [type_count]type) type
     var fields: [type_count]std.builtin.Type.StructField = undefined;
     inline for (types) |T, i| {
         fields[i] = .{
-            .name = @typeName(T),
+            .name = "@\"" ++ [1]u8{i} ++ "\"",
             .field_type = []T,
             .default_value = null,
             .is_comptime = false,
@@ -261,7 +261,7 @@ pub fn getComponentMemory(self: *Archetype, comptime type_count: usize, types: [
         inner: for (self.type_hashes[0..self.type_count]) |hash, j| {
             if (hash == rtr_hash) {
                 const align_slice = std.mem.alignInSlice(self.components[j].items, @alignOf(types[i])).?;
-                @field(rtr_struct, @typeName(types[i])) = std.mem.bytesAsSlice(types[i], align_slice);
+                rtr_struct[i] = std.mem.bytesAsSlice(types[i], align_slice);
                 defined_fields += 1;
                 break :inner;
             }
@@ -453,6 +453,6 @@ test "getComponentMemory() give expected slices" {
 
     const a_c_components = try archetype.getComponentMemory(2, [_]type{ A, C });
 
-    try testing.expectEqual(a, a_c_components.A[0]);
-    try testing.expectEqual(c, a_c_components.C[0]);
+    try testing.expectEqual(a, a_c_components[0][0]);
+    try testing.expectEqual(c, a_c_components[1][0]);
 }
