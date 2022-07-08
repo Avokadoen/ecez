@@ -226,12 +226,17 @@ pub inline fn getComponent(self: Archetype, entity: Entity, comptime T: type) !T
     return component_ptr.*;
 }
 
-// Generate getComponentMemory() return type
-fn ComponentMemoryType(comptime type_count: usize, types: [type_count]type) type {
-    var fields: [type_count]std.builtin.Type.StructField = undefined;
+fn ComponentStoragesReturnType(comptime type_count: usize, comptime types: [type_count]type) type {
+    var fields: [types.len]std.builtin.Type.StructField = undefined;
     inline for (types) |T, i| {
+        if (@sizeOf(T) == 0) {
+            // A query should be used instead (not implemented yet)
+            @compileError("tag components (0 bytes size) are not allowed as system arguments, consider using an explicit query instead");
+        }
+        @setEvalBranchQuota(10_000);
+        var num_buf: [128]u8 = undefined;
         fields[i] = .{
-            .name = "@\"" ++ [1]u8{i} ++ "\"",
+            .name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable,
             .field_type = []T,
             .default_value = null,
             .is_comptime = false,
@@ -249,25 +254,34 @@ fn ComponentMemoryType(comptime type_count: usize, types: [type_count]type) type
 
 /// Retrieve the component slices relative to the requested types
 /// Ie. you can request component (A, C) from archetype (A, B, C) and get the slices for A and C
-pub fn getComponentMemory(self: *Archetype, comptime type_count: usize, types: [type_count]type) !ComponentMemoryType(type_count, types) {
-    comptime var rtr_type_hashes: [type_count]u64 = undefined;
+pub fn getComponentStorages(
+    self: *Archetype,
+    comptime type_count: usize,
+    comptime types: [type_count]type,
+) !ComponentStoragesReturnType(
+    type_count,
+    types,
+) {
+    comptime var rtr_type_hashes: [types.len]u64 = undefined;
     inline for (types) |T, i| {
         rtr_type_hashes[i] = comptime query.hashType(T);
     }
 
-    var rtr_struct: ComponentMemoryType(type_count, types) = undefined;
+    var rtr_struct: ComponentStoragesReturnType(type_count, types) = undefined;
     var defined_fields: usize = 0;
     inline for (rtr_type_hashes) |rtr_hash, i| {
         inner: for (self.type_hashes[0..self.type_count]) |hash, j| {
             if (hash == rtr_hash) {
-                const align_slice = std.mem.alignInSlice(self.components[j].items, @alignOf(types[i])).?;
+                const align_slice = @alignCast(@alignOf(types[i]), self.components[j].items);
                 rtr_struct[i] = std.mem.bytesAsSlice(types[i], align_slice);
                 defined_fields += 1;
                 break :inner;
             }
         }
     }
-    std.debug.assert(defined_fields == type_count);
+    if (defined_fields != types.len) {
+        return error.TypePoison;
+    }
     return rtr_struct;
 }
 
@@ -432,7 +446,7 @@ test "hasComponent() return expected result" {
     try testing.expectEqual(false, archetype.hasComponent(B));
 }
 
-test "getComponentMemory() give expected slices" {
+test "getComponentStorages() give expected slices" {
     const A = struct { a: usize };
     const B = struct { b: f32 };
     const C = struct { c: i64 };
@@ -451,7 +465,7 @@ test "getComponentMemory() give expected slices" {
         std.mem.asBytes(&c),
     });
 
-    const a_c_components = try archetype.getComponentMemory(2, [_]type{ A, C });
+    const a_c_components = try archetype.getComponentStorages(2, [_]type{ A, C });
 
     try testing.expectEqual(a, a_c_components[0][0]);
     try testing.expectEqual(c, a_c_components[1][0]);

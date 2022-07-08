@@ -3,146 +3,218 @@ const Allocator = std.mem.Allocator;
 
 const testing = std.testing;
 
+const SystemMetadata = @import("SystemMetadata.zig");
 const ArcheTree = @import("ArcheTree.zig");
 const Archetype = @import("Archetype.zig");
 const Entity = @import("entity_type.zig").Entity;
 const EntityRef = @import("entity_type.zig").EntityRef;
 const query = @import("query.zig");
 
-// TODO: Bump allocate data (instead of calling append)
-// TODO: Thread safety
-const World = @This();
-allocator: Allocator,
+// TODO: configurable
+pub const max_systems = 1024;
 
-// maps entity id with indices of the storage
-entity_references: std.ArrayList(EntityRef),
-archetree: ArcheTree,
+/// Create a ecs instance. Systems are initially included into the World.
+/// Parameters:
+///     - systems: a tuple consisting of each system used by the world each frame
+pub fn CreateWorld(comptime systems: anytype) type {
+    const SystemsType = @TypeOf(systems);
+    const systems_info = @typeInfo(SystemsType);
+    if (systems_info != .Struct) {
+        @compileError("Expected tuple or struct argument, found " ++ @typeName(SystemsType) ++ "\nSuggestion: put your system(s) in a tuple: .{my_system, another_system}");
+    }
 
-pub fn init(allocator: Allocator) !World {
-    const archetree = try ArcheTree.init(allocator);
-    errdefer archetree.deinit();
+    const fields_info = systems_info.Struct.fields;
+    if (fields_info.len > max_systems) {
+        @compileError("max system count is currently configured to 2024, got " ++ fields_info.len);
+    }
 
-    return World{
-        .allocator = allocator,
-        .entity_references = std.ArrayList(EntityRef).init(allocator),
-        .archetree = archetree,
+    // TODO: care when implementing Struct since fields_info.len will no longer be a valid len ..
+    const systems_count = fields_info.len;
+    comptime var systems_metadata: [systems_count]SystemMetadata = undefined;
+    inline for (fields_info) |field_info, i| {
+        switch (@typeInfo(field_info.field_type)) {
+            .Struct => @compileError("unimplemented"),
+            .Fn => |func| {
+                // TODO: care when implementing Struct since i will no longer be a valid index ..
+                systems_metadata[i] = SystemMetadata.init(func);
+            },
+            else => @compileError("Expected function or struct, found " ++ @typeName(field_info.field_type)),
+        }
+    }
+
+    return struct {
+        // TODO: Bump allocate data (instead of calling append)
+        // TODO: Thread safety
+        const World = @This();
+        allocator: Allocator,
+
+        // maps entity id with indices of the storage
+        entity_references: std.ArrayList(EntityRef),
+        archetree: ArcheTree,
+
+        pub fn init(allocator: Allocator) !World {
+            const archetree = try ArcheTree.init(allocator);
+            errdefer archetree.deinit();
+
+            return World{
+                .allocator = allocator,
+                .entity_references = std.ArrayList(EntityRef).init(allocator),
+                .archetree = archetree,
+            };
+        }
+
+        pub fn deinit(self: *World) void {
+            self.entity_references.deinit();
+            self.archetree.deinit();
+        }
+
+        /// Create an empty entity and returns the entity handle.
+        /// Consider using buildEntity for a faster entity construction if you have
+        /// compile-time entity component types
+        pub fn createEntity(self: *World) !Entity {
+            const entity = Entity{ .id = @intCast(u32, self.entity_references.items.len) };
+            var archetype = self.archetree.voidType();
+            const empty: []const []const u8 = &.{};
+            try archetype.registerEntity(entity, empty);
+            try self.entity_references.append(EntityRef{
+                .tree_node_index = 0,
+            });
+            return entity;
+        }
+
+        /// Get a entity builder. A builder has the advantage of not having to dynamically moved
+        /// to different archetypes while being constructure compared with createEntity() + addComponent()
+        pub fn entityBuilder(self: *World) EntityBuilder {
+            return EntityBuilder.init(self.allocator);
+        }
+
+        /// initialize an entity using data supplied to a builder.
+        /// The world struct takes ownership of the builder after this
+        /// This means that the builder memory is invalidated afterwards
+        pub fn fromEntityBuilder(self: *World, builder: *EntityBuilder) !Entity {
+            const get_result = try self.archetree.getArchetypeAndIndexRuntime(
+                builder.type_sizes[0..builder.type_count],
+                builder.type_hashes[0..builder.type_count],
+            );
+
+            const entity = Entity{ .id = @intCast(u32, self.entity_references.items.len) };
+            try self.entity_references.append(EntityRef{
+                .tree_node_index = get_result.node_index,
+            });
+            errdefer _ = self.entity_references.pop();
+
+            const components = builder.component_data.toOwnedSlice();
+            defer {
+                for (components) |component_bytes| {
+                    builder.allocator.free(component_bytes);
+                }
+                builder.allocator.free(components);
+            }
+
+            try get_result.archetype.registerEntity(entity, components);
+
+            return entity;
+        }
+
+        /// Assign a component to an entity
+        pub fn setComponent(self: *World, entity: Entity, comptime T: type, component: T) !void {
+            const current_archetype = self.archetree.entityRefArchetype(self.entity_references.items[entity.id]);
+            if (current_archetype.hasComponent(T)) {
+                try current_archetype.setComponent(entity, T, component);
+            }
+
+            var type_sizes: [Archetype.max_types]usize = undefined;
+            std.mem.copy(usize, type_sizes[0..], current_archetype.type_sizes[0..current_archetype.type_count]);
+            type_sizes[current_archetype.type_count] = @sizeOf(T);
+
+            var type_hashes: [Archetype.max_types]u64 = undefined;
+            std.mem.copy(u64, type_hashes[0..], current_archetype.type_hashes[0..current_archetype.type_count]);
+            type_hashes[current_archetype.type_count] = query.hashType(T);
+
+            // get the new entity archetype
+            const get_result = try self.archetree.getArchetypeAndIndexRuntime(
+                type_sizes[0 .. current_archetype.type_count + 1],
+                type_hashes[0 .. current_archetype.type_count + 1],
+            );
+
+            try current_archetype.moveEntity(entity, get_result.archetype);
+            try get_result.archetype.setComponent(entity, T, component);
+
+            // update the entity reference
+            self.entity_references.items[entity.id].tree_node_index = get_result.node_index;
+        }
+
+        pub fn removeComponent(self: *World, entity: Entity, comptime T: type) !void {
+            const current_archetype = self.archetree.entityRefArchetype(self.entity_references.items[entity.id]);
+            const remove_type_index = try current_archetype.componentIndex(comptime query.hashType(T));
+
+            var type_sizes: [Archetype.max_types]usize = undefined;
+            std.mem.copy(usize, type_sizes[0..], current_archetype.type_sizes[0..remove_type_index]);
+            var type_hashes: [Archetype.max_types]u64 = undefined;
+            std.mem.copy(u64, type_hashes[0..], current_archetype.type_hashes[0..remove_type_index]);
+
+            // if remove element is not the last element, swap element with last element and shift array left
+            if (remove_type_index < current_archetype.type_count - 1) {
+                std.mem.copy(
+                    u64,
+                    type_hashes[remove_type_index..],
+                    current_archetype.type_hashes[remove_type_index + 1 .. current_archetype.type_count],
+                );
+                std.mem.copy(
+                    usize,
+                    type_sizes[remove_type_index..],
+                    current_archetype.type_sizes[remove_type_index + 1 .. current_archetype.type_count],
+                );
+            }
+
+            // get the new entity archetype
+            const get_result = try self.archetree.getArchetypeAndIndexRuntime(
+                type_sizes[0 .. current_archetype.type_count - 1],
+                type_hashes[0 .. current_archetype.type_count - 1],
+            );
+
+            try current_archetype.moveEntity(entity, get_result.archetype);
+
+            // update the entity reference
+            self.entity_references.items[entity.id].tree_node_index = get_result.node_index;
+        }
+
+        pub fn dispatch(self: *World) !void {
+            inline for (systems_metadata) |system_metadata, system_index| {
+                // TODO: cache archetypes until tree changes (new nodes generated)
+                const system_types = comptime system_metadata.queryArgTypes();
+                var archetypes = try self.archetree.getTypeSubsets(self.allocator, &system_types);
+                defer self.allocator.free(archetypes);
+                for (archetypes) |archetype| {
+                    const components = try archetype.getComponentStorages(system_types.len, system_types);
+                    var i: usize = 0;
+                    while (i < components[0].len) : (i += 1) {
+                        var component: std.meta.Tuple(&system_types) = undefined;
+                        inline for (system_types) |_, j| {
+                            component[j] = components[j][i];
+                        }
+
+                        // call either a failable system, or a normal void system
+                        if (comptime system_metadata.canReturnError()) {
+                            try failableCallWrapper(systems[system_index], component);
+                        } else {
+                            callWrapper(systems[system_index], component);
+                        }
+                    }
+                }
+            }
+        }
     };
 }
 
-pub fn deinit(self: *World) void {
-    self.entity_references.deinit();
-    self.archetree.deinit();
+// Workaround see issue #5170 : https://github.com/ziglang/zig/issues/5170
+fn callWrapper(func: anytype, args: anytype) void {
+    @call(.{}, func, args);
 }
 
-/// Create an empty entity and returns the entity handle.
-/// Consider using buildEntity for a faster entity construction if you have
-/// compile-time entity component types
-pub fn createEntity(self: *World) !Entity {
-    const entity = Entity{ .id = @intCast(u32, self.entity_references.items.len) };
-    var archetype = self.archetree.voidType();
-    const empty: []const []const u8 = &.{};
-    try archetype.registerEntity(entity, empty);
-    try self.entity_references.append(EntityRef{
-        .tree_node_index = 0,
-    });
-    return entity;
-}
-
-/// Get a entity builder. A builder has the advantage of not having to dynamically moved
-/// to different archetypes while being constructure compared with createEntity() + addComponent()
-pub fn entityBuilder(self: *World) EntityBuilder {
-    return EntityBuilder.init(self.allocator);
-}
-
-/// initialize an entity using data supplied to a builder.
-/// The world struct takes ownership of the builder after this
-/// This means that the builder memory is invalidated afterwards
-pub fn fromEntityBuilder(self: *World, builder: *EntityBuilder) !Entity {
-    const get_result = try self.archetree.getArchetypeAndIndexRuntime(
-        builder.type_sizes[0..builder.type_count],
-        builder.type_hashes[0..builder.type_count],
-    );
-
-    const entity = Entity{ .id = @intCast(u32, self.entity_references.items.len) };
-    try self.entity_references.append(EntityRef{
-        .tree_node_index = get_result.node_index,
-    });
-    errdefer _ = self.entity_references.pop();
-
-    const components = builder.component_data.toOwnedSlice();
-    defer {
-        for (components) |component_bytes| {
-            builder.allocator.free(component_bytes);
-        }
-        builder.allocator.free(components);
-    }
-
-    try get_result.archetype.registerEntity(entity, components);
-
-    return entity;
-}
-
-/// Assign a component to an entity
-pub fn setComponent(self: *World, entity: Entity, comptime T: type, component: T) !void {
-    const current_archetype = self.archetree.entityRefArchetype(self.entity_references.items[entity.id]);
-    if (current_archetype.hasComponent(T)) {
-        try current_archetype.setComponent(entity, T, component);
-    }
-
-    var type_sizes: [Archetype.max_types]usize = undefined;
-    std.mem.copy(usize, type_sizes[0..], current_archetype.type_sizes[0..current_archetype.type_count]);
-    type_sizes[current_archetype.type_count] = @sizeOf(T);
-
-    var type_hashes: [Archetype.max_types]u64 = undefined;
-    std.mem.copy(u64, type_hashes[0..], current_archetype.type_hashes[0..current_archetype.type_count]);
-    type_hashes[current_archetype.type_count] = query.hashType(T);
-
-    // get the new entity archetype
-    const get_result = try self.archetree.getArchetypeAndIndexRuntime(
-        type_sizes[0 .. current_archetype.type_count + 1],
-        type_hashes[0 .. current_archetype.type_count + 1],
-    );
-
-    try current_archetype.moveEntity(entity, get_result.archetype);
-    try get_result.archetype.setComponent(entity, T, component);
-
-    // update the entity reference
-    self.entity_references.items[entity.id].tree_node_index = get_result.node_index;
-}
-
-pub fn removeComponent(self: *World, entity: Entity, comptime T: type) !void {
-    const current_archetype = self.archetree.entityRefArchetype(self.entity_references.items[entity.id]);
-    const remove_type_index = try current_archetype.componentIndex(comptime query.hashType(T));
-
-    var type_sizes: [Archetype.max_types]usize = undefined;
-    std.mem.copy(usize, type_sizes[0..], current_archetype.type_sizes[0..remove_type_index]);
-    var type_hashes: [Archetype.max_types]u64 = undefined;
-    std.mem.copy(u64, type_hashes[0..], current_archetype.type_hashes[0..remove_type_index]);
-
-    // if remove element is not the last element, swap element with last element and shift array left
-    if (remove_type_index < current_archetype.type_count - 1) {
-        std.mem.copy(
-            u64,
-            type_hashes[remove_type_index..],
-            current_archetype.type_hashes[remove_type_index + 1 .. current_archetype.type_count],
-        );
-        std.mem.copy(
-            usize,
-            type_sizes[remove_type_index..],
-            current_archetype.type_sizes[remove_type_index + 1 .. current_archetype.type_count],
-        );
-    }
-
-    // get the new entity archetype
-    const get_result = try self.archetree.getArchetypeAndIndexRuntime(
-        type_sizes[0 .. current_archetype.type_count - 1],
-        type_hashes[0 .. current_archetype.type_count - 1],
-    );
-
-    try current_archetype.moveEntity(entity, get_result.archetype);
-
-    // update the entity reference
-    self.entity_references.items[entity.id].tree_node_index = get_result.node_index;
+// Workaround see issue #5170 : https://github.com/ziglang/zig/issues/5170
+fn failableCallWrapper(func: anytype, args: anytype) !void {
+    try @call(.{}, func, args);
 }
 
 pub const EntityBuilder = struct {
@@ -198,8 +270,11 @@ pub const EntityBuilder = struct {
     }
 };
 
+// world without systems
+const StateWorld = CreateWorld(.{});
+
 test "create() entity works" {
-    var world = try World.init(testing.allocator);
+    var world = try StateWorld.init(testing.allocator);
     defer world.deinit();
 
     const entity0 = try world.createEntity();
@@ -214,7 +289,7 @@ test "setComponent() component moves entity to correct archetype" {
     };
     const B = struct { some_value: u8 };
 
-    var world = try World.init(testing.allocator);
+    var world = try StateWorld.init(testing.allocator);
     defer world.deinit();
 
     const entity1 = try world.createEntity();
@@ -239,7 +314,7 @@ test "removeComponent() component moves entity to correct archetype" {
     const A = struct {};
     const B = struct { some_value: u8 };
 
-    var world = try World.init(testing.allocator);
+    var world = try StateWorld.init(testing.allocator);
     defer world.deinit();
 
     const entity1 = try world.createEntity();
@@ -265,7 +340,7 @@ test "world build entity using EntityBuilder" {
     const A = struct {};
     const B = struct { some_value: u8 };
 
-    var world = try World.init(testing.allocator);
+    var world = try StateWorld.init(testing.allocator);
     defer world.deinit();
 
     // build a entity using a builder
@@ -321,4 +396,32 @@ test "EntityBuilder addComponent() gradually sort" {
         try testing.expectEqual(builder.type_sizes[i], @sizeOf(T));
         try testing.expectEqual(builder.component_data.items[i].len, @sizeOf(T));
     }
+}
+
+test "systems can fail" {
+    const A = struct { str: []const u8 };
+    const B = struct { some_value: u8 };
+
+    const SystemStruct = struct {
+        fn aSystem(a: A) !void {
+            try testing.expectEqual(a, .{ .str = "hello world!" });
+        }
+
+        fn bSystem(b: B) !void {
+            _ = b;
+            return error.SomethingWentVeryWrong;
+        }
+    };
+
+    var world = try CreateWorld(.{
+        SystemStruct.aSystem,
+        SystemStruct.bSystem,
+    }).init(testing.allocator);
+    defer world.deinit();
+
+    const entity1 = try world.createEntity();
+    try world.setComponent(entity1, A, A{ .str = "hello world!" });
+    try world.setComponent(entity1, B, B{ .some_value = 42 });
+
+    try testing.expectError(error.SomethingWentVeryWrong, world.dispatch());
 }

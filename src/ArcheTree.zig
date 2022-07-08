@@ -56,7 +56,7 @@ pub fn init(allocator: Allocator) !ArcheTree {
         .type_hash = 0,
         .children_indices = undefined,
         .child_count = 0,
-        .archetype = root_archetype,
+        .archetype = root_archetype, // TODO: null
     };
 
     var node_storage = try std.ArrayList(Node).initCapacity(allocator, 16);
@@ -223,14 +223,21 @@ pub fn getArchetypeAndIndexRuntime(self: *ArcheTree, type_sizes: []const usize, 
 /// Query all type subsets and get each archetype container relevant.
 /// Example:
 /// Archetype (A B C D) & Archetype (B D) has a common sub type of (B D)
-pub fn getTypeSubsets(self: ArcheTree, allocator: Allocator, comptime Ts: []const type) ![]*const Archetype {
+pub fn getTypeSubsets(self: ArcheTree, allocator: Allocator, comptime Ts: []const type) ![]*Archetype {
     const traverse = struct {
-        fn func(slf: ArcheTree, type_hashes: []const u64, hash_index: usize, current_node_index: usize, found_archetypes: *std.ArrayList(*const Archetype)) Allocator.Error!void {
-            const node = slf.node_storage.items[current_node_index];
+        fn func(slf: ArcheTree, type_hashes: []const u64, hash_index: usize, current_node_index: usize, found_archetypes: *std.ArrayList(*Archetype)) Allocator.Error!void {
+            const node = &slf.node_storage.items[current_node_index];
             // if we are in a tree branch that is not relevant to the current query subset
             // this works because we always sort by hash value when constructring branches
             if (node.type_hash > type_hashes[hash_index]) {
                 return;
+            }
+
+            // if all type_hashes have been matched in current branch
+            if (hash_index == type_hashes.len - 1 and node.type_hash == type_hashes[hash_index]) {
+                if (node.archetype) |*archetype| {
+                    try found_archetypes.append(archetype);
+                }
             }
 
             const new_hash_index = blk: {
@@ -240,13 +247,6 @@ pub fn getTypeSubsets(self: ArcheTree, allocator: Allocator, comptime Ts: []cons
                 }
                 break :blk hash_index;
             };
-
-            // if all type_hashes have been matched in current branch
-            if (new_hash_index == type_hashes.len - 1 and node.type_hash == type_hashes[new_hash_index]) {
-                if (node.archetype) |*archetype| {
-                    try found_archetypes.append(archetype);
-                }
-            }
 
             for (node.children_indices[0..node.child_count]) |child_index| {
                 try func(slf, type_hashes, new_hash_index, child_index, found_archetypes);
@@ -263,7 +263,7 @@ pub fn getTypeSubsets(self: ArcheTree, allocator: Allocator, comptime Ts: []cons
         break :blk hashes;
     };
 
-    var found_archetypes = std.ArrayList(*const Archetype).init(allocator);
+    var found_archetypes = std.ArrayList(*Archetype).init(allocator);
     errdefer found_archetypes.deinit();
 
     try traverse(self, type_hashes[0..], 0, 0, &found_archetypes);
