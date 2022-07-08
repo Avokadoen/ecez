@@ -6,32 +6,35 @@ const max_types = @import("Archetype.zig").max_types;
 const SystemMetadata = @This();
 
 pub const Arg = union(enum) {
-    immutable: type,
-    mutable: type,
+    ptr: type,
+    value: type,
 };
 
 fn_info: FnInfo,
 args: []const Arg,
 
 /// initalize metadata for a system using a supplied function type info
-pub fn init(comptime fn_info: FnInfo) SystemMetadata {
+pub fn init(comptime function_type: type, comptime fn_info: FnInfo) SystemMetadata {
     // TODO: include function name in error messages
+    //       blocked by issue https://github.com/ziglang/zig/issues/8270
+    // used in error messages
+    const function_name = @typeName(function_type);
     if (fn_info.is_generic) {
-        @compileError("system " ++ @typeName(@Type(fn_info)) ++ " functions cannot use generic arguments");
+        @compileError("system " ++ function_name ++ " functions cannot use generic arguments");
     }
     if (fn_info.args.len == 0) {
-        @compileError("system " ++ @typeName(@Type(fn_info)) ++ " missing component arguments");
+        @compileError("system " ++ function_name ++ " missing component arguments");
     }
 
     if (fn_info.return_type) |return_type| {
         switch (@typeInfo(return_type)) {
             .ErrorUnion => |err| {
                 if (@typeInfo(err.payload) != .Void) {
-                    @compileError("system " ++ @typeName(@Type(fn_info)) ++ " return type has to be void or !void, was " ++ @typeName(return_type));
+                    @compileError("system " ++ function_name ++ " return type has to be void or !void, was " ++ @typeName(return_type));
                 }
             },
             .Void => {}, // continue
-            else => @compileError("system " ++ @typeName(@Type(fn_info)) ++ " return type has to be void or !void, was " ++ @typeName(return_type)),
+            else => @compileError("system " ++ function_name ++ " return type has to be void or !void, was " ++ @typeName(return_type)),
         }
     }
 
@@ -41,18 +44,29 @@ pub fn init(comptime fn_info: FnInfo) SystemMetadata {
             switch (@typeInfo(T)) {
                 .Pointer => |pointer| {
                     if (@typeInfo(pointer.child) != .Struct) {
-                        @compileError("system " ++ @typeName(@Type(fn_info)) ++ " argument " ++ i ++ " type must be components, or pointers to components");
+                        const err_msg = std.fmt.comptimePrint("system {s} argument {d} must point to a component struct", .{
+                            function_name,
+                            i,
+                        });
+                        @compileError(err_msg);
                     }
-                    if (pointer.is_const == false) {
-                        args[i] = Arg{ .mutable = T };
-                        continue;
-                    }
+                    args[i] = Arg{ .ptr = T };
                 },
-                else => {},
+                .Struct => args[i] = Arg{ .value = T },
+                else => {
+                    const err_msg = std.fmt.comptimePrint("system {s} argument {d} is not a component struct", .{
+                        function_name,
+                        i,
+                    });
+                    @compileError(err_msg);
+                },
             }
-            args[i] = Arg{ .immutable = T };
         } else {
-            @compileError("system " ++ @typeName(@Type(fn_info)) ++ "argument " ++ i ++ " is missing component type");
+            const err_msg = std.fmt.comptimePrint("system {s} argument {d} is missing component type", .{
+                function_name,
+                i,
+            });
+            @compileError(err_msg);
         }
     }
     return SystemMetadata{
@@ -84,6 +98,16 @@ pub fn queryArgTypes(comptime self: SystemMetadata) [self.args.len]type {
             },
             else => {},
         }
+        args[i] = arg.arg_type.?;
+    }
+    return args;
+}
+
+/// Get the argument types as requested
+/// This function will include pointer types
+pub fn paramArgTypes(comptime self: SystemMetadata) [self.args.len]type {
+    comptime var args: [self.fn_info.args.len]type = undefined;
+    inline for (self.fn_info.args) |arg, i| {
         args[i] = arg.arg_type.?;
     }
     return args;
