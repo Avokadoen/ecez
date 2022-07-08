@@ -5,9 +5,9 @@ const max_types = @import("Archetype.zig").max_types;
 
 const SystemMetadata = @This();
 
-pub const Arg = union(enum) {
-    ptr: type,
-    value: type,
+pub const Arg = enum {
+    ptr,
+    value,
 };
 
 fn_info: FnInfo,
@@ -50,9 +50,9 @@ pub fn init(comptime function_type: type, comptime fn_info: FnInfo) SystemMetada
                         });
                         @compileError(err_msg);
                     }
-                    args[i] = Arg{ .ptr = T };
+                    args[i] = Arg.ptr;
                 },
-                .Struct => args[i] = Arg{ .value = T },
+                .Struct => args[i] = Arg.value,
                 else => {
                     const err_msg = std.fmt.comptimePrint("system {s} argument {d} is not a component struct", .{
                         function_name,
