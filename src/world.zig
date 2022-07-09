@@ -84,7 +84,7 @@ pub fn CreateWorld(comptime systems: anytype) type {
 
         /// Get a entity builder. A builder has the advantage of not having to dynamically moved
         /// to different archetypes while being constructure compared with createEntity() + addComponent()
-        pub fn entityBuilder(self: *World) EntityBuilder {
+        pub fn entityBuilder(self: *World) !EntityBuilder {
             return EntityBuilder.init(self.allocator);
         }
 
@@ -92,10 +92,13 @@ pub fn CreateWorld(comptime systems: anytype) type {
         /// The world struct takes ownership of the builder after this
         /// This means that the builder memory is invalidated afterwards
         pub fn fromEntityBuilder(self: *World, builder: *EntityBuilder) !Entity {
-            const get_result = try self.archetree.getArchetypeAndIndexRuntime(
-                builder.type_sizes[0..builder.type_count],
-                builder.type_hashes[0..builder.type_count],
+            var type_query = query.Runtime.fromOwnedSlices(
+                self.allocator,
+                builder.type_sizes.toOwnedSlice(),
+                builder.type_hashes.toOwnedSlice(),
             );
+            defer type_query.deinit();
+            const get_result = try self.archetree.getArchetypeAndIndexRuntime(&type_query);
 
             const entity = Entity{ .id = @intCast(u32, self.entity_references.items.len) };
             try self.entity_references.append(EntityRef{
@@ -110,8 +113,8 @@ pub fn CreateWorld(comptime systems: anytype) type {
                 }
                 builder.allocator.free(components);
             }
-
-            try get_result.archetype.registerEntity(entity, components);
+            // skip void entry
+            try get_result.archetype.registerEntity(entity, components[1..]);
 
             return entity;
         }
@@ -123,19 +126,11 @@ pub fn CreateWorld(comptime systems: anytype) type {
                 try current_archetype.setComponent(entity, T, component);
             }
 
-            var type_sizes: [Archetype.max_types]usize = undefined;
-            std.mem.copy(usize, type_sizes[0..], current_archetype.type_sizes[0..current_archetype.type_count]);
-            type_sizes[current_archetype.type_count] = @sizeOf(T);
-
-            var type_hashes: [Archetype.max_types]u64 = undefined;
-            std.mem.copy(u64, type_hashes[0..], current_archetype.type_hashes[0..current_archetype.type_count]);
-            type_hashes[current_archetype.type_count] = query.hashType(T);
+            var type_query = try query.Runtime.fromSlicesAndType(self.allocator, current_archetype.type_sizes, current_archetype.type_hashes, T);
+            defer type_query.deinit();
 
             // get the new entity archetype
-            const get_result = try self.archetree.getArchetypeAndIndexRuntime(
-                type_sizes[0 .. current_archetype.type_count + 1],
-                type_hashes[0 .. current_archetype.type_count + 1],
-            );
+            const get_result = try self.archetree.getArchetypeAndIndexRuntime(&type_query);
 
             try current_archetype.moveEntity(entity, get_result.archetype);
             try get_result.archetype.setComponent(entity, T, component);
@@ -153,31 +148,38 @@ pub fn CreateWorld(comptime systems: anytype) type {
             const current_archetype = self.archetree.entityRefArchetype(self.entity_references.items[entity.id]);
             const remove_type_index = try current_archetype.componentIndex(comptime query.hashType(T));
 
-            var type_sizes: [Archetype.max_types]usize = undefined;
-            std.mem.copy(usize, type_sizes[0..], current_archetype.type_sizes[0..remove_type_index]);
-            var type_hashes: [Archetype.max_types]u64 = undefined;
-            std.mem.copy(u64, type_hashes[0..], current_archetype.type_hashes[0..remove_type_index]);
+            // create a type query by filtering out the removed type
+            var type_query: query.Runtime = blk: {
+                if (remove_type_index == 0) {
+                    break :blk try query.Runtime.fromSlices(
+                        self.allocator,
+                        current_archetype.type_sizes[1..],
+                        current_archetype.type_hashes[1..],
+                    );
+                } else if (remove_type_index == current_archetype.type_count - 1) {
+                    break :blk try query.Runtime.fromSlices(
+                        self.allocator,
+                        current_archetype.type_sizes[0..remove_type_index],
+                        current_archetype.type_hashes[0..remove_type_index],
+                    );
+                }
 
-            // if remove element is not the last element, swap element with last element and shift array left
-            if (remove_type_index < current_archetype.type_count - 1) {
-                std.mem.copy(
-                    u64,
-                    type_hashes[remove_type_index..],
-                    current_archetype.type_hashes[remove_type_index + 1 .. current_archetype.type_count],
+                break :blk try query.Runtime.fromSliceSlices(
+                    self.allocator,
+                    &[2][]const usize{
+                        current_archetype.type_sizes[0..remove_type_index],
+                        current_archetype.type_sizes[remove_type_index + 1 ..],
+                    },
+                    &[2][]const u64{
+                        current_archetype.type_hashes[0..remove_type_index],
+                        current_archetype.type_hashes[remove_type_index + 1 ..],
+                    },
                 );
-                std.mem.copy(
-                    usize,
-                    type_sizes[remove_type_index..],
-                    current_archetype.type_sizes[remove_type_index + 1 .. current_archetype.type_count],
-                );
-            }
+            };
+            defer type_query.deinit();
 
             // get the new entity archetype
-            const get_result = try self.archetree.getArchetypeAndIndexRuntime(
-                type_sizes[0 .. current_archetype.type_count - 1],
-                type_hashes[0 .. current_archetype.type_count - 1],
-            );
-
+            const get_result = try self.archetree.getArchetypeAndIndexRuntime(&type_query);
             try current_archetype.moveEntity(entity, get_result.archetype);
 
             // update the entity reference
@@ -227,21 +229,35 @@ fn failableCallWrapper(func: anytype, args: anytype) !void {
 }
 
 pub const EntityBuilder = struct {
-    type_count: usize,
-    type_hashes: [Archetype.max_types]u64,
-    type_sizes: [Archetype.max_types]usize,
-
     allocator: Allocator,
+    type_count: usize,
+    type_sizes: std.ArrayList(usize),
+    type_hashes: std.ArrayList(u64),
     component_data: std.ArrayList([]u8),
 
     /// Initialize a EntityBuilder, should only be called from World.zig
-    pub fn init(allocator: Allocator) EntityBuilder {
+    pub fn init(allocator: Allocator) !EntityBuilder {
+        // init by registering the void type
+        const type_count = 1;
+
+        var type_sizes = std.ArrayList(usize).init(allocator);
+        errdefer type_sizes.deinit();
+        try type_sizes.append(0);
+
+        var type_hashes = std.ArrayList(u64).init(allocator);
+        errdefer type_hashes.deinit();
+        try type_hashes.append(0);
+
+        var component_data = std.ArrayList([]u8).init(allocator);
+        errdefer component_data.deinit();
+        try component_data.append(&.{});
+
         return EntityBuilder{
-            .type_count = 0,
-            .type_hashes = undefined,
-            .type_sizes = undefined,
             .allocator = allocator,
-            .component_data = std.ArrayList([]u8).init(allocator),
+            .type_count = type_count,
+            .type_sizes = type_sizes,
+            .type_hashes = type_hashes,
+            .component_data = component_data,
         };
     }
 
@@ -250,30 +266,38 @@ pub const EntityBuilder = struct {
         const type_hash = query.hashType(T);
         const type_size = @sizeOf(T);
 
+        var type_index: ?usize = null;
+        for (self.type_hashes.items) |hash, i| {
+            if (type_hash < hash) {
+                type_index = i;
+                break;
+            }
+            if (type_hash == hash) return error.ComponentAlreadyExist;
+        }
+
         const component_bytes = blk: {
             const bytes = std.mem.asBytes(&component);
             break :blk try self.allocator.dupe(u8, bytes);
         };
         errdefer self.allocator.free(component_bytes);
 
-        var type_index: ?usize = null;
-        for (self.type_hashes[0..self.type_count]) |hash, i| {
-            if (type_hash < hash) {
-                type_index = i;
-                break;
-            }
-        }
-
         try self.component_data.resize(self.component_data.items.len + 1);
-        self.type_hashes[self.type_count] = type_hash;
-        self.type_sizes[self.type_count] = type_size;
+        errdefer self.component_data.shrinkAndFree(self.component_data.items.len - 1);
+
+        try self.type_hashes.append(type_hash);
+        errdefer _ = self.type_hashes.popOrNull();
+
+        try self.type_sizes.append(type_size);
+        errdefer _ = self.type_sizes.popOrNull();
+
         self.component_data.items[self.type_count] = component_bytes;
         self.type_count += 1;
+        errdefer self.type_count -= 1;
 
         // if we should move component order
         if (type_index) |index| {
-            std.mem.rotate(u64, self.type_hashes[index..self.type_count], self.type_count - index - 1);
-            std.mem.rotate(usize, self.type_sizes[index..self.type_count], self.type_count - index - 1);
+            std.mem.rotate(u64, self.type_hashes.items[index..self.type_count], self.type_count - index - 1);
+            std.mem.rotate(usize, self.type_sizes.items[index..self.type_count], self.type_count - index - 1);
             std.mem.rotate([]u8, self.component_data.items[index..self.type_count], self.type_count - index - 1);
         }
     }
@@ -371,7 +395,7 @@ test "world build entity using EntityBuilder" {
     defer world.deinit();
 
     // build a entity using a builder
-    var builder = world.entityBuilder();
+    var builder = try world.entityBuilder();
     try builder.addComponent(A, .{});
     try builder.addComponent(B, .{ .some_value = 42 });
     const entity = try world.fromEntityBuilder(&builder);
@@ -406,8 +430,10 @@ test "EntityBuilder addComponent() gradually sort" {
     };
     const types = [_]type{ A, B, C, D, E };
 
-    var builder = EntityBuilder.init(testing.allocator);
+    var builder = try EntityBuilder.init(testing.allocator);
     defer {
+        builder.type_sizes.deinit();
+        builder.type_hashes.deinit();
         for (builder.component_data.items) |component_bytes| {
             builder.allocator.free(component_bytes);
         }
@@ -417,11 +443,11 @@ test "EntityBuilder addComponent() gradually sort" {
         try builder.addComponent(T, T{ .i = i });
     }
 
-    try testing.expectEqual(builder.type_count, types.len);
+    try testing.expectEqual(builder.type_count, types.len + 1);
     inline for (query.sortTypes(&types)) |T, i| {
-        try testing.expectEqual(builder.type_hashes[i], query.hashType(T));
-        try testing.expectEqual(builder.type_sizes[i], @sizeOf(T));
-        try testing.expectEqual(builder.component_data.items[i].len, @sizeOf(T));
+        try testing.expectEqual(builder.type_hashes.items[i + 1], query.hashType(T));
+        try testing.expectEqual(builder.type_sizes.items[i + 1], @sizeOf(T));
+        try testing.expectEqual(builder.component_data.items[i + 1].len, @sizeOf(T));
     }
 }
 

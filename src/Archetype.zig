@@ -20,41 +20,51 @@ const EntityContext = struct {
 };
 const EntityMap = std.ArrayHashMap(Entity, usize, EntityContext, false);
 
-pub const max_types = 32;
-
 const Archetype = @This();
 
 allocator: Allocator,
 
 type_count: usize,
-type_sizes: [max_types]usize,
-type_hashes: [max_types]u64,
+type_sizes: []const usize,
+type_hashes: []const u64,
 
 components: []std.ArrayList(u8),
 entities: EntityMap,
 
+// used in deinit
+q: ?query.Runtime,
+
 /// init a arcetype container, type query is the type compositions for this archetype
 /// The archetype container does not account for duplicate types, or out-of-order type slices
-pub inline fn initFromTypes(allocator: Allocator, comptime Ts: []const type) !Archetype {
-    var type_sizes: [max_types]usize = undefined;
-    var type_hashes: [max_types]u64 = undefined;
-    inline for (Ts) |T, index| {
+pub inline fn initFromTypes(allocator: Allocator, comptime types: []const type) !Archetype {
+    var type_sizes: [types.len]usize = undefined;
+    var type_hashes: [types.len]u64 = undefined;
+    inline for (types) |T, index| {
         type_sizes[index] = @sizeOf(T);
         type_hashes[index] = comptime query.hashType(T);
     }
+    return init(allocator, type_sizes[0..], type_hashes[0..]);
+}
 
-    const components = try allocator.alloc(std.ArrayList(u8), Ts.len);
+/// init an archetype from runtime and take ownership of runtime data
+pub inline fn initFromQueryRuntime(runtime: *query.Runtime) !Archetype {
+    const components = try runtime.allocator.alloc(std.ArrayList(u8), runtime.len - 1);
+    errdefer runtime.allocator.free(components);
     for (components) |*component| {
-        component.* = std.ArrayList(u8).init(allocator);
+        component.* = std.ArrayList(u8).init(runtime.allocator);
     }
 
+    // Archetype now owns the query memory
+    runtime.takeOwnership();
+
     return Archetype{
-        .allocator = allocator,
-        .type_count = Ts.len,
-        .type_sizes = type_sizes,
-        .type_hashes = type_hashes,
-        .entities = EntityMap.init(allocator),
+        .allocator = runtime.allocator,
+        .type_count = runtime.len - 1,
+        .type_sizes = runtime.type_sizes[1..runtime.len],
+        .type_hashes = runtime.type_hashes[1..runtime.len],
+        .entities = EntityMap.init(runtime.allocator),
         .components = components,
+        .q = runtime.*,
     };
 }
 
@@ -64,13 +74,17 @@ pub inline fn initFromTypes(allocator: Allocator, comptime Ts: []const type) !Ar
 ///     - allocator: allocator used to allocate entities and components
 ///     - type_sizes: byte size of each component type
 ///     - type_hashes: the hashed value for a given type
-pub inline fn initFromMetaData(
+pub inline fn init(
     allocator: Allocator,
     type_sizes: []const usize,
     type_hashes: []const u64,
 ) !Archetype {
-    std.debug.assert(type_sizes.len <= max_types);
     std.debug.assert(type_sizes.len == type_sizes.len);
+
+    const owned_type_sizes = try allocator.dupe(usize, type_sizes);
+    errdefer allocator.free(owned_type_sizes);
+    const owned_type_hashes = try allocator.dupe(u64, type_hashes);
+    errdefer allocator.free(owned_type_hashes);
 
     const components = try allocator.alloc(std.ArrayList(u8), type_sizes.len);
     errdefer allocator.free(components);
@@ -78,10 +92,6 @@ pub inline fn initFromMetaData(
         component.* = std.ArrayList(u8).init(allocator);
     }
 
-    var owned_type_sizes: [max_types]usize = undefined;
-    std.mem.copy(usize, owned_type_sizes[0..], type_sizes);
-    var owned_type_hashes: [max_types]u64 = undefined;
-    std.mem.copy(u64, owned_type_hashes[0..], type_hashes);
     return Archetype{
         .allocator = allocator,
         .type_count = type_sizes.len,
@@ -89,6 +99,7 @@ pub inline fn initFromMetaData(
         .type_hashes = owned_type_hashes,
         .entities = EntityMap.init(allocator),
         .components = components,
+        .q = null,
     };
 }
 
@@ -98,6 +109,15 @@ pub inline fn deinit(self: *Archetype) void {
         component.deinit();
     }
     self.allocator.free(self.components);
+
+    if (self.q) |*q| {
+        // give Runtime access to clean own memory
+        q.own_memory = true;
+        q.deinit();
+    } else {
+        self.allocator.free(self.type_sizes);
+        self.allocator.free(self.type_hashes);
+    }
 }
 
 /// Register a new entity in this archetype
@@ -301,7 +321,7 @@ pub inline fn componentIndex(self: Archetype, type_hash: u64) !usize {
     return error.InvalidComponentType; // Component does not belong to this archetype
 }
 
-test "initFromTypes() produce expected arche type" {
+test "initFromTypes() produce expected archetype" {
     const A = struct {};
     const B = struct {};
     const C = struct {};
@@ -318,7 +338,7 @@ test "initFromTypes() produce expected arche type" {
     }
 }
 
-test "initFromMetaData() produce expected arche type" {
+test "initFromQueryRuntime() produce expected archetype" {
     const A = struct {};
     const B = struct {};
     const C = struct {};
@@ -329,7 +349,33 @@ test "initFromMetaData() produce expected arche type" {
         type_sizes[i] = @sizeOf(T);
         type_hashes[i] = query.hashType(T);
     }
-    var archetype = try initFromMetaData(testing.allocator, type_sizes[0..], type_hashes[0..]);
+    var q = try query.Runtime.fromSlices(testing.allocator, type_sizes[0..], type_hashes[0..]);
+    defer q.deinit();
+
+    var archetype = try initFromQueryRuntime(&q);
+    defer archetype.deinit();
+
+    try testing.expectEqual(type_arr.len, archetype.type_count);
+    try testing.expectEqual(type_arr.len, archetype.components.len);
+
+    inline for (query.sortTypes(&type_arr)) |T, i| {
+        try testing.expectEqual(archetype.type_hashes[i], query.hashType(T));
+        try testing.expectEqual(archetype.type_sizes[i], 0);
+    }
+}
+
+test "init() produce expected arche type" {
+    const A = struct {};
+    const B = struct {};
+    const C = struct {};
+    const type_arr: [3]type = .{ A, B, C };
+    var type_sizes: [3]usize = undefined;
+    var type_hashes: [3]u64 = undefined;
+    inline for (type_arr) |T, i| {
+        type_sizes[i] = @sizeOf(T);
+        type_hashes[i] = query.hashType(T);
+    }
+    var archetype = try init(testing.allocator, type_sizes[0..], type_hashes[0..]);
     defer archetype.deinit();
 
     try testing.expectEqual(type_arr.len, archetype.type_count);

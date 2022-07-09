@@ -31,6 +31,7 @@ node_storage: std.ArrayList(Node),
 // TODO: redesign API and data structure when issue https://github.com/ziglang/zig/issues/1291 is resolved
 /// This tree models archetypes into a query friendly structure.
 /// Example:
+/// ```txt
 ///     if we have a game with 3 components, a archetype tree might look like this:
 ///     Root (No components) (1)
 ///     │
@@ -41,7 +42,7 @@ node_storage: std.ArrayList(Node),
 ///     ├─ Velocity (5)
 ///     │
 ///     ├─ Health (6)
-///
+/// ```
 /// The archetype in node 4 will be all entities which has a Position, Velocity and Health component.
 /// Node 3 will be all entities that have been assigned a Position and Velocity, but not a Health component.
 /// Node 5 represent all entities that only has velcotiy, etc ...
@@ -94,14 +95,6 @@ pub fn getArchetype(self: *ArcheTree, comptime Ts: []const type) !*Archetype {
     return result.archetype;
 }
 
-/// Query a specific archtype and get a archetype pointer
-/// In the event that the archetype does not exist yet, the type will be constructed and
-/// added to the tree
-pub fn getArchetypeRuntime(self: *ArcheTree, type_sizes: []const usize, type_hashes: []const u64) !*Archetype {
-    const result = try self.getArchetypeAndIndexRuntime(type_sizes, type_hashes);
-    return result.archetype;
-}
-
 /// Query a specific archtype and get a archetype pointer and the underlying archetype node index
 /// In the event that the archetype does not exist yet, the type will be constructed and
 /// added to the tree
@@ -121,15 +114,19 @@ pub fn getArchetypeAndIndex(self: *ArcheTree, comptime Ts: []const type) !GetArc
         }
         break :blk hashes;
     };
-    return self.getArchetypeAndIndexRuntime(type_sizes[0..], type_hashes[0..]);
+    var type_query = try query.Runtime.fromSlices(self.allocator, type_sizes[0..], type_hashes[0..]);
+    defer type_query.deinit();
+    return self.getArchetypeAndIndexRuntime(&type_query);
 }
 
 /// Query a specific archtype and get a archetype pointer and the underlying archetype node index
 /// In the event that the archetype does not exist yet, the type will be constructed and
 /// added to the tree
-pub fn getArchetypeAndIndexRuntime(self: *ArcheTree, type_sizes: []const usize, type_hashes: []const u64) !GetArchetypeResult {
-    const type_query = query.Runtime.init(type_sizes[0..], type_hashes[0..]);
-
+/// Parameters:
+///     - self: the archetree
+///     - type_sizes: the size of each type which correlate to the hash at the same index, function copy this data
+///     - type_hashes: the hash of each type which correlate to the size at the same index, function copy this data
+pub fn getArchetypeAndIndexRuntime(self: *ArcheTree, type_query: *query.Runtime) !GetArchetypeResult {
     const Result = union(enum) {
         none,
         some: struct { index: usize, depth: usize },
@@ -144,7 +141,7 @@ pub fn getArchetypeAndIndexRuntime(self: *ArcheTree, type_sizes: []const usize, 
             }
 
             // if we are on correct branch and reached the final type
-            if (depth == tquery.type_count - 1) {
+            if (depth == tquery.len - 1) {
                 return Result{ .some = .{ .index = current_node_index, .depth = depth } };
             }
 
@@ -162,23 +159,20 @@ pub fn getArchetypeAndIndexRuntime(self: *ArcheTree, type_sizes: []const usize, 
         }
     }.func;
 
-    switch (traverse(self, type_query, 0, 0)) {
+    switch (traverse(self, type_query.*, 0, 0)) {
         .some => |value| {
             const node = &self.node_storage.items[value.index];
             // if we found the node
-            if (node.type_hash == type_query.type_hashes[type_query.type_count - 1]) {
+            if (node.type_hash == type_query.type_hashes[type_query.len - 1]) {
+                // if archetype already exist
                 if (node.archetype) |*archetype| {
                     return GetArchetypeResult{
                         .node_index = value.index,
                         .archetype = archetype,
                     };
                 }
-                node.archetype = try Archetype.initFromMetaData(
-                    self.allocator,
-                    // Do not include root node information in archetype
-                    type_query.type_sizes[1..type_query.type_count],
-                    type_query.type_hashes[1..type_query.type_count],
-                );
+                // create an archetype for the node since it is missing
+                node.archetype = try Archetype.initFromQueryRuntime(type_query);
                 return GetArchetypeResult{
                     .node_index = value.index,
                     .archetype = &(node.archetype orelse unreachable),
@@ -189,19 +183,15 @@ pub fn getArchetypeAndIndexRuntime(self: *ArcheTree, type_sizes: []const usize, 
             var current_node = &self.node_storage.items[value.index];
             var new_node_index: usize = undefined;
             var i = value.depth + 1;
-            while (i < type_query.type_count) : (i += 1) {
+            while (i < type_query.len) : (i += 1) {
                 std.debug.assert(current_node.child_count < node_max_children - 1);
                 new_node_index = self.node_storage.items.len;
                 current_node.children_indices[current_node.child_count] = new_node_index;
                 current_node.child_count += 1;
 
                 // do not create an archetype if the node is currently only used for queries (inactive)
-                const archetype = if (i < type_query.type_count - 1) null else try Archetype.initFromMetaData(
-                    self.allocator,
-                    // Do not include root node information in archetype
-                    type_query.type_sizes[1 .. i + 1],
-                    type_query.type_hashes[1 .. i + 1],
-                );
+                // we create an archetype for the final leaf node since this is the archetype requested
+                const archetype = if (i < type_query.len - 1) null else try Archetype.initFromQueryRuntime(type_query);
                 try self.node_storage.append(Node{
                     .type_hash = type_query.type_hashes[i],
                     .children_indices = undefined,
@@ -383,8 +373,8 @@ test "getArchetype() does not generate duplicate nodes" {
     for (tree.node_storage.items) |node, i| {
         type_node_values[i] = 0;
         if (node.archetype) |archetype| {
-            for (archetype.type_hashes[0..archetype.type_count]) |hash| {
-                type_node_values[i] += @intCast(u128, hash);
+            for (archetype.type_hashes) |hashes| {
+                type_node_values[i] += @intCast(u128, hashes);
             }
         }
     }
