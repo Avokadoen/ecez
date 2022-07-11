@@ -247,22 +247,26 @@ pub inline fn getComponent(self: Archetype, entity: Entity, comptime T: type) !T
 }
 
 fn ComponentStoragesReturnType(comptime type_count: usize, comptime types: [type_count]type) type {
-    var fields: [types.len]std.builtin.Type.StructField = undefined;
+    var fields: [types.len + 1]std.builtin.Type.StructField = undefined;
     inline for (types) |T, i| {
-        if (@sizeOf(T) == 0) {
-            // A query should be used instead (not implemented yet)
-            @compileError("tag components (0 bytes size) are not allowed as system arguments, consider using an explicit query instead");
-        }
         @setEvalBranchQuota(10_000);
         var num_buf: [128]u8 = undefined;
         fields[i] = .{
             .name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable,
-            .field_type = []T,
+            .field_type = if (@sizeOf(T) > 0) []T else T,
             .default_value = null,
             .is_comptime = false,
-            .alignment = @alignOf(T),
+            .alignment = if (@sizeOf(T) > 0) @alignOf(T) else 0,
         };
     }
+    var num_buf: [128]u8 = undefined;
+    fields[types.len] = .{
+        .name = std.fmt.bufPrint(&num_buf, "{d}", .{types.len}) catch unreachable,
+        .field_type = usize,
+        .default_value = null,
+        .is_comptime = false,
+        .alignment = @alignOf(usize),
+    };
     const RtrTypeInfo = std.builtin.Type{ .Struct = .{
         .layout = .Auto,
         .fields = fields[0..],
@@ -292,16 +296,21 @@ pub fn getComponentStorages(
     inline for (rtr_type_hashes) |rtr_hash, i| {
         inner: for (self.type_hashes[0..self.type_count]) |hash, j| {
             if (hash == rtr_hash) {
+                defined_fields += 1;
+                if (@sizeOf(types[i]) == 0) {
+                    rtr_struct[i] = types[i]{};
+                    break :inner;
+                }
                 const align_slice = @alignCast(@alignOf(types[i]), self.components[j].items);
                 rtr_struct[i] = std.mem.bytesAsSlice(types[i], align_slice);
-                defined_fields += 1;
                 break :inner;
             }
         }
     }
-    if (defined_fields != types.len) {
+    if (defined_fields != rtr_type_hashes.len) {
         return error.TypePoison;
     }
+    rtr_struct[rtr_type_hashes.len] = self.entities.count();
     return rtr_struct;
 }
 
@@ -515,4 +524,5 @@ test "getComponentStorages() give expected slices" {
 
     try testing.expectEqual(a, a_c_components[0][0]);
     try testing.expectEqual(c, a_c_components[1][0]);
+    try testing.expectEqual(@as(usize, 1), a_c_components[2]);
 }

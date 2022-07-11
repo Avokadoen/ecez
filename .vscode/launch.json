@@ -11,6 +11,18 @@
             "program": "zig",
             "args": ["build", "test"],
             "cwd": "${workspaceFolder}"
-        }
+        },
+        {
+            "name": "(Windows) Launch GOL Debug",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/bin/game-of-life.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${fileDirname}",
+            "environment": [],
+            "console": "externalTerminal",
+            "preLaunchTask": "build"
+        },
     ]
 }

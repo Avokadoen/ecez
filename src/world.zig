@@ -10,9 +10,6 @@ const Entity = @import("entity_type.zig").Entity;
 const EntityRef = @import("entity_type.zig").EntityRef;
 const query = @import("query.zig");
 
-// TODO: configurable
-pub const max_systems = 1024;
-
 /// Create a ecs instance. Systems are initially included into the World.
 /// Parameters:
 ///     - systems: a tuple consisting of each system used by the world each frame
@@ -20,25 +17,36 @@ pub fn CreateWorld(comptime systems: anytype) type {
     const SystemsType = @TypeOf(systems);
     const systems_info = @typeInfo(SystemsType);
     if (systems_info != .Struct) {
-        @compileError("Expected tuple or struct argument, found " ++ @typeName(SystemsType) ++ "\nSuggestion: put your system(s) in a tuple: .{my_system, another_system}");
+        @compileError("CreateWorld expected tuple or struct argument, found " ++ @typeName(SystemsType));
     }
 
     const fields_info = systems_info.Struct.fields;
-    if (fields_info.len > max_systems) {
-        @compileError("max system count is currently configured to 2024, got " ++ fields_info.len);
-    }
-
-    // TODO: care when implementing Struct since fields_info.len will no longer be a valid len ..
-    const systems_count = fields_info.len;
-    comptime var systems_metadata: [systems_count]SystemMetadata = undefined;
-    inline for (fields_info) |field_info, i| {
+    @setEvalBranchQuota(10_000);
+    comptime var systems_count = 0;
+    // start by counting systems registered
+    inline for (fields_info) |field_info| {
         switch (@typeInfo(field_info.field_type)) {
-            .Struct => @compileError("unimplemented"),
-            .Fn => |func| {
-                // TODO: care when implementing Struct since i will no longer be a valid index ..
-                systems_metadata[i] = SystemMetadata.init(field_info.field_type, func);
+            .Fn => systems_count += 1,
+            else => {
+                const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct at entry {d}, found {s}", .{
+                    systems_count,
+                    @typeName(field_info.field_type),
+                });
+                @compileError(err_msg);
             },
-            else => @compileError("Expected function or struct, found " ++ @typeName(field_info.field_type)),
+        }
+    }
+    comptime var systems_metadata: [systems_count]SystemMetadata = undefined;
+    {
+        comptime var i: usize = 0;
+        inline for (fields_info) |field_info| {
+            switch (@typeInfo(field_info.field_type)) {
+                .Fn => |func| {
+                    systems_metadata[i] = SystemMetadata.init(field_info.field_type, func);
+                    i += 1;
+                },
+                else => unreachable,
+            }
         }
     }
 
@@ -120,7 +128,8 @@ pub fn CreateWorld(comptime systems: anytype) type {
         }
 
         /// Assign a component to an entity
-        pub fn setComponent(self: *World, entity: Entity, comptime T: type, component: T) !void {
+        pub fn setComponent(self: *World, entity: Entity, component: anytype) !void {
+            const T = @TypeOf(component);
             const current_archetype = self.archetree.entityRefArchetype(self.entity_references.items[entity.id]);
             if (current_archetype.hasComponent(T)) {
                 try current_archetype.setComponent(entity, T, component);
@@ -188,20 +197,29 @@ pub fn CreateWorld(comptime systems: anytype) type {
 
         pub fn dispatch(self: *World) !void {
             inline for (systems_metadata) |system_metadata, system_index| {
-                // TODO: cache archetypes until tree changes (new nodes generated)
                 const query_types = comptime system_metadata.queryArgTypes();
                 const param_types = comptime system_metadata.paramArgTypes();
+
                 var archetypes = try self.archetree.getTypeSubsets(self.allocator, &query_types);
+                // TODO: cache archetypes until tree changes (new nodes generated)
                 defer self.allocator.free(archetypes);
+
                 for (archetypes) |archetype| {
                     const components = try archetype.getComponentStorages(query_types.len, query_types);
                     var i: usize = 0;
-                    while (i < components[0].len) : (i += 1) {
+                    while (i < components[components.len - 1]) : (i += 1) {
                         var component: std.meta.Tuple(&param_types) = undefined;
-                        inline for (param_types) |_, j| {
-                            switch (system_metadata.args[j]) {
-                                .value => component[j] = components[j][i],
-                                .ptr => component[j] = &components[j][i],
+                        inline for (param_types) |Param, j| {
+                            if (@sizeOf(Param) > 0) {
+                                switch (system_metadata.args[j]) {
+                                    .value => component[j] = components[j][i],
+                                    .ptr => component[j] = &components[j][i],
+                                }
+                            } else {
+                                switch (system_metadata.args[j]) {
+                                    .value => component[j] = Param{},
+                                    .ptr => component[j] = &Param{},
+                                }
                             }
                         }
 
@@ -262,7 +280,8 @@ pub const EntityBuilder = struct {
     }
 
     /// Add component to entity
-    pub fn addComponent(self: *EntityBuilder, comptime T: type, component: T) !void {
+    pub fn addComponent(self: *EntityBuilder, component: anytype) !void {
+        const T = @TypeOf(component);
         const type_hash = query.hashType(T);
         const type_size = @sizeOf(T);
 
@@ -327,11 +346,11 @@ test "setComponent() component moves entity to correct archetype" {
     // entity is now a void entity (no components)
 
     const a = A{ .some_value = 123 };
-    try world.setComponent(entity1, A, a);
+    try world.setComponent(entity1, a);
     // entity is now of archetype (A)
 
     const b = B{ .some_value = 42 };
-    try world.setComponent(entity1, B, b);
+    try world.setComponent(entity1, b);
     // entity is now of archetype (A B)
 
     const entity_archetype = try world.archetree.getArchetype(&[_]type{ A, B });
@@ -347,16 +366,16 @@ test "getComponent() retrieve component value" {
     var world = try StateWorld.init(testing.allocator);
     defer world.deinit();
 
-    try world.setComponent(try world.createEntity(), A, .{ .some_value = 0 });
-    try world.setComponent(try world.createEntity(), A, .{ .some_value = 1 });
-    try world.setComponent(try world.createEntity(), A, .{ .some_value = 2 });
+    try world.setComponent(try world.createEntity(), A{ .some_value = 0 });
+    try world.setComponent(try world.createEntity(), A{ .some_value = 1 });
+    try world.setComponent(try world.createEntity(), A{ .some_value = 2 });
 
     const entity = try world.createEntity();
     const a = A{ .some_value = 123 };
-    try world.setComponent(entity, A, a);
+    try world.setComponent(entity, a);
 
-    try world.setComponent(try world.createEntity(), A, .{ .some_value = 3 });
-    try world.setComponent(try world.createEntity(), A, .{ .some_value = 4 });
+    try world.setComponent(try world.createEntity(), A{ .some_value = 3 });
+    try world.setComponent(try world.createEntity(), A{ .some_value = 4 });
 
     try testing.expectEqual(a, try world.getComponent(entity, A));
 }
@@ -372,11 +391,11 @@ test "removeComponent() component moves entity to correct archetype" {
     // entity is now a void entity (no components)
 
     const a = A{};
-    try world.setComponent(entity1, A, a);
+    try world.setComponent(entity1, a);
     // entity is now of archetype (A)
 
     const b = B{ .some_value = 42 };
-    try world.setComponent(entity1, B, b);
+    try world.setComponent(entity1, b);
     // entity is now of archetype (A B)
 
     try world.removeComponent(entity1, A);
@@ -396,8 +415,8 @@ test "world build entity using EntityBuilder" {
 
     // build a entity using a builder
     var builder = try world.entityBuilder();
-    try builder.addComponent(A, .{});
-    try builder.addComponent(B, .{ .some_value = 42 });
+    try builder.addComponent(A{});
+    try builder.addComponent(B{ .some_value = 42 });
     const entity = try world.fromEntityBuilder(&builder);
 
     // get expected archetype
@@ -440,7 +459,7 @@ test "EntityBuilder addComponent() gradually sort" {
         builder.component_data.deinit();
     }
     inline for (types) |T, i| {
-        try builder.addComponent(T, T{ .i = i });
+        try builder.addComponent(T{ .i = i });
     }
 
     try testing.expectEqual(builder.type_count, types.len + 1);
@@ -473,8 +492,8 @@ test "systems can fail" {
     defer world.deinit();
 
     const entity = try world.createEntity();
-    try world.setComponent(entity, A, A{ .str = "hello world!" });
-    try world.setComponent(entity, B, B{ .some_value = 42 });
+    try world.setComponent(entity, A{ .str = "hello world!" });
+    try world.setComponent(entity, B{ .some_value = 42 });
 
     try testing.expectError(error.SomethingWentVeryWrong, world.dispatch());
 }
@@ -495,8 +514,8 @@ test "systems can mutate values" {
     defer world.deinit();
 
     const entity = try world.createEntity();
-    try world.setComponent(entity, A, A{ .position = 10 });
-    try world.setComponent(entity, B, B{ .velocity = 9 });
+    try world.setComponent(entity, A{ .position = 10 });
+    try world.setComponent(entity, B{ .velocity = 9 });
 
     try world.dispatch();
 

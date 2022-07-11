@@ -1,8 +1,6 @@
 const std = @import("std");
 const FnInfo = std.builtin.Type.Fn;
 
-const max_types = @import("Archetype.zig").max_types;
-
 const SystemMetadata = @This();
 
 pub const Arg = enum {
