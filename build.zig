@@ -1,5 +1,5 @@
 const std = @import("std");
-const ztracy = @import("deps/zig-gamedev/libs/ztracy/build.zig");
+const ztracy = @import("deps/ztracy/build.zig");
 
 const Example = struct {
     name: []const u8,
@@ -55,7 +55,7 @@ pub fn build(b: *std.build.Builder) void {
 
         // add any tests that are define inside each example
         const example_tests = b.addTest(path);
-        main_tests.setBuildMode(mode);
+        example_tests.setBuildMode(mode);
         test_step.dependOn(&example_tests.step);
     }
 }
