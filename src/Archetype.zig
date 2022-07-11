@@ -48,7 +48,7 @@ pub inline fn initFromTypes(allocator: Allocator, comptime types: []const type) 
 
 /// init an archetype from runtime and take ownership of runtime data
 pub inline fn initFromQueryRuntime(runtime: *query.Runtime) !Archetype {
-    const components = try runtime.allocator.alloc(std.ArrayList(u8), runtime.len - 1);
+    const components = try runtime.allocator.alloc(std.ArrayList(u8), runtime.len);
     errdefer runtime.allocator.free(components);
     for (components) |*component| {
         component.* = std.ArrayList(u8).init(runtime.allocator);
@@ -59,9 +59,9 @@ pub inline fn initFromQueryRuntime(runtime: *query.Runtime) !Archetype {
 
     return Archetype{
         .allocator = runtime.allocator,
-        .type_count = runtime.len - 1,
-        .type_sizes = runtime.type_sizes[1..runtime.len],
-        .type_hashes = runtime.type_hashes[1..runtime.len],
+        .type_count = runtime.len,
+        .type_sizes = runtime.type_sizes,
+        .type_hashes = runtime.type_hashes,
         .entities = EntityMap.init(runtime.allocator),
         .components = components,
         .q = runtime.*,

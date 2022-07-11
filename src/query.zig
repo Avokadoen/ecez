@@ -65,9 +65,9 @@ pub const Runtime = struct {
     pub fn fromSlicesAndType(allocator: Allocator, type_sizes: []const usize, type_hashes: []const u64, comptime AppendedType: type) !Runtime {
         std.debug.assert(type_sizes.len == type_hashes.len);
 
-        const void_and_appended_type_len = 2;
-        const len = type_hashes.len + void_and_appended_type_len;
-        var sort_elements = try allocator.alloc(SortElem, len - 1);
+        const appended_type_len = 1;
+        const len = type_hashes.len + appended_type_len;
+        var sort_elements = try allocator.alloc(SortElem, len);
         defer allocator.free(sort_elements);
 
         for (type_sizes) |size, i| {
@@ -88,13 +88,10 @@ pub const Runtime = struct {
         var sorted_type_hashes = try allocator.alloc(u64, len);
         errdefer allocator.free(sorted_type_hashes);
 
-        // insert void type
-        sorted_type_sizes[0] = 0;
-        sorted_type_hashes[0] = 0;
         // insert the rest of the types
         for (sort_elements) |elem, i| {
-            sorted_type_sizes[i + 1] = elem.type_size;
-            sorted_type_hashes[i + 1] = elem.type_hash;
+            sorted_type_sizes[i] = elem.type_size;
+            sorted_type_hashes[i] = elem.type_hash;
         }
 
         return Runtime{
@@ -110,9 +107,8 @@ pub const Runtime = struct {
     pub fn fromSlices(allocator: Allocator, type_sizes: []const usize, type_hashes: []const u64) !Runtime {
         std.debug.assert(type_sizes.len == type_hashes.len);
 
-        const void_type_len = 1;
-        const len = type_hashes.len + void_type_len;
-        var sort_elements = try allocator.alloc(SortElem, len - 1);
+        const len = type_hashes.len;
+        var sort_elements = try allocator.alloc(SortElem, len);
         defer allocator.free(sort_elements);
 
         for (type_sizes) |size, i| {
@@ -128,13 +124,10 @@ pub const Runtime = struct {
         var sorted_type_hashes = try allocator.alloc(u64, len);
         errdefer allocator.free(sorted_type_hashes);
 
-        // insert void type
-        sorted_type_sizes[0] = 0;
-        sorted_type_hashes[0] = 0;
         // insert the rest of the types
         for (sort_elements) |elem, i| {
-            sorted_type_sizes[i + 1] = elem.type_size;
-            sorted_type_hashes[i + 1] = elem.type_hash;
+            sorted_type_sizes[i] = elem.type_size;
+            sorted_type_hashes[i] = elem.type_hash;
         }
 
         return Runtime{
@@ -165,9 +158,8 @@ pub const Runtime = struct {
         }
         std.debug.assert(type_size_len == type_hash_len);
 
-        const void_type_len = 1;
-        const len = type_hash_len + void_type_len;
-        var sort_elements = try allocator.alloc(SortElem, len - 1);
+        const len = type_hash_len;
+        var sort_elements = try allocator.alloc(SortElem, len);
         defer allocator.free(sort_elements);
 
         var pos: usize = 0;
@@ -187,13 +179,10 @@ pub const Runtime = struct {
         var sorted_type_hashes = try allocator.alloc(u64, len);
         errdefer allocator.free(sorted_type_hashes);
 
-        // insert void type
-        sorted_type_sizes[0] = 0;
-        sorted_type_hashes[0] = 0;
         // insert the rest of the types
         for (sort_elements) |elem, i| {
-            sorted_type_sizes[i + 1] = elem.type_size;
-            sorted_type_hashes[i + 1] = elem.type_hash;
+            sorted_type_sizes[i] = elem.type_size;
+            sorted_type_hashes[i] = elem.type_hash;
         }
 
         return Runtime{
@@ -238,14 +227,14 @@ test "Runtime fromSliceSlices() joins slices" {
     defer r.deinit();
 
     // ignore void type
-    try testing.expectEqual(r.len - 1, sizes.len);
+    try testing.expectEqual(r.len, sizes.len);
 
     const expected_index_order = [_]usize{ 2, 3, 1, 0 };
     const expected_sizes = [_]usize{ 1, 2, 3, 4 };
     const expected_hashes = [_]u64{ 4, 3, 1, 2 };
     for (expected_index_order) |order, i| {
-        try testing.expectEqual(expected_sizes[order], r.type_sizes[i + 1]);
-        try testing.expectEqual(expected_hashes[order], r.type_hashes[i + 1]);
+        try testing.expectEqual(expected_sizes[order], r.type_sizes[i]);
+        try testing.expectEqual(expected_hashes[order], r.type_hashes[i]);
     }
 }
 
@@ -256,13 +245,13 @@ test "Runtime fromSlicesAndType() sort hashes and sizes" {
     defer r.deinit();
 
     // ignore void type
-    try testing.expectEqual(r.len - 1, sizes.len + 1);
+    try testing.expectEqual(r.len, sizes.len + 1);
     const expected_index_order = [_]usize{ 2, 3, 1, 0, 4 };
     const expected_sizes = sizes ++ [_]usize{@sizeOf(u64)};
     const expected_hashes = hashes ++ [_]u64{hashType(u64)};
     for (expected_index_order) |order, i| {
-        try testing.expectEqual(expected_sizes[order], r.type_sizes[i + 1]);
-        try testing.expectEqual(expected_hashes[order], r.type_hashes[i + 1]);
+        try testing.expectEqual(expected_sizes[order], r.type_sizes[i]);
+        try testing.expectEqual(expected_hashes[order], r.type_hashes[i]);
     }
 }
 
@@ -273,11 +262,11 @@ test "Runtime fromSlices() sort hashes and sizes" {
     defer r.deinit();
 
     // ignore void type
-    try testing.expect(r.len - 1 == sizes.len);
+    try testing.expectEqual(r.len, sizes.len);
     const expected_index_order = [_]usize{ 2, 3, 1, 0 };
     for (expected_index_order) |order, i| {
-        try testing.expectEqual(sizes[order], r.type_sizes[i + 1]);
-        try testing.expectEqual(hashes[order], r.type_hashes[i + 1]);
+        try testing.expectEqual(sizes[order], r.type_sizes[i]);
+        try testing.expectEqual(hashes[order], r.type_hashes[i]);
     }
 }
 

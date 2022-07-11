@@ -122,7 +122,7 @@ pub fn CreateWorld(comptime systems: anytype) type {
                 builder.allocator.free(components);
             }
             // skip void entry
-            try get_result.archetype.registerEntity(entity, components[1..]);
+            try get_result.archetype.registerEntity(entity, components);
 
             return entity;
         }
@@ -256,26 +256,12 @@ pub const EntityBuilder = struct {
     /// Initialize a EntityBuilder, should only be called from World.zig
     pub fn init(allocator: Allocator) !EntityBuilder {
         // init by registering the void type
-        const type_count = 1;
-
-        var type_sizes = std.ArrayList(usize).init(allocator);
-        errdefer type_sizes.deinit();
-        try type_sizes.append(0);
-
-        var type_hashes = std.ArrayList(u64).init(allocator);
-        errdefer type_hashes.deinit();
-        try type_hashes.append(0);
-
-        var component_data = std.ArrayList([]u8).init(allocator);
-        errdefer component_data.deinit();
-        try component_data.append(&.{});
-
         return EntityBuilder{
             .allocator = allocator,
-            .type_count = type_count,
-            .type_sizes = type_sizes,
-            .type_hashes = type_hashes,
-            .component_data = component_data,
+            .type_count = 0,
+            .type_sizes = std.ArrayList(usize).init(allocator),
+            .type_hashes = std.ArrayList(u64).init(allocator),
+            .component_data = std.ArrayList([]u8).init(allocator),
         };
     }
 
@@ -462,11 +448,11 @@ test "EntityBuilder addComponent() gradually sort" {
         try builder.addComponent(T{ .i = i });
     }
 
-    try testing.expectEqual(builder.type_count, types.len + 1);
+    try testing.expectEqual(builder.type_count, types.len);
     inline for (query.sortTypes(&types)) |T, i| {
-        try testing.expectEqual(builder.type_hashes.items[i + 1], query.hashType(T));
-        try testing.expectEqual(builder.type_sizes.items[i + 1], @sizeOf(T));
-        try testing.expectEqual(builder.component_data.items[i + 1].len, @sizeOf(T));
+        try testing.expectEqual(builder.type_hashes.items[i], query.hashType(T));
+        try testing.expectEqual(builder.type_sizes.items[i], @sizeOf(T));
+        try testing.expectEqual(builder.component_data.items[i].len, @sizeOf(T));
     }
 }
 

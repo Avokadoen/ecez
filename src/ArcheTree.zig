@@ -127,6 +127,16 @@ pub fn getArchetypeAndIndex(self: *ArcheTree, comptime Ts: []const type) !GetArc
 ///     - type_sizes: the size of each type which correlate to the hash at the same index, function copy this data
 ///     - type_hashes: the hash of each type which correlate to the size at the same index, function copy this data
 pub fn getArchetypeAndIndexRuntime(self: *ArcheTree, type_query: *query.Runtime) !GetArchetypeResult {
+    std.debug.assert(type_query.len > 0);
+
+    // if void type was request
+    if (type_query.len == 1 and type_query.type_hashes[0] == 0) {
+        return GetArchetypeResult{
+            .node_index = 0,
+            .archetype = self.voidType(),
+        };
+    }
+
     const Result = union(enum) {
         none,
         some: struct { index: usize, depth: usize },
@@ -135,14 +145,17 @@ pub fn getArchetypeAndIndexRuntime(self: *ArcheTree, type_query: *query.Runtime)
         fn func(slf: *ArcheTree, tquery: query.Runtime, current_node_index: usize, depth: usize) Result {
             const node = slf.node_storage.items[current_node_index];
 
-            // if not on the correct branch
-            if (node.type_hash != tquery.type_hashes[depth]) {
-                return Result.none;
-            }
+            // do not check root node
+            if (depth > 0) {
+                // if not on the correct branch
+                if (node.type_hash != tquery.type_hashes[depth - 1]) {
+                    return Result.none;
+                }
 
-            // if we are on correct branch and reached the final type
-            if (depth == tquery.len - 1) {
-                return Result{ .some = .{ .index = current_node_index, .depth = depth } };
+                // if we are on correct branch and reached the final type
+                if (depth == tquery.len) {
+                    return Result{ .some = .{ .index = current_node_index, .depth = depth } };
+                }
             }
 
             // go down the branch
@@ -182,7 +195,7 @@ pub fn getArchetypeAndIndexRuntime(self: *ArcheTree, type_query: *query.Runtime)
             // start creating new branch in tree
             var current_node = &self.node_storage.items[value.index];
             var new_node_index: usize = undefined;
-            var i = value.depth + 1;
+            var i = value.depth;
             while (i < type_query.len) : (i += 1) {
                 std.debug.assert(current_node.child_count < node_max_children - 1);
                 new_node_index = self.node_storage.items.len;
