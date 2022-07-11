@@ -1,0 +1,3 @@
+[submodule "deps/zig-gamedev"]
+	path = deps/zig-gamedev
+	url = https://github.com/michal-z/zig-gamedev

@@ -1,4 +1,5 @@
 const std = @import("std");
+const ztracy = @import("deps/zig-gamedev/libs/ztracy/build.zig");
 
 const Example = struct {
     name: []const u8,
@@ -14,6 +15,11 @@ pub fn build(b: *std.build.Builder) void {
     // Standard release options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
     const mode = b.standardReleaseOptions();
+
+    // initialize tracy
+    const ztracy_enable = b.option(bool, "ztracy-enable", "Enable Tracy profiler") orelse false;
+    const ztracy_options = ztracy.BuildOptionsStep.init(b, .{ .enable_ztracy = ztracy_enable });
+    const ztracy_pkg = ztracy.getPkg(&.{ztracy_options.getPkg()});
 
     const lib = b.addStaticLibrary("ecez", "src/main.zig");
     lib.setBuildMode(mode);
@@ -35,6 +41,11 @@ pub fn build(b: *std.build.Builder) void {
         exe.setTarget(target);
         exe.setBuildMode(mode);
         exe.addPackage(EcezPackage);
+
+        // link tracy
+        exe.addPackage(ztracy_pkg);
+        ztracy.link(exe, ztracy_options);
+
         exe.install();
 
         const run_step = b.step("run-" ++ example.name, "Run '" ++ example.name ++ "' demo");
