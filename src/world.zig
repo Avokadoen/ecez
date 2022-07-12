@@ -135,7 +135,12 @@ pub fn CreateWorld(comptime systems: anytype) type {
                 try current_archetype.setComponent(entity, T, component);
             }
 
-            var type_query = try query.Runtime.fromSlicesAndType(self.allocator, current_archetype.type_sizes, current_archetype.type_hashes, T);
+            var type_query = try query.Runtime.fromSlicesAndTypes(
+                self.allocator,
+                current_archetype.type_sizes,
+                current_archetype.type_hashes,
+                &[_]type{T},
+            );
             defer type_query.deinit();
 
             // get the new entity archetype
@@ -143,6 +148,57 @@ pub fn CreateWorld(comptime systems: anytype) type {
 
             try current_archetype.moveEntity(entity, get_result.archetype);
             try get_result.archetype.setComponent(entity, T, component);
+
+            // update the entity reference
+            self.entity_references.items[entity.id].tree_node_index = get_result.node_index;
+        }
+
+        /// Assign multiple components to an entity at once
+        /// using this instead of mutliple setComponent calls is more effective
+        pub fn setComponents(self: *World, entity: Entity, components: anytype) !void {
+            const components_info = @typeInfo(@TypeOf(components));
+            if (components_info != .Struct) {
+                @compileError("expected struct or tuple of components, got " ++ @typeName(components));
+            }
+            const components_struct = components_info.Struct;
+            if (components_struct.fields.len == 0) {
+                @compileError("attempting to add 0 components");
+            }
+
+            const current_archetype = self.archetree.entityRefArchetype(self.entity_references.items[entity.id]);
+            var archetype_has_components = true;
+            comptime var component_types: [components_struct.fields.len]type = undefined;
+            inline for (components_struct.fields) |field, i| {
+                if (@typeInfo(field.field_type) != .Struct) {
+                    @compileError("components must be struct types");
+                }
+                component_types[i] = field.field_type;
+                archetype_has_components = archetype_has_components and current_archetype.hasComponent(field.field_type);
+            }
+
+            // if all components already exist on archetype, then we can simply assign each new value
+            if (archetype_has_components) {
+                inline for (component_types) |T, i| {
+                    try current_archetype.setComponent(entity, T, components[i]);
+                }
+                return;
+            }
+
+            var type_query = try query.Runtime.fromSlicesAndTypes(
+                self.allocator,
+                current_archetype.type_sizes,
+                current_archetype.type_hashes,
+                &component_types,
+            );
+            defer type_query.deinit();
+
+            // get the new entity archetype
+            const get_result = try self.archetree.getArchetypeAndIndexRuntime(&type_query);
+
+            try current_archetype.moveEntity(entity, get_result.archetype);
+            inline for (component_types) |T, i| {
+                try get_result.archetype.setComponent(entity, T, components[i]);
+            }
 
             // update the entity reference
             self.entity_references.items[entity.id].tree_node_index = get_result.node_index;
@@ -196,6 +252,81 @@ pub fn CreateWorld(comptime systems: anytype) type {
                     },
                 );
             };
+            defer type_query.deinit();
+
+            // get the new entity archetype
+            const get_result = try self.archetree.getArchetypeAndIndexRuntime(&type_query);
+            try current_archetype.moveEntity(entity, get_result.archetype);
+
+            // update the entity reference
+            self.entity_references.items[entity.id].tree_node_index = get_result.node_index;
+        }
+
+        /// Remove multiple components from an entity at once
+        /// using this instead of mutliple removeComponent calls is more effective
+        pub fn removeComponents(self: *World, entity: Entity, component_types: anytype) !void {
+            const components_info = @typeInfo(@TypeOf(component_types));
+            if (components_info != .Struct) {
+                @compileError("expected struct or tuple of components, got " ++ @typeName(component_types));
+            }
+            const components_struct = components_info.Struct;
+            if (components_struct.fields.len == 0) {
+                @compileError("attempting to remove 0 components");
+            }
+
+            comptime var types: [components_struct.fields.len]type = undefined;
+            inline for (components_struct.fields) |field, i| {
+                if (@typeInfo(field.field_type) != .Type) {
+                    @compileError("removeComponents expected component types, got " ++ @typeName(field.field_type));
+                }
+                types[i] = @ptrCast(*const type, field.default_value.?).*;
+            }
+
+            // find all indices that are to be removed
+            const current_archetype = self.archetree.entityRefArchetype(self.entity_references.items[entity.id]);
+            var component_indices: [components_struct.fields.len]usize = undefined;
+            inline for (query.sortTypes(&types)) |T, i| {
+                component_indices[i] = try current_archetype.componentIndex(comptime query.hashType(T));
+            }
+
+            // Sorry to anyone reading this code
+            var prev_remove_index: usize = 0;
+            var slice_count: usize = 0;
+            var type_sizes: [components_struct.fields.len * 2][]const usize = undefined;
+            var type_hashes: [components_struct.fields.len * 2][]const u64 = undefined;
+            for (component_indices) |remove_type_index, i| {
+                // assing prev index at the end of scope
+                defer prev_remove_index = remove_type_index;
+
+                // define start and end of any slice
+                const start = prev_remove_index + 1;
+                const end = if (i < component_indices.len - 1) component_indices[i + 1] else current_archetype.type_count;
+
+                // if we remove first element in slice
+                if (remove_type_index == 0) {
+                    type_sizes[slice_count] = current_archetype.type_sizes[1..end];
+                    type_hashes[slice_count] = current_archetype.type_hashes[1..end];
+                    slice_count += 1;
+                    // else if we remove last element in slice
+                } else if (remove_type_index == current_archetype.type_count - 1) {
+                    type_sizes[slice_count] = current_archetype.type_sizes[start..remove_type_index];
+                    type_hashes[slice_count] = current_archetype.type_hashes[start..remove_type_index];
+                    slice_count += 1;
+                    // else if we remove element inbetween elements
+                } else {
+                    type_sizes[slice_count] = current_archetype.type_sizes[start..remove_type_index];
+                    type_sizes[slice_count + 1] = current_archetype.type_sizes[remove_type_index + 1 .. end];
+                    type_hashes[slice_count] = current_archetype.type_hashes[start..remove_type_index];
+                    type_hashes[slice_count + 1] = current_archetype.type_hashes[remove_type_index + 1 .. end];
+                    slice_count += 2;
+                }
+            }
+
+            var type_query = try query.Runtime.fromSliceSlices(
+                self.allocator,
+                type_sizes[0..slice_count],
+                type_hashes[0..slice_count],
+            );
             defer type_query.deinit();
 
             // get the new entity archetype
@@ -415,6 +546,43 @@ test "removeComponent() component moves entity to correct archetype" {
     const entity_archetype = try world.archetree.getArchetype(&[_]type{B});
     const stored_b = try entity_archetype.getComponent(entity1, B);
     try testing.expectEqual(b, stored_b);
+}
+
+test "setComponents() add multiple components" {
+    const A = struct { a: u8 };
+    const B = struct { b: u8 };
+
+    var world = try StateWorld.init(testing.allocator);
+    defer world.deinit();
+
+    const a = A{ .a = 1 };
+    const b = B{ .b = 2 };
+    const entity = try world.createEntity();
+    try world.setComponents(entity, .{ a, b });
+
+    try testing.expectEqual(a, try world.getComponent(entity, A));
+    try testing.expectEqual(b, try world.getComponent(entity, B));
+}
+
+test "removeComponents() remove multiple components" {
+    const A = struct {};
+    const B = struct {};
+
+    var world = try StateWorld.init(testing.allocator);
+    defer world.deinit();
+
+    const a = A{};
+    const b = B{};
+    const entity = try world.createEntity();
+    try world.setComponents(entity, .{ a, b });
+
+    try testing.expectEqual(a, try world.getComponent(entity, A));
+    try testing.expectEqual(b, try world.getComponent(entity, B));
+
+    try world.removeComponents(entity, .{ A, B });
+
+    try testing.expectEqual(false, world.hasComponent(entity, A));
+    try testing.expectEqual(false, world.hasComponent(entity, B));
 }
 
 test "world build entity using EntityBuilder" {
