@@ -3,14 +3,11 @@ const ecez = @import("ecez");
 
 const ztracy = @import("ztracy");
 
-const Color = struct {
-    const light_blue = 0x5d_88_de;
-    const light_green = 0x5d_de_6b;
-};
+const Color = ecez.misc.Color;
 
-const spawn_threshold = 0.45;
+const spawn_threshold = 0.5;
 const characters_per_cell = 3;
-const grid_dimensions = 20;
+const grid_dimensions = 40;
 const cell_count = grid_dimensions * grid_dimensions;
 const new_lines = grid_dimensions;
 
@@ -21,18 +18,28 @@ var output_buffer: [cell_count * characters_per_cell + new_lines]u8 = undefined;
 pub fn main() anyerror!void {
     ztracy.SetThreadName("main thread");
 
-    var allocator_buffer: [8192 * 24]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&allocator_buffer);
-    const allocator = fba.allocator();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer {
+        if (gpa.deinit()) {
+            std.log.err("leak detected", .{});
+        }
+    }
+    var aa = std.heap.ArenaAllocator.init(gpa.allocator());
+    const allocator = aa.allocator();
 
-    var world = try ecez.CreateWorld(.{ Cell.render, NewLine.render, Flush.buffer, Cell.tick }).init(allocator);
+    var world = try ecez.CreateWorld(.{
+        Cell.render,
+        NewLine.render,
+        Flush.buffer,
+        Cell.tick,
+    }).init(allocator);
     defer world.deinit();
 
     var rng = std.rand.DefaultPrng.init(@intCast(u64, std.time.timestamp()));
 
     // create all cells
     {
-        const cell_create_zone = ztracy.ZoneNC(@src(), "Create Cells", 0x5d_88_de);
+        const cell_create_zone = ztracy.ZoneNC(@src(), "Create Cells", Color.Light.purple);
         defer cell_create_zone.End();
 
         var i: usize = 0;
@@ -49,7 +56,7 @@ pub fn main() anyerror!void {
 
     // create new lines
     {
-        const line_create_zone = ztracy.ZoneNC(@src(), "Create New Lines", 0x5d_de_6b);
+        const line_create_zone = ztracy.ZoneNC(@src(), "Create New Lines", Color.Light.green);
         defer line_create_zone.End();
 
         var i: usize = 1;
@@ -67,13 +74,9 @@ pub fn main() anyerror!void {
         _ = try world.fromEntityBuilder(&builder);
     }
 
-    var refresh_delay = std.Thread.ResetEvent{};
     while (true) {
         ztracy.FrameMarkNamed("gameloop");
-
         try world.dispatch();
-
-        refresh_delay.timedWait(std.time.ns_per_s) catch {};
     }
 }
 
@@ -84,6 +87,9 @@ const Cell = struct {
     alive: bool,
 
     pub fn render(cell: Cell) void {
+        const zone = ztracy.ZoneNC(@src(), "Render Cell", Color.Light.red);
+        defer zone.End();
+
         const new_line_count = cell.y;
         const start = (cell.x + (cell.y * grid_dimensions)) * characters_per_cell + new_line_count;
         if (cell.alive) {
@@ -100,6 +106,9 @@ const Cell = struct {
     }
 
     pub fn tick(cell: *Cell) void {
+        const zone = ztracy.ZoneNC(@src(), "Update Cell", Color.Light.red);
+        defer zone.End();
+
         // again here we have to cheat by reading the output buffer
         const new_line_count = cell.y;
         const start = (cell.x + (cell.y * grid_dimensions)) * characters_per_cell + new_line_count + 1;
@@ -140,6 +149,9 @@ const Cell = struct {
 };
 const Flush = struct {
     pub fn buffer(flush: Flush) void {
+        const zone = ztracy.ZoneNC(@src(), "Flush buffer", Color.Light.turquoise);
+        defer zone.End();
+
         _ = flush;
         std.debug.print("{s}\n", .{output_buffer});
         std.debug.print("-" ** (grid_dimensions * characters_per_cell) ++ "\n", .{});
@@ -149,6 +161,9 @@ const NewLine = struct {
     nth: usize,
 
     pub fn render(new_line: NewLine) void {
+        const zone = ztracy.ZoneNC(@src(), "Render newline", Color.Light.turquoise);
+        defer zone.End();
+
         output_buffer[new_line.nth * grid_dimensions * characters_per_cell + new_line.nth - 1] = '\n';
     }
 };

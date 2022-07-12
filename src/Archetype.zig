@@ -2,8 +2,10 @@ const std = @import("std");
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 
-const query = @import("query.zig");
+const ztracy = @import("ztracy");
 
+const Color = @import("misc.zig").Color;
+const query = @import("query.zig");
 // const hashfn = @import("query.zig").hashfn;
 const Entity = @import("entity_type.zig").Entity;
 const EntityContext = struct {
@@ -48,6 +50,9 @@ pub inline fn initFromTypes(allocator: Allocator, comptime types: []const type) 
 
 /// init an archetype from runtime and take ownership of runtime data
 pub inline fn initFromQueryRuntime(runtime: *query.Runtime) !Archetype {
+    const zone = ztracy.ZoneNC(@src(), "Archetype initFromQueryRuntime", Color.archetype);
+    defer zone.End();
+
     const components = try runtime.allocator.alloc(std.ArrayList(u8), runtime.len);
     errdefer runtime.allocator.free(components);
     for (components) |*component| {
@@ -80,6 +85,8 @@ pub inline fn init(
     type_hashes: []const u64,
 ) !Archetype {
     std.debug.assert(type_sizes.len == type_sizes.len);
+    const zone = ztracy.ZoneNC(@src(), "Archetype init", Color.archetype);
+    defer zone.End();
 
     const owned_type_sizes = try allocator.dupe(usize, type_sizes);
     errdefer allocator.free(owned_type_sizes);
@@ -104,6 +111,9 @@ pub inline fn init(
 }
 
 pub inline fn deinit(self: *Archetype) void {
+    const zone = ztracy.ZoneNC(@src(), "Archetype deinit", Color.archetype);
+    defer zone.End();
+
     self.entities.deinit();
     for (self.components) |component| {
         component.deinit();
@@ -129,6 +139,9 @@ pub inline fn deinit(self: *Archetype) void {
 pub inline fn registerEntity(self: *Archetype, entity: Entity, components: []const []const u8) !void {
     std.debug.assert(self.type_count == components.len); // type poisoning occured
 
+    const zone = ztracy.ZoneNC(@src(), "Archetype registerEntity", Color.archetype);
+    defer zone.End();
+
     const value = self.entities.count();
     try self.entities.put(entity, value);
     errdefer _ = self.entities.swapRemove(entity);
@@ -152,6 +165,9 @@ pub inline fn registerEntity(self: *Archetype, entity: Entity, components: []con
 /// moves an entity and it's components to dest archetype
 /// this operation is unsafe, because validation of dest archetype is not performend in any way
 pub inline fn moveEntity(self: *Archetype, entity: Entity, dest: *Archetype) !void {
+    const zone = ztracy.ZoneNC(@src(), "Archetype moveEntity", Color.archetype);
+    defer zone.End();
+
     const moving_kv = self.entities.fetchSwapRemove(entity) orelse return error.EntityMissing;
 
     // TODO: we can do loops in parallel!
@@ -217,11 +233,13 @@ pub inline fn moveEntity(self: *Archetype, entity: Entity, dest: *Archetype) !vo
 
 /// Assign a component value to the entity
 pub inline fn setComponent(self: Archetype, entity: Entity, comptime T: type, value: T) !void {
+    const zone = ztracy.ZoneNC(@src(), "Archetype setComponent", Color.archetype);
+    defer zone.End();
+
     // Nothing to set
     if (@sizeOf(T) == 0) {
         return;
     }
-
     const component_index = try self.componentIndex(comptime query.hashType(T));
     const entity_index = self.entities.get(entity) orelse return error.MissingEntity;
 
@@ -234,12 +252,14 @@ pub inline fn setComponent(self: Archetype, entity: Entity, comptime T: type, va
 
 /// Retrieve a component value from a given entity
 pub inline fn getComponent(self: Archetype, entity: Entity, comptime T: type) !T {
-    const component_index = try self.componentIndex(comptime query.hashType(T));
-    
+    const zone = ztracy.ZoneNC(@src(), "Archetype getComponent", Color.archetype);
+    defer zone.End();
+
     // Nothing unique to get
     if (@sizeOf(T) == 0) {
         return T{};
     }
+    const component_index = try self.componentIndex(comptime query.hashType(T));
     const entity_index = self.entities.get(entity) orelse return error.EntityMissing;
     const start = entity_index * @sizeOf(T);
     const component_ptr = @ptrCast(*T, @alignCast(@alignOf(T), &self.components[component_index].items[start]));
@@ -286,6 +306,9 @@ pub fn getComponentStorages(
     type_count,
     types,
 ) {
+    const zone = ztracy.ZoneNC(@src(), "Archetype getComponentStorages", Color.archetype);
+    defer zone.End();
+
     comptime var rtr_type_hashes: [types.len]u64 = undefined;
     inline for (types) |T, i| {
         rtr_type_hashes[i] = comptime query.hashType(T);
@@ -315,14 +338,21 @@ pub fn getComponentStorages(
 }
 
 /// return true if the archetype contains type T, false otherwise
-pub fn hasComponent(self: Archetype, comptime T: type) bool {
-    _ = self.componentIndex(query.hashType(T)) catch {
-        return false;
-    };
-    return true;
+pub inline fn hasComponent(self: Archetype, comptime T: type) bool {
+    const zone = ztracy.ZoneNC(@src(), "Archetype hasComponent", Color.archetype);
+    defer zone.End();
+
+    const type_hash = comptime query.hashType(T);
+    for (self.type_hashes[0..self.type_count]) |hash| {
+        if (hash == type_hash) return true;
+    }
+    return false;
 }
 
 pub inline fn componentIndex(self: Archetype, type_hash: u64) !usize {
+    const zone = ztracy.ZoneNC(@src(), "Archetype componentIndex", Color.archetype);
+    defer zone.End();
+
     for (self.type_hashes[0..self.type_count]) |hash, i| {
         if (hash == type_hash) return i;
     }

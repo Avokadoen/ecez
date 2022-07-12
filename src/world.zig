@@ -3,12 +3,15 @@ const Allocator = std.mem.Allocator;
 
 const testing = std.testing;
 
+const ztracy = @import("ztracy");
+
 const SystemMetadata = @import("SystemMetadata.zig");
 const ArcheTree = @import("ArcheTree.zig");
 const Archetype = @import("Archetype.zig");
 const Entity = @import("entity_type.zig").Entity;
 const EntityRef = @import("entity_type.zig").EntityRef;
 const query = @import("query.zig");
+const Color = @import("misc.zig").Color;
 
 /// Create a ecs instance. Systems are initially included into the World.
 /// Parameters:
@@ -61,6 +64,9 @@ pub fn CreateWorld(comptime systems: anytype) type {
         archetree: ArcheTree,
 
         pub fn init(allocator: Allocator) !World {
+            const zone = ztracy.ZoneNC(@src(), "World init", Color.world);
+            defer zone.End();
+
             const archetree = try ArcheTree.init(allocator);
             errdefer archetree.deinit();
 
@@ -72,6 +78,9 @@ pub fn CreateWorld(comptime systems: anytype) type {
         }
 
         pub fn deinit(self: *World) void {
+            const zone = ztracy.ZoneNC(@src(), "World deinit", Color.world);
+            defer zone.End();
+
             self.entity_references.deinit();
             self.archetree.deinit();
         }
@@ -80,6 +89,9 @@ pub fn CreateWorld(comptime systems: anytype) type {
         /// Consider using buildEntity for a faster entity construction if you have
         /// compile-time entity component types
         pub fn createEntity(self: *World) !Entity {
+            const zone = ztracy.ZoneNC(@src(), "World createEntity", Color.world);
+            defer zone.End();
+
             const entity = Entity{ .id = @intCast(u32, self.entity_references.items.len) };
             var archetype = self.archetree.voidType();
             const empty: []const []const u8 = &.{};
@@ -93,6 +105,9 @@ pub fn CreateWorld(comptime systems: anytype) type {
         /// Get a entity builder. A builder has the advantage of not having to dynamically moved
         /// to different archetypes while being constructure compared with createEntity() + addComponent()
         pub fn entityBuilder(self: *World) !EntityBuilder {
+            const zone = ztracy.ZoneNC(@src(), "World entityBuilder", Color.world);
+            defer zone.End();
+
             return EntityBuilder.init(self.allocator);
         }
 
@@ -100,6 +115,9 @@ pub fn CreateWorld(comptime systems: anytype) type {
         /// The world struct takes ownership of the builder after this
         /// This means that the builder memory is invalidated afterwards
         pub fn fromEntityBuilder(self: *World, builder: *EntityBuilder) !Entity {
+            const zone = ztracy.ZoneNC(@src(), "World fromEntityBuilder", Color.world);
+            defer zone.End();
+
             var type_query = query.Runtime.fromOwnedSlices(
                 self.allocator,
                 builder.type_sizes.toOwnedSlice(),
@@ -129,6 +147,9 @@ pub fn CreateWorld(comptime systems: anytype) type {
 
         /// Assign a component to an entity
         pub fn setComponent(self: *World, entity: Entity, component: anytype) !void {
+            const zone = ztracy.ZoneNC(@src(), "World setComponent", Color.world);
+            defer zone.End();
+
             const T = @TypeOf(component);
             const current_archetype = self.archetree.entityRefArchetype(self.entity_references.items[entity.id]);
             if (current_archetype.hasComponent(T)) {
@@ -156,6 +177,9 @@ pub fn CreateWorld(comptime systems: anytype) type {
         /// Assign multiple components to an entity at once
         /// using this instead of mutliple setComponent calls is more effective
         pub fn setComponents(self: *World, entity: Entity, components: anytype) !void {
+            const zone = ztracy.ZoneNC(@src(), "World setComponents", Color.world);
+            defer zone.End();
+
             const components_info = @typeInfo(@TypeOf(components));
             if (components_info != .Struct) {
                 @compileError("expected struct or tuple of components, got " ++ @typeName(components));
@@ -206,21 +230,27 @@ pub fn CreateWorld(comptime systems: anytype) type {
 
         // Check if an entity has a given component
         pub fn hasComponent(self: World, entity: Entity, comptime T: type) bool {
+            const zone = ztracy.ZoneNC(@src(), "World hasComponent", Color.world);
+            defer zone.End();
+
             const current_archetype = self.archetree.entityRefArchetype(self.entity_references.items[entity.id]);
-            _ = current_archetype.getComponent(entity, T) catch {
-                return false;
-            };
-            return true;
+            return current_archetype.hasComponent(T);
         }
 
         /// Fetch an entity's component data based on parameter T
         pub fn getComponent(self: *World, entity: Entity, comptime T: type) !T {
+            const zone = ztracy.ZoneNC(@src(), "World getComponent", Color.world);
+            defer zone.End();
+
             const current_archetype = self.archetree.entityRefArchetype(self.entity_references.items[entity.id]);
             return current_archetype.getComponent(entity, T);
         }
 
         /// Remove an entity's component data based on parameter T
         pub fn removeComponent(self: *World, entity: Entity, comptime T: type) !void {
+            const zone = ztracy.ZoneNC(@src(), "World removeComponent", Color.world);
+            defer zone.End();
+
             const current_archetype = self.archetree.entityRefArchetype(self.entity_references.items[entity.id]);
             const remove_type_index = try current_archetype.componentIndex(comptime query.hashType(T));
 
@@ -265,6 +295,9 @@ pub fn CreateWorld(comptime systems: anytype) type {
         /// Remove multiple components from an entity at once
         /// using this instead of mutliple removeComponent calls is more effective
         pub fn removeComponents(self: *World, entity: Entity, component_types: anytype) !void {
+            const zone = ztracy.ZoneNC(@src(), "World removeComponents", Color.world);
+            defer zone.End();
+
             const components_info = @typeInfo(@TypeOf(component_types));
             if (components_info != .Struct) {
                 @compileError("expected struct or tuple of components, got " ++ @typeName(component_types));
@@ -338,6 +371,9 @@ pub fn CreateWorld(comptime systems: anytype) type {
         }
 
         pub fn dispatch(self: *World) !void {
+            const zone = ztracy.ZoneNC(@src(), "World dispatch", Color.world);
+            defer zone.End();
+
             inline for (systems_metadata) |system_metadata, system_index| {
                 const query_types = comptime system_metadata.queryArgTypes();
                 const param_types = comptime system_metadata.paramArgTypes();
@@ -397,6 +433,9 @@ pub const EntityBuilder = struct {
 
     /// Initialize a EntityBuilder, should only be called from World.zig
     pub fn init(allocator: Allocator) !EntityBuilder {
+        const zone = ztracy.ZoneNC(@src(), "EntityBuilder init", Color.entity_builder);
+        defer zone.End();
+
         // init by registering the void type
         return EntityBuilder{
             .allocator = allocator,
@@ -409,6 +448,9 @@ pub const EntityBuilder = struct {
 
     /// Add component to entity
     pub fn addComponent(self: *EntityBuilder, component: anytype) !void {
+        const zone = ztracy.ZoneNC(@src(), "EntityBuilder addComponent", Color.entity_builder);
+        defer zone.End();
+
         const T = @TypeOf(component);
         const type_hash = query.hashType(T);
         const type_size = @sizeOf(T);
@@ -560,6 +602,23 @@ test "setComponents() add multiple components" {
     const entity = try world.createEntity();
     try world.setComponents(entity, .{ a, b });
 
+    try testing.expectEqual(a, try world.getComponent(entity, A));
+    try testing.expectEqual(b, try world.getComponent(entity, B));
+}
+
+test "setComponents() reassign multiple components" {
+    const A = struct { a: u8 };
+    const B = struct { b: u8 };
+
+    var world = try StateWorld.init(testing.allocator);
+    defer world.deinit();
+
+    const entity = try world.createEntity();
+    try world.setComponents(entity, .{ A{ .a = 240 }, B{ .b = 250 } });
+
+    const a = A{ .a = 1 };
+    const b = B{ .b = 2 };
+    try world.setComponents(entity, .{ a, b });
     try testing.expectEqual(a, try world.getComponent(entity, A));
     try testing.expectEqual(b, try world.getComponent(entity, B));
 }

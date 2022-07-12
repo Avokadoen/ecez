@@ -2,9 +2,12 @@ const std = @import("std");
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 
+const ztracy = @import("ztracy");
+
 const Archetype = @import("Archetype.zig");
 const EntityRef = @import("entity_type.zig").EntityRef;
 const query = @import("query.zig");
+const Color = @import("misc.zig").Color;
 
 const ArcheTree = @This();
 // TODO: Allow API user to configure max children,
@@ -51,6 +54,9 @@ node_storage: std.ArrayList(Node),
 /// Order independent means that an entity with a Position and Velocity component is of the same archetype
 /// as an entity with a Velocity and Position component.
 pub fn init(allocator: Allocator) !ArcheTree {
+    const zone = ztracy.ZoneNC(@src(), "ArcheTree init", Color.arche_tree);
+    defer zone.End();
+
     var root_archetype = try Archetype.initFromTypes(allocator, &[0]type{});
     errdefer root_archetype.deinit();
     const root_node = Node{
@@ -71,6 +77,9 @@ pub fn init(allocator: Allocator) !ArcheTree {
 }
 
 pub fn deinit(self: ArcheTree) void {
+    const zone = ztracy.ZoneNC(@src(), "ArcheTree deinit", Color.arche_tree);
+    defer zone.End();
+
     for (self.node_storage.items) |*node| {
         if (node.archetype) |*archetype| {
             archetype.deinit();
@@ -79,18 +88,21 @@ pub fn deinit(self: ArcheTree) void {
     self.node_storage.deinit();
 }
 
-pub fn voidType(self: ArcheTree) *Archetype {
+pub inline fn voidType(self: ArcheTree) *Archetype {
     return &(self.node_storage.items[0].archetype orelse unreachable);
 }
 
-pub fn entityRefArchetype(self: ArcheTree, entity_ref: EntityRef) *Archetype {
+pub inline fn entityRefArchetype(self: ArcheTree, entity_ref: EntityRef) *Archetype {
     return &(self.node_storage.items[entity_ref.tree_node_index].archetype orelse unreachable);
 }
 
 /// Query a specific archtype and get a archetype pointer and the underlying archetype node index
 /// In the event that the archetype does not exist yet, the type will be constructed and
 /// added to the tree
-pub fn getArchetype(self: *ArcheTree, comptime Ts: []const type) !*Archetype {
+pub inline fn getArchetype(self: *ArcheTree, comptime Ts: []const type) !*Archetype {
+    const zone = ztracy.ZoneNC(@src(), "ArcheTree getArchetype", Color.arche_tree);
+    defer zone.End();
+
     const result = try self.getArchetypeAndIndex(Ts);
     return result.archetype;
 }
@@ -99,6 +111,9 @@ pub fn getArchetype(self: *ArcheTree, comptime Ts: []const type) !*Archetype {
 /// In the event that the archetype does not exist yet, the type will be constructed and
 /// added to the tree
 pub fn getArchetypeAndIndex(self: *ArcheTree, comptime Ts: []const type) !GetArchetypeResult {
+    const zone = ztracy.ZoneNC(@src(), "ArcheTree getArchetypeAndIndex", Color.arche_tree);
+    defer zone.End();
+
     const sorted_types = comptime query.sortTypes(Ts);
     const type_sizes = comptime blk: {
         var sizes: [sorted_types.len]usize = undefined;
@@ -127,6 +142,9 @@ pub fn getArchetypeAndIndex(self: *ArcheTree, comptime Ts: []const type) !GetArc
 ///     - type_sizes: the size of each type which correlate to the hash at the same index, function copy this data
 ///     - type_hashes: the hash of each type which correlate to the size at the same index, function copy this data
 pub fn getArchetypeAndIndexRuntime(self: *ArcheTree, type_query: *query.Runtime) !GetArchetypeResult {
+    const zone = ztracy.ZoneNC(@src(), "ArcheTree getArchetypeAndIndexRuntime", Color.arche_tree);
+    defer zone.End();
+
     // if void type was request
     if (type_query.len == 0 or (type_query.len == 1 and type_query.type_hashes[0] == 0)) {
         return GetArchetypeResult{
@@ -225,6 +243,9 @@ pub fn getArchetypeAndIndexRuntime(self: *ArcheTree, type_query: *query.Runtime)
 /// Example:
 /// Archetype (A B C D) & Archetype (B D) has a common sub type of (B D)
 pub fn getTypeSubsets(self: ArcheTree, allocator: Allocator, comptime Ts: []const type) ![]*Archetype {
+    const zone = ztracy.ZoneNC(@src(), "ArcheTree getTypeSubsets", Color.arche_tree);
+    defer zone.End();
+
     const traverse = struct {
         fn func(slf: ArcheTree, type_hashes: []const u64, hash_index: usize, current_node_index: usize, found_archetypes: *std.ArrayList(*Archetype)) Allocator.Error!void {
             const node = &slf.node_storage.items[current_node_index];
