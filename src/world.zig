@@ -148,11 +148,22 @@ pub fn CreateWorld(comptime systems: anytype) type {
             self.entity_references.items[entity.id].tree_node_index = get_result.node_index;
         }
 
+        // Check if an entity has a given component
+        pub fn hasComponent(self: World, entity: Entity, comptime T: type) bool {
+            const current_archetype = self.archetree.entityRefArchetype(self.entity_references.items[entity.id]);
+            _ = current_archetype.getComponent(entity, T) catch {
+                return false;
+            };
+            return true;
+        }
+
+        /// Fetch an entity's component data based on parameter T
         pub fn getComponent(self: *World, entity: Entity, comptime T: type) !T {
             const current_archetype = self.archetree.entityRefArchetype(self.entity_references.items[entity.id]);
             return current_archetype.getComponent(entity, T);
         }
 
+        /// Remove an entity's component data based on parameter T
         pub fn removeComponent(self: *World, entity: Entity, comptime T: type) !void {
             const current_archetype = self.archetree.entityRefArchetype(self.entity_references.items[entity.id]);
             const remove_type_index = try current_archetype.componentIndex(comptime query.hashType(T));
@@ -344,6 +355,20 @@ test "setComponent() component moves entity to correct archetype" {
     try testing.expectEqual(a, stored_a);
     const stored_b = try entity_archetype.getComponent(entity1, B);
     try testing.expectEqual(b, stored_b);
+}
+
+test "hasComponent() responds as expected" {
+    const A = struct {};
+    const B = struct {};
+
+    var world = try StateWorld.init(testing.allocator);
+    defer world.deinit();
+
+    const entity = try world.createEntity();
+    try world.setComponent(entity, A{});
+
+    try testing.expectEqual(true, world.hasComponent(entity, A));
+    try testing.expectEqual(false, world.hasComponent(entity, B));
 }
 
 test "getComponent() retrieve component value" {
