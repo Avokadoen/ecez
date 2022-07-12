@@ -127,10 +127,8 @@ pub fn getArchetypeAndIndex(self: *ArcheTree, comptime Ts: []const type) !GetArc
 ///     - type_sizes: the size of each type which correlate to the hash at the same index, function copy this data
 ///     - type_hashes: the hash of each type which correlate to the size at the same index, function copy this data
 pub fn getArchetypeAndIndexRuntime(self: *ArcheTree, type_query: *query.Runtime) !GetArchetypeResult {
-    std.debug.assert(type_query.len > 0);
-
     // if void type was request
-    if (type_query.len == 1 and type_query.type_hashes[0] == 0) {
+    if (type_query.len == 0 or (type_query.len == 1 and type_query.type_hashes[0] == 0)) {
         return GetArchetypeResult{
             .node_index = 0,
             .archetype = self.voidType(),
