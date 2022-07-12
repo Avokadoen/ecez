@@ -234,12 +234,12 @@ pub inline fn setComponent(self: Archetype, entity: Entity, comptime T: type, va
 
 /// Retrieve a component value from a given entity
 pub inline fn getComponent(self: Archetype, entity: Entity, comptime T: type) !T {
+    const component_index = try self.componentIndex(comptime query.hashType(T));
+    
     // Nothing unique to get
     if (@sizeOf(T) == 0) {
         return T{};
     }
-
-    const component_index = try self.componentIndex(comptime query.hashType(T));
     const entity_index = self.entities.get(entity) orelse return error.EntityMissing;
     const start = entity_index * @sizeOf(T);
     const component_ptr = @ptrCast(*T, @alignCast(@alignOf(T), &self.components[component_index].items[start]));
