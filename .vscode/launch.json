@@ -21,7 +21,17 @@
             "stopAtEntry": false,
             "cwd": "${fileDirname}",
             "environment": [],
-            "console": "externalTerminal",
+            "console": "integratedTerminal",
+            "preLaunchTask": "build"
+        },
+        {
+            "name": "(Linux) Launch GOL Debug",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/bin/game-of-life",
+            "args": [],
+            "cwd": "${fileDirname}",
+            "console": "integratedTerminal",
             "preLaunchTask": "build"
         },
     ]
