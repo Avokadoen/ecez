@@ -23,6 +23,8 @@ const Node = struct {
 
 /// In the event of a successful retrieval of Archetype you get a GetArchetypeResult
 pub const GetArchetypeResult = struct {
+    /// true if the archetype was genereted by the get query, false otherwise
+    created_archetype: bool,
     /// The archetype node index, can be used to update entity references
     node_index: usize,
     archetype: *Archetype,
@@ -148,6 +150,7 @@ pub fn getArchetypeAndIndexRuntime(self: *ArcheTree, type_query: *query.Runtime)
     // if void type was request
     if (type_query.len == 0 or (type_query.len == 1 and type_query.type_hashes[0] == 0)) {
         return GetArchetypeResult{
+            .created_archetype = false,
             .node_index = 0,
             .archetype = self.voidType(),
         };
@@ -196,6 +199,7 @@ pub fn getArchetypeAndIndexRuntime(self: *ArcheTree, type_query: *query.Runtime)
                 // if archetype already exist
                 if (node.archetype) |*archetype| {
                     return GetArchetypeResult{
+                        .created_archetype = false,
                         .node_index = value.index,
                         .archetype = archetype,
                     };
@@ -203,6 +207,7 @@ pub fn getArchetypeAndIndexRuntime(self: *ArcheTree, type_query: *query.Runtime)
                 // create an archetype for the node since it is missing
                 node.archetype = try Archetype.initFromQueryRuntime(type_query);
                 return GetArchetypeResult{
+                    .created_archetype = true,
                     .node_index = value.index,
                     .archetype = &(node.archetype orelse unreachable),
                 };
@@ -230,6 +235,7 @@ pub fn getArchetypeAndIndexRuntime(self: *ArcheTree, type_query: *query.Runtime)
                 current_node = &self.node_storage.items[new_node_index];
             }
             return GetArchetypeResult{
+                .created_archetype = true,
                 .node_index = new_node_index,
                 .archetype = &(current_node.archetype orelse unreachable),
             };

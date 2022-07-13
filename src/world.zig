@@ -54,6 +54,11 @@ pub fn CreateWorld(comptime systems: anytype) type {
     }
 
     return struct {
+        pub const SystemArchetypes = struct {
+            valid: bool,
+            archetypes: [systems_count][]*Archetype,
+        };
+
         // TODO: Bump allocate data (instead of calling append)
         // TODO: Thread safety
         const World = @This();
@@ -63,6 +68,9 @@ pub fn CreateWorld(comptime systems: anytype) type {
         entity_references: std.ArrayList(EntityRef),
         archetree: ArcheTree,
 
+        // Cached archetypes used by each system
+        system_archetypes: SystemArchetypes,
+
         pub fn init(allocator: Allocator) !World {
             const zone = ztracy.ZoneNC(@src(), "World init", Color.world);
             defer zone.End();
@@ -70,10 +78,16 @@ pub fn CreateWorld(comptime systems: anytype) type {
             const archetree = try ArcheTree.init(allocator);
             errdefer archetree.deinit();
 
+            var system_archetypes: SystemArchetypes = .{
+                .valid = false,
+                .archetypes = undefined,
+            };
+
             return World{
                 .allocator = allocator,
                 .entity_references = std.ArrayList(EntityRef).init(allocator),
                 .archetree = archetree,
+                .system_archetypes = system_archetypes,
             };
         }
 
@@ -83,6 +97,12 @@ pub fn CreateWorld(comptime systems: anytype) type {
 
             self.entity_references.deinit();
             self.archetree.deinit();
+
+            if (self.system_archetypes.valid) {
+                inline for (systems_metadata) |_, i| {
+                    self.allocator.free(self.system_archetypes.archetypes[i]);
+                }
+            }
         }
 
         /// Create an empty entity and returns the entity handle.
@@ -125,6 +145,7 @@ pub fn CreateWorld(comptime systems: anytype) type {
             );
             defer type_query.deinit();
             const get_result = try self.archetree.getArchetypeAndIndexRuntime(&type_query);
+            self.maybeInvalidateSystemArchetypeCache(get_result);
 
             const entity = Entity{ .id = @intCast(u32, self.entity_references.items.len) };
             try self.entity_references.append(EntityRef{
@@ -166,6 +187,7 @@ pub fn CreateWorld(comptime systems: anytype) type {
 
             // get the new entity archetype
             const get_result = try self.archetree.getArchetypeAndIndexRuntime(&type_query);
+            self.maybeInvalidateSystemArchetypeCache(get_result);
 
             try current_archetype.moveEntity(entity, get_result.archetype);
             try get_result.archetype.setComponent(entity, T, component);
@@ -218,6 +240,7 @@ pub fn CreateWorld(comptime systems: anytype) type {
 
             // get the new entity archetype
             const get_result = try self.archetree.getArchetypeAndIndexRuntime(&type_query);
+            self.maybeInvalidateSystemArchetypeCache(get_result);
 
             try current_archetype.moveEntity(entity, get_result.archetype);
             inline for (component_types) |T, i| {
@@ -286,6 +309,7 @@ pub fn CreateWorld(comptime systems: anytype) type {
 
             // get the new entity archetype
             const get_result = try self.archetree.getArchetypeAndIndexRuntime(&type_query);
+            self.maybeInvalidateSystemArchetypeCache(get_result);
             try current_archetype.moveEntity(entity, get_result.archetype);
 
             // update the entity reference
@@ -364,23 +388,38 @@ pub fn CreateWorld(comptime systems: anytype) type {
 
             // get the new entity archetype
             const get_result = try self.archetree.getArchetypeAndIndexRuntime(&type_query);
+            self.maybeInvalidateSystemArchetypeCache(get_result);
             try current_archetype.moveEntity(entity, get_result.archetype);
 
             // update the entity reference
             self.entity_references.items[entity.id].tree_node_index = get_result.node_index;
         }
 
+        /// Call all systems registered when calling CreateWorld
         pub fn dispatch(self: *World) !void {
             const zone = ztracy.ZoneNC(@src(), "World dispatch", Color.world);
             defer zone.End();
+
+            // TODO: when/if a mechanism is introduced to create archetypes in systems,
+            //       then this functionality will be invalid!
+            // dispatch will always cache archetypes
+            defer self.system_archetypes.valid = true;
 
             inline for (systems_metadata) |system_metadata, system_index| {
                 const query_types = comptime system_metadata.queryArgTypes();
                 const param_types = comptime system_metadata.paramArgTypes();
 
-                var archetypes = try self.archetree.getTypeSubsets(self.allocator, &query_types);
-                // TODO: cache archetypes until tree changes (new nodes generated)
-                defer self.allocator.free(archetypes);
+                var archetypes = blk: {
+                    // if cache is invalid
+                    if (self.system_archetypes.valid == false) {
+                        // cache new values
+                        const types = try self.archetree.getTypeSubsets(self.allocator, &query_types);
+                        self.system_archetypes.archetypes[system_index] = types;
+                        break :blk types;
+                    }
+                    // if cache is valid, returned cached value
+                    break :blk self.system_archetypes.archetypes[system_index];
+                };
 
                 for (archetypes) |archetype| {
                     const components = try archetype.getComponentStorages(query_types.len, query_types);
@@ -410,6 +449,21 @@ pub fn CreateWorld(comptime systems: anytype) type {
                     }
                 }
             }
+        }
+
+        /// this should be called after calling any ArcheTree.getArchetypeX functions to update
+        /// the systems archetypes lists
+        fn maybeInvalidateSystemArchetypeCache(self: *World, get_result: ArcheTree.GetArchetypeResult) void {
+            const zone = ztracy.ZoneNC(@src(), "World update archetype cache", Color.world);
+            defer zone.End();
+
+            // if nothing has changed
+            if (get_result.created_archetype == false or self.system_archetypes.valid == false) return;
+
+            inline for (systems_metadata) |_, i| {
+                self.allocator.free(self.system_archetypes.archetypes[i]);
+            }
+            self.system_archetypes.valid = true;
         }
     };
 }
