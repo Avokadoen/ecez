@@ -463,7 +463,7 @@ pub fn CreateWorld(comptime systems: anytype) type {
             inline for (systems_metadata) |_, i| {
                 self.allocator.free(self.system_archetypes.archetypes[i]);
             }
-            self.system_archetypes.valid = true;
+            self.system_archetypes.valid = false;
         }
     };
 }
@@ -812,4 +812,43 @@ test "systems can mutate values" {
     try world.dispatch();
 
     try testing.expectEqual(A{ .position = 19 }, try world.getComponent(entity, A));
+}
+
+test "systems cache works" {
+    const A = struct { system_call_count: *u8 };
+    const B = struct {};
+
+    const SystemStruct = struct {
+        fn systemOne(a: *A) void {
+            a.system_call_count.* += 1;
+        }
+
+        fn systemTwo(a: *A, b: B) void {
+            _ = b;
+            a.system_call_count.* += 1;
+        }
+    };
+
+    var world = try CreateWorld(.{
+        SystemStruct.systemOne,
+        SystemStruct.systemTwo,
+    }).init(testing.allocator);
+    defer world.deinit();
+
+    var call_count: *u8 = try testing.allocator.create(u8);
+    defer testing.allocator.destroy(call_count);
+    call_count.* = 0;
+
+    const entity1 = try world.createEntity();
+    try world.setComponent(entity1, A{ .system_call_count = call_count });
+
+    try world.dispatch();
+
+    const entity2 = try world.createEntity();
+    try world.setComponent(entity2, A{ .system_call_count = call_count });
+    try world.setComponent(entity2, B{});
+
+    try world.dispatch();
+
+    try testing.expectEqual(@as(u8, 3), call_count.*);
 }
