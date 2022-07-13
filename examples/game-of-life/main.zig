@@ -46,8 +46,8 @@ pub fn main() anyerror!void {
         while (i < cell_count) : (i += 1) {
             var builder = try world.entityBuilder();
             try builder.addComponent(Cell{
-                .x = i % grid_dimensions,
-                .y = i / grid_dimensions,
+                .x = @intCast(u8, i % grid_dimensions),
+                .y = @intCast(u8, i / grid_dimensions),
                 .alive = rng.random().float(f32) < spawn_threshold,
             });
             _ = try world.fromEntityBuilder(&builder);
@@ -59,7 +59,7 @@ pub fn main() anyerror!void {
         const line_create_zone = ztracy.ZoneNC(@src(), "Create New Lines", Color.Light.green);
         defer line_create_zone.End();
 
-        var i: usize = 1;
+        var i: u8 = 1;
         while (i <= new_lines) : (i += 1) {
             var builder = try world.entityBuilder();
             try builder.addComponent(NewLine{ .nth = i });
@@ -81,8 +81,8 @@ pub fn main() anyerror!void {
 }
 
 const Cell = struct {
-    x: usize,
-    y: usize,
+    x: u8,
+    y: u8,
     // TODO: when iterators are implemnted we can use tag components instead
     alive: bool,
 
@@ -90,8 +90,11 @@ const Cell = struct {
         const zone = ztracy.ZoneNC(@src(), "Render Cell", Color.Light.red);
         defer zone.End();
 
-        const new_line_count = cell.y;
-        const start = (cell.x + (cell.y * grid_dimensions)) * characters_per_cell + new_line_count;
+        const cell_x = @intCast(usize, cell.x);
+        const cell_y = @intCast(usize, cell.y);
+
+        const new_line_count = cell_y;
+        const start: usize = (cell_x + (cell_y * grid_dimensions)) * characters_per_cell + new_line_count;
         if (cell.alive) {
             const output = "[X]";
             inline for (output) |o, i| {
@@ -109,11 +112,14 @@ const Cell = struct {
         const zone = ztracy.ZoneNC(@src(), "Update Cell", Color.Light.red);
         defer zone.End();
 
-        // again here we have to cheat by reading the output buffer
-        const new_line_count = cell.y;
-        const start = (cell.x + (cell.y * grid_dimensions)) * characters_per_cell + new_line_count + 1;
+        const cell_x = @intCast(usize, cell.x);
+        const cell_y = @intCast(usize, cell.y);
 
-        const up = -@intCast(i32, cell.y * grid_dimensions * characters_per_cell + 1);
+        // again here we have to cheat by reading the output buffer
+        const new_line_count = cell_y;
+        const start = (cell_x + (cell_y * grid_dimensions)) * characters_per_cell + new_line_count + 1;
+
+        const up = -@intCast(i32, cell_y * grid_dimensions * characters_per_cell + 1);
         const down = -up;
         const left = -3;
         const right = 3;
@@ -158,12 +164,13 @@ const Flush = struct {
     }
 };
 const NewLine = struct {
-    nth: usize,
+    nth: u8,
 
     pub fn render(new_line: NewLine) void {
         const zone = ztracy.ZoneNC(@src(), "Render newline", Color.Light.turquoise);
         defer zone.End();
+        const nth = @intCast(usize, new_line.nth);
 
-        output_buffer[new_line.nth * grid_dimensions * characters_per_cell + new_line.nth - 1] = '\n';
+        output_buffer[nth * grid_dimensions * characters_per_cell + nth - 1] = '\n';
     }
 };
