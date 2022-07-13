@@ -25,7 +25,7 @@ pub fn main() anyerror!void {
         }
     }
     var aa = std.heap.ArenaAllocator.init(gpa.allocator());
-    const allocator = aa.allocator();
+    const allocator = ecez.tracy_alloc.TracyAllocator(std.heap.ArenaAllocator).init(aa).allocator();
 
     var world = try ecez.CreateWorld(.{
         Cell.render,
