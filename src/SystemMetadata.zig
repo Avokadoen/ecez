@@ -8,6 +8,7 @@ pub const Arg = enum {
     value,
 };
 
+function_type: type,
 fn_info: FnInfo,
 args: []const Arg,
 
@@ -68,6 +69,7 @@ pub fn init(comptime function_type: type, comptime fn_info: FnInfo) SystemMetada
         }
     }
     return SystemMetadata{
+        .function_type = function_type,
         .fn_info = fn_info,
         .args = args[0..],
     };
