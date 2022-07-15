@@ -27,26 +27,86 @@ pub fn CreateWorld(comptime systems: anytype) type {
     @setEvalBranchQuota(10_000);
     comptime var systems_count = 0;
     // start by counting systems registered
-    inline for (fields_info) |field_info| {
+    inline for (fields_info) |field_info, i| {
         switch (@typeInfo(field_info.field_type)) {
             .Fn => systems_count += 1,
+            .Type => {
+                switch (@typeInfo(systems[i])) {
+                    .Struct => |stru| {
+                        inline for (stru.decls) |decl| {
+                            const DeclType = @TypeOf(@field(systems[i], decl.name));
+                            switch (@typeInfo(DeclType)) {
+                                .Fn => systems_count += 1,
+                                else => {
+                                    const err_msg = std.fmt.comptimePrint("CreateWorld expected type of functions, got member {s}", .{
+                                        @typeName(DeclType),
+                                    });
+                                    @compileError(err_msg);
+                                },
+                            }
+                        }
+                    },
+                    else => {
+                        const err_msg = std.fmt.comptimePrint("CreateWorld expected struct type, got {s}", .{
+                            @typeInfo(systems[i]),
+                        });
+                        @compileError(err_msg);
+                    },
+                }
+            },
             else => {
-                const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct at entry {d}, found {s}", .{
-                    systems_count,
+                const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct, got {s}", .{
                     @typeName(field_info.field_type),
                 });
                 @compileError(err_msg);
             },
         }
     }
+
+    // extrapolate system information from functions registrerd
     comptime var systems_metadata: [systems_count]SystemMetadata = undefined;
+    // extrapolate system count in embedded structs
+    comptime var system_functions: [systems_count]*const anyopaque = undefined;
     {
         comptime var i: usize = 0;
-        inline for (fields_info) |field_info| {
+        inline for (fields_info) |field_info, j| {
             switch (@typeInfo(field_info.field_type)) {
                 .Fn => |func| {
                     systems_metadata[i] = SystemMetadata.init(field_info.field_type, func);
+                    system_functions[i] = field_info.default_value.?;
                     i += 1;
+                },
+                .Type => {
+                    switch (@typeInfo(systems[j])) {
+                        .Struct => |stru| {
+                            inline for (stru.decls) |decl| {
+                                const function = @field(systems[j], decl.name);
+                                const DeclType = @TypeOf(function);
+                                const decl_info = @typeInfo(DeclType);
+                                switch (decl_info) {
+                                    .Fn => |func| {
+                                        // const err_msg = std.fmt.comptimePrint("{d}", .{func.args.len});
+                                        // @compileError(err_msg);
+                                        systems_metadata[i] = SystemMetadata.init(DeclType, func);
+                                        system_functions[i] = &function;
+                                        i += 1;
+                                    },
+                                    else => {
+                                        const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct and/or type with functions, got {s}", .{
+                                            @typeName(DeclType),
+                                        });
+                                        @compileError(err_msg);
+                                    },
+                                }
+                            }
+                        },
+                        else => {
+                            const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct and/or type with functions, got {s}", .{
+                                @typeName(field_info.field_type),
+                            });
+                            @compileError(err_msg);
+                        },
+                    }
                 },
                 else => unreachable,
             }
@@ -440,11 +500,12 @@ pub fn CreateWorld(comptime systems: anytype) type {
                             }
                         }
 
+                        const system_ptr = @ptrCast(*const system_metadata.function_type, system_functions[system_index]);
                         // call either a failable system, or a normal void system
                         if (comptime system_metadata.canReturnError()) {
-                            try failableCallWrapper(systems[system_index], component);
+                            try failableCallWrapper(system_ptr.*, component);
                         } else {
-                            callWrapper(systems[system_index], component);
+                            callWrapper(system_ptr.*, component);
                         }
                     }
                 }
@@ -851,4 +912,62 @@ test "systems cache works" {
     try world.dispatch();
 
     try testing.expectEqual(@as(u8, 3), call_count.*);
+}
+
+test "systems can be registered through a struct" {
+    const A = struct { v: u8 };
+    const B = struct { v: u8 };
+    const C = struct { v: u8 };
+    const D = struct { v: u8 };
+    const E = struct { v: u8 };
+
+    // define a system function
+    const systemOne = struct {
+        fn func(a: *A) !void {
+            try testing.expectEqual(@as(u8, 0), a.v);
+            a.v += 1;
+        }
+    }.func;
+
+    // define a system type
+    const SystemType = struct {
+        fn systemTwo(b: *B) !void {
+            try testing.expectEqual(@as(u8, 1), b.v);
+            b.v += 1;
+        }
+        fn systemThree(c: *C) !void {
+            try testing.expectEqual(@as(u8, 2), c.v);
+            c.v += 1;
+        }
+        fn systemFour(d: *D) !void {
+            try testing.expectEqual(@as(u8, 3), d.v);
+            d.v += 1;
+        }
+    };
+
+    // define a system struct
+    const systemTwo = struct {
+        fn func(e: *E) !void {
+            try testing.expectEqual(@as(u8, 4), e.v);
+            e.v += 1;
+        }
+    }.func;
+
+    var world = try CreateWorld(.{ systemOne, SystemType, systemTwo }).init(testing.allocator);
+    defer world.deinit();
+
+    const types = [_]type{ A, B, C, D, E };
+
+    var entities: [5]Entity = undefined;
+    inline for (types) |T, i| {
+        entities[i] = try world.createEntity();
+        try world.setComponent(entities[i], T{ .v = i });
+    }
+
+    try world.dispatch();
+
+    inline for (types) |T, i| {
+        const comp = try world.getComponent(entities[i], T);
+        try testing.expectEqual(@as(u8, i + 1), comp.v);
+    }
 }
