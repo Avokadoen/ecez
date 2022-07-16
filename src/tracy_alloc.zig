@@ -5,6 +5,7 @@ const ztracy = @import("ztracy");
 
 pub const Error = error{OutOfMemory};
 
+/// Create an allocator from another allocator to inspect allocation in the tracy profiler
 pub fn TracyAllocator(comptime T: type) type {
     return struct {
         const Self = @This();
