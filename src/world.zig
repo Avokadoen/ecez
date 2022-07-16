@@ -5,118 +5,27 @@ const testing = std.testing;
 
 const ztracy = @import("ztracy");
 
-const SystemMetadata = @import("SystemMetadata.zig");
+const query = @import("query.zig");
+const meta = @import("meta.zig");
+
 const ArcheTree = @import("ArcheTree.zig");
 const Archetype = @import("Archetype.zig");
 const Entity = @import("entity_type.zig").Entity;
 const EntityRef = @import("entity_type.zig").EntityRef;
-const query = @import("query.zig");
 const Color = @import("misc.zig").Color;
 
 /// Create a ecs instance. Systems are initially included into the World.
 /// Parameters:
 ///     - systems: a tuple consisting of each system used by the world each frame
 pub fn CreateWorld(comptime systems: anytype) type {
-    const SystemsType = @TypeOf(systems);
-    const systems_info = @typeInfo(SystemsType);
-    if (systems_info != .Struct) {
-        @compileError("CreateWorld expected tuple or struct argument, found " ++ @typeName(SystemsType));
-    }
-
-    const fields_info = systems_info.Struct.fields;
     @setEvalBranchQuota(10_000);
-    comptime var systems_count = 0;
-    // start by counting systems registered
-    inline for (fields_info) |field_info, i| {
-        switch (@typeInfo(field_info.field_type)) {
-            .Fn => systems_count += 1,
-            .Type => {
-                switch (@typeInfo(systems[i])) {
-                    .Struct => |stru| {
-                        inline for (stru.decls) |decl| {
-                            const DeclType = @TypeOf(@field(systems[i], decl.name));
-                            switch (@typeInfo(DeclType)) {
-                                .Fn => systems_count += 1,
-                                else => {
-                                    const err_msg = std.fmt.comptimePrint("CreateWorld expected type of functions, got member {s}", .{
-                                        @typeName(DeclType),
-                                    });
-                                    @compileError(err_msg);
-                                },
-                            }
-                        }
-                    },
-                    else => {
-                        const err_msg = std.fmt.comptimePrint("CreateWorld expected struct type, got {s}", .{
-                            @typeInfo(systems[i]),
-                        });
-                        @compileError(err_msg);
-                    },
-                }
-            },
-            else => {
-                const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct, got {s}", .{
-                    @typeName(field_info.field_type),
-                });
-                @compileError(err_msg);
-            },
-        }
-    }
-
-    // extrapolate system information from functions registrerd
-    comptime var systems_metadata: [systems_count]SystemMetadata = undefined;
-    // extrapolate system count in embedded structs
-    comptime var system_functions: [systems_count]*const anyopaque = undefined;
-    {
-        comptime var i: usize = 0;
-        inline for (fields_info) |field_info, j| {
-            switch (@typeInfo(field_info.field_type)) {
-                .Fn => |func| {
-                    systems_metadata[i] = SystemMetadata.init(field_info.field_type, func);
-                    system_functions[i] = field_info.default_value.?;
-                    i += 1;
-                },
-                .Type => {
-                    switch (@typeInfo(systems[j])) {
-                        .Struct => |stru| {
-                            inline for (stru.decls) |decl| {
-                                const function = @field(systems[j], decl.name);
-                                const DeclType = @TypeOf(function);
-                                const decl_info = @typeInfo(DeclType);
-                                switch (decl_info) {
-                                    .Fn => |func| {
-                                        // const err_msg = std.fmt.comptimePrint("{d}", .{func.args.len});
-                                        // @compileError(err_msg);
-                                        systems_metadata[i] = SystemMetadata.init(DeclType, func);
-                                        system_functions[i] = &function;
-                                        i += 1;
-                                    },
-                                    else => {
-                                        const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct and/or type with functions, got {s}", .{
-                                            @typeName(DeclType),
-                                        });
-                                        @compileError(err_msg);
-                                    },
-                                }
-                            }
-                        },
-                        else => {
-                            const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct and/or type with functions, got {s}", .{
-                                @typeName(field_info.field_type),
-                            });
-                            @compileError(err_msg);
-                        },
-                    }
-                },
-                else => unreachable,
-            }
-        }
-    }
+    const system_count = meta.countSystems(systems);
+    const systems_info = meta.systemInfo(system_count, systems);
 
     return struct {
         pub const SystemArchetypes = struct {
             valid: bool,
-            archetypes: [systems_count][]*Archetype,
+            archetypes: [system_count][]*Archetype,
         };
 
         // TODO: Bump allocate data (instead of calling append)
@@ -159,8 +68,8 @@ pub fn CreateWorld(comptime systems: anytype) type {
             self.archetree.deinit();
 
             if (self.system_archetypes.valid) {
-                inline for (systems_metadata) |_, i| {
-                    self.allocator.free(self.system_archetypes.archetypes[i]);
+                for (self.system_archetypes.archetypes) |archetype| {
+                    self.allocator.free(archetype);
                 }
             }
         }
@@ -465,9 +374,9 @@ pub fn CreateWorld(comptime systems: anytype) type {
             // dispatch will always cache archetypes
             defer self.system_archetypes.valid = true;
 
-            inline for (systems_metadata) |system_metadata, system_index| {
-                const query_types = comptime system_metadata.queryArgTypes();
-                const param_types = comptime system_metadata.paramArgTypes();
+            inline for (systems_info.metadata) |metadata, system_index| {
+                const query_types = comptime metadata.queryArgTypes();
+                const param_types = comptime metadata.paramArgTypes();
 
                 var archetypes = blk: {
                     // if cache is invalid
@@ -488,21 +397,21 @@ pub fn CreateWorld(comptime systems: anytype) type {
                         var component: std.meta.Tuple(&param_types) = undefined;
                         inline for (param_types) |Param, j| {
                             if (@sizeOf(Param) > 0) {
-                                switch (system_metadata.args[j]) {
+                                switch (metadata.args[j]) {
                                     .value => component[j] = components[j][i],
                                     .ptr => component[j] = &components[j][i],
                                 }
                             } else {
-                                switch (system_metadata.args[j]) {
+                                switch (metadata.args[j]) {
                                     .value => component[j] = Param{},
                                     .ptr => component[j] = &Param{},
                                 }
                             }
                         }
 
-                        const system_ptr = @ptrCast(*const system_metadata.function_type, system_functions[system_index]);
+                        const system_ptr = @ptrCast(*const metadata.function_type, systems_info.functions[system_index]);
                         // call either a failable system, or a normal void system
-                        if (comptime system_metadata.canReturnError()) {
+                        if (comptime metadata.canReturnError()) {
                             try failableCallWrapper(system_ptr.*, component);
                         } else {
                             callWrapper(system_ptr.*, component);
@@ -521,7 +430,7 @@ pub fn CreateWorld(comptime systems: anytype) type {
             // if nothing has changed
             if (get_result.created_archetype == false or self.system_archetypes.valid == false) return;
 
-            inline for (systems_metadata) |_, i| {
+            inline for (systems_info.metadata) |_, i| {
                 self.allocator.free(self.system_archetypes.archetypes[i]);
             }
             self.system_archetypes.valid = false;
@@ -931,29 +840,29 @@ test "systems can be registered through a struct" {
 
     // define a system type
     const SystemType = struct {
-        fn systemTwo(b: *B) !void {
+        pub fn systemTwo(b: *B) !void {
             try testing.expectEqual(@as(u8, 1), b.v);
             b.v += 1;
         }
-        fn systemThree(c: *C) !void {
+        pub fn systemThree(c: *C) !void {
             try testing.expectEqual(@as(u8, 2), c.v);
             c.v += 1;
         }
-        fn systemFour(d: *D) !void {
+        pub fn systemFour(d: *D) !void {
             try testing.expectEqual(@as(u8, 3), d.v);
             d.v += 1;
         }
     };
 
     // define a system struct
-    const systemTwo = struct {
+    const systemFive = struct {
         fn func(e: *E) !void {
             try testing.expectEqual(@as(u8, 4), e.v);
             e.v += 1;
         }
     }.func;
 
-    var world = try CreateWorld(.{ systemOne, SystemType, systemTwo }).init(testing.allocator);
+    var world = try CreateWorld(.{ systemOne, SystemType, systemFive }).init(testing.allocator);
     defer world.deinit();
 
     const types = [_]type{ A, B, C, D, E };
