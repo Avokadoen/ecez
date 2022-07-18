@@ -952,8 +952,7 @@ test "events call systems" {
 
     // define a system type
     const SystemType = struct {
-        pub fn systemOne(a: *A) !void {
-            if (a.v == 99999) return error.Nine;
+        pub fn systemOne(a: *A) void {
             a.v += 1;
         }
         pub fn systemTwo(b: *B) void {
@@ -999,4 +998,29 @@ test "events call systems" {
         const comp = try world.getComponent(entities[i], T);
         try testing.expectEqual(@as(u8, 1), comp.v);
     }
+}
+
+test "events call propagate error" {
+    const A = struct {};
+
+    // define a system type
+    const SystemType = struct {
+        pub fn systemOne(a: A) !void {
+            _ = a;
+            return error.Spooky;
+        }
+    };
+
+    const World = CreateWorld(.{}, .{
+        Event("onFoo", .{SystemType}),
+    });
+    const Events = World.EventsEnum;
+
+    var world = try World.init(testing.allocator);
+    defer world.deinit();
+
+    const entity = try world.createEntity();
+    try world.setComponent(entity, A{});
+
+    try testing.expectError(error.Spooky, world.triggerEvent(Events.onFoo));
 }
