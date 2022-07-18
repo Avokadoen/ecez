@@ -24,26 +24,32 @@ pub const Event = meta.Event;
 /// Create a ecs instance. Systems are initially included into the World.
 /// Parameters:
 ///     - systems: a tuple of each system used by the world each frame
-pub fn CreateWorld(comptime systems: anytype) type {
+///     - events:  a tuple of events created using the ecez.Event function
+/// Example:
+///     See tests below
+pub fn CreateWorld(comptime systems: anytype, comptime events: anytype) type {
     @setEvalBranchQuota(10_000);
-    const system_count = meta.countSystems(systems);
+    const system_count = meta.countAndVerifySystems(systems);
     const systems_info = meta.systemInfo(system_count, systems);
 
+    const event_count = meta.countAndVerifyEvents(events);
+
     return struct {
+        const World = @This();
+
+        /// EventsEnum is used to trigger events, if you registered an event named "onPlay"
+        /// then you can trigger this event by calling ``world.triggerEvent(EventsEnum.onPlay);``
+        pub const EventsEnum = meta.GenerateEventsEnum(event_count, events);
+
         pub const SystemArchetypes = struct {
             valid: bool,
             archetypes: [system_count][]*Archetype,
         };
 
-        // TODO: Bump allocate data (instead of calling append)
-        // TODO: Thread safety
-        const World = @This();
         allocator: Allocator,
-
         // maps entity id with indices of the storage
         entity_references: std.ArrayList(EntityRef),
         archetree: ArcheTree,
-
         // Cached archetypes used by each system
         system_archetypes: SystemArchetypes,
 
@@ -428,6 +434,51 @@ pub fn CreateWorld(comptime systems: anytype) type {
             }
         }
 
+        fn triggerEvent(self: *World, comptime event: EventsEnum) !void {
+            const tracy_zone_name = std.fmt.comptimePrint("World trigger {any}", .{event});
+            const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.world);
+            defer zone.End();
+
+            const e = events[@enumToInt(event)];
+
+            inline for (e.systems_info.metadata) |metadata, system_index| {
+                const query_types = comptime metadata.queryArgTypes();
+                const param_types = comptime metadata.paramArgTypes();
+
+                const archetypes = try self.archetree.getTypeSubsets(self.allocator, &query_types);
+                defer self.allocator.free(archetypes);
+
+                for (archetypes) |archetype| {
+                    const components = try archetype.getComponentStorages(query_types.len, query_types);
+                    var i: usize = 0;
+                    while (i < components[components.len - 1]) : (i += 1) {
+                        var component: std.meta.Tuple(&param_types) = undefined;
+                        inline for (param_types) |Param, j| {
+                            if (@sizeOf(Param) > 0) {
+                                switch (metadata.args[j]) {
+                                    .value => component[j] = components[j][i],
+                                    .ptr => component[j] = &components[j][i],
+                                }
+                            } else {
+                                switch (metadata.args[j]) {
+                                    .value => component[j] = Param{},
+                                    .ptr => component[j] = &Param{},
+                                }
+                            }
+                        }
+
+                        const system_ptr = @ptrCast(*const metadata.function_type, e.systems_info.functions[system_index]);
+                        // call either a failable system, or a normal void system
+                        if (comptime metadata.canReturnError()) {
+                            try failableCallWrapper(system_ptr.*, component);
+                        } else {
+                            callWrapper(system_ptr.*, component);
+                        }
+                    }
+                }
+            }
+        }
+
         /// this should be called after calling any ArcheTree.getArchetypeX functions to update
         /// the systems archetypes lists
         fn maybeInvalidateSystemArchetypeCache(self: *World, get_result: ArcheTree.GetArchetypeResult) void {
@@ -524,7 +575,7 @@ pub const EntityBuilder = struct {
 };
 
 // world without systems
-const StateWorld = CreateWorld(.{});
+const StateWorld = CreateWorld(.{}, .{});
 
 test "create() entity works" {
     var world = try StateWorld.init(testing.allocator);
@@ -757,7 +808,7 @@ test "systems can fail" {
     var world = try CreateWorld(.{
         SystemStruct.aSystem,
         SystemStruct.bSystem,
-    }).init(testing.allocator);
+    }, .{}).init(testing.allocator);
     defer world.deinit();
 
     const entity = try world.createEntity();
@@ -779,7 +830,7 @@ test "systems can mutate values" {
 
     var world = try CreateWorld(.{
         SystemStruct.moveSystem,
-    }).init(testing.allocator);
+    }, .{}).init(testing.allocator);
     defer world.deinit();
 
     const entity = try world.createEntity();
@@ -806,10 +857,13 @@ test "systems cache works" {
         }
     };
 
-    var world = try CreateWorld(.{
-        SystemStruct.systemOne,
-        SystemStruct.systemTwo,
-    }).init(testing.allocator);
+    var world = try CreateWorld(
+        .{
+            SystemStruct.systemOne,
+            SystemStruct.systemTwo,
+        },
+        .{},
+    ).init(testing.allocator);
     defer world.deinit();
 
     var call_count: *u8 = try testing.allocator.create(u8);
@@ -869,7 +923,10 @@ test "systems can be registered through a struct" {
         }
     }.func;
 
-    var world = try CreateWorld(.{ systemOne, SystemType, systemFive }).init(testing.allocator);
+    var world = try CreateWorld(
+        .{ systemOne, SystemType, systemFive },
+        .{},
+    ).init(testing.allocator);
     defer world.deinit();
 
     const types = [_]type{ A, B, C, D, E };
@@ -885,5 +942,61 @@ test "systems can be registered through a struct" {
     inline for (types) |T, i| {
         const comp = try world.getComponent(entities[i], T);
         try testing.expectEqual(@as(u8, i + 1), comp.v);
+    }
+}
+
+test "events call systems" {
+    const A = struct { v: u8 };
+    const B = struct { v: u8 };
+    const C = struct { v: u8 };
+
+    // define a system type
+    const SystemType = struct {
+        pub fn systemOne(a: *A) !void {
+            if (a.v == 99999) return error.Nine;
+            a.v += 1;
+        }
+        pub fn systemTwo(b: *B) void {
+            b.v += 1;
+        }
+    };
+
+    const systemThree = struct {
+        fn func(c: *C) void {
+            c.v += 1;
+        }
+    }.func;
+
+    const World = CreateWorld(.{}, .{
+        Event("onFoo", .{SystemType}),
+        Event("onBar", .{systemThree}),
+    });
+    const Events = World.EventsEnum;
+
+    var world = try World.init(testing.allocator);
+    defer world.deinit();
+
+    const types = [_]type{ A, B, C };
+
+    var entities: [3]Entity = undefined;
+    inline for (types) |T, i| {
+        entities[i] = try world.createEntity();
+        try world.setComponent(entities[i], T{ .v = 0 });
+    }
+
+    try world.triggerEvent(Events.onFoo);
+
+    {
+        const expected_v = [3]u8{ 1, 1, 0 };
+        inline for (types) |T, i| {
+            const comp = try world.getComponent(entities[i], T);
+            try testing.expectEqual(@as(u8, expected_v[i]), comp.v);
+        }
+    }
+
+    try world.triggerEvent(Events.onBar);
+    inline for (types) |T, i| {
+        const comp = try world.getComponent(entities[i], T);
+        try testing.expectEqual(@as(u8, 1), comp.v);
     }
 }

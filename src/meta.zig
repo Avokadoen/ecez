@@ -129,17 +129,21 @@ pub const SystemMetadata = struct {
 };
 
 pub fn Event(comptime event_name: []const u8, comptime systems: anytype) type {
+    if (@typeInfo(@TypeOf(systems)) != .Struct) {
+        @compileError("systems must be a tuple of systems");
+    }
+
     return struct {
         pub const name = event_name;
         pub const s = systems;
         pub const magic_secret_sauce = event_magic;
-        pub const system_count = countSystems(systems);
+        pub const system_count = countAndVerifySystems(systems);
         pub const systems_info = systemInfo(system_count, systems);
     };
 }
 
 /// count events and verify arguments
-pub fn countEvents(comptime events: anytype) comptime_int {
+pub fn countAndVerifyEvents(comptime events: anytype) comptime_int {
     const EventsType = @TypeOf(events);
     const events_type_info = @typeInfo(EventsType);
     if (events_type_info != .Struct) {
@@ -183,7 +187,7 @@ pub fn countEvents(comptime events: anytype) comptime_int {
     return event_count;
 }
 
-pub fn GenerateEventEnum(comptime event_count: comptime_int, events: anytype) type {
+pub fn GenerateEventsEnum(comptime event_count: comptime_int, events: anytype) type {
     const EnumField = std.builtin.Type.EnumField;
 
     const EventsType = @TypeOf(events);
@@ -200,7 +204,7 @@ pub fn GenerateEventEnum(comptime event_count: comptime_int, events: anytype) ty
 
     const event_enum_info = std.builtin.Type{ .Enum = .{
         .layout = .Auto,
-        .tag_type = u32,
+        .tag_type = usize,
         .fields = &enum_fields,
         .decls = &[0]std.builtin.Type.Declaration{},
         .is_exhaustive = true,
@@ -210,7 +214,7 @@ pub fn GenerateEventEnum(comptime event_count: comptime_int, events: anytype) ty
 }
 
 /// count dispatch systems and verify system argument
-pub fn countSystems(comptime systems: anytype) comptime_int {
+pub fn countAndVerifySystems(comptime systems: anytype) comptime_int {
     const SystemsType = @TypeOf(systems);
     const systems_type_info = @typeInfo(SystemsType);
     if (systems_type_info != .Struct) {
@@ -464,7 +468,7 @@ test "SystemMetadata canReturnError results in correct type" {
 }
 
 test "countEvents count events" {
-    const event_count = countEvents(.{
+    const event_count = countAndVerifyEvents(.{
         Event("eventZero", .{}),
         Event("eventOne", .{}),
         Event("eventTwo", .{}),
@@ -473,7 +477,7 @@ test "countEvents count events" {
 }
 
 test "GenerateEventEnum generate expected enum" {
-    const EventEnum = GenerateEventEnum(3, .{
+    const EventEnum = GenerateEventsEnum(3, .{
         Event("eventZero", .{}),
         Event("eventOne", .{}),
         Event("eventTwo", .{}),
@@ -488,7 +492,7 @@ test "systemCount count systems" {
         pub fn hello() void {}
         pub fn world() void {}
     };
-    const count = countSystems(.{ countSystems, TestSystems });
+    const count = countAndVerifySystems(.{ countAndVerifySystems, TestSystems });
 
     try testing.expectEqual(3, count);
 }
@@ -530,7 +534,7 @@ test "systemCount count systems" {
         pub fn hello() void {}
         pub fn world() void {}
     };
-    const count = countSystems(.{ countSystems, TestSystems });
+    const count = countAndVerifySystems(.{ countAndVerifySystems, TestSystems });
 
     try testing.expectEqual(3, count);
 }
