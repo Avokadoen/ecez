@@ -148,7 +148,7 @@ pub fn countEvents(comptime events: anytype) comptime_int {
 
     const fields_info = events_type_info.Struct.fields;
     comptime var event_count = 0;
-    // start by counting systems registered
+    // start by counting events registered
     inline for (fields_info) |field_info, i| {
         switch (@typeInfo(field_info.field_type)) {
             .Type => {
@@ -181,6 +181,32 @@ pub fn countEvents(comptime events: anytype) comptime_int {
         }
     }
     return event_count;
+}
+
+pub fn GenerateEventEnum(comptime event_count: comptime_int, events: anytype) type {
+    const EnumField = std.builtin.Type.EnumField;
+
+    const EventsType = @TypeOf(events);
+    const events_type_info = @typeInfo(EventsType);
+    const fields_info = events_type_info.Struct.fields;
+
+    var enum_fields: [event_count]EnumField = undefined;
+    inline for (fields_info) |_, i| {
+        enum_fields[i] = EnumField{
+            .name = events[i].name,
+            .value = i,
+        };
+    }
+
+    const event_enum_info = std.builtin.Type{ .Enum = .{
+        .layout = .Auto,
+        .tag_type = u32,
+        .fields = &enum_fields,
+        .decls = &[0]std.builtin.Type.Declaration{},
+        .is_exhaustive = true,
+    } };
+
+    return @Type(event_enum_info);
 }
 
 /// count dispatch systems and verify system argument
@@ -439,11 +465,22 @@ test "SystemMetadata canReturnError results in correct type" {
 
 test "countEvents count events" {
     const event_count = countEvents(.{
+        Event("eventZero", .{}),
         Event("eventOne", .{}),
         Event("eventTwo", .{}),
-        Event("eventThree", .{}),
     });
     try testing.expectEqual(3, event_count);
+}
+
+test "GenerateEventEnum generate expected enum" {
+    const EventEnum = GenerateEventEnum(3, .{
+        Event("eventZero", .{}),
+        Event("eventOne", .{}),
+        Event("eventTwo", .{}),
+    });
+    try testing.expectEqual(0, @enumToInt(EventEnum.eventZero));
+    try testing.expectEqual(1, @enumToInt(EventEnum.eventOne));
+    try testing.expectEqual(2, @enumToInt(EventEnum.eventTwo));
 }
 
 test "systemCount count systems" {
