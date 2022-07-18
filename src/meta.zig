@@ -3,6 +3,9 @@ const FnInfo = std.builtin.Type.Fn;
 
 const testing = std.testing;
 
+pub const secret_field = "magic_secret_sauce";
+pub const event_magic = 0xaa_bb_cc;
+
 pub const SystemMetadata = struct {
     pub const Arg = enum {
         ptr,
@@ -124,6 +127,61 @@ pub const SystemMetadata = struct {
         return false;
     }
 };
+
+pub fn Event(comptime event_name: []const u8, comptime systems: anytype) type {
+    return struct {
+        pub const name = event_name;
+        pub const s = systems;
+        pub const magic_secret_sauce = event_magic;
+        pub const system_count = countSystems(systems);
+        pub const systems_info = systemInfo(system_count, systems);
+    };
+}
+
+/// count events and verify arguments
+pub fn countEvents(comptime events: anytype) comptime_int {
+    const EventsType = @TypeOf(events);
+    const events_type_info = @typeInfo(EventsType);
+    if (events_type_info != .Struct) {
+        @compileError("CreateWorld expected tuple or struct argument for events, got " ++ @typeName(EventsType));
+    }
+
+    const fields_info = events_type_info.Struct.fields;
+    comptime var event_count = 0;
+    // start by counting systems registered
+    inline for (fields_info) |field_info, i| {
+        switch (@typeInfo(field_info.field_type)) {
+            .Type => {
+                switch (@typeInfo(events[i])) {
+                    .Struct => |stru| {
+                        const Type = @Type(stru);
+                        const error_msg = "invalid event type, use ecez.Event() to generate event type";
+                        if (@hasField(Type, secret_field) == false) {
+                            @compileError(error_msg);
+                        }
+                        if (@field(Type, secret_field) != event_magic) {
+                            @compileError(error_msg);
+                        }
+                        event_count += 1;
+                    },
+                    else => {
+                        const err_msg = std.fmt.comptimePrint("CreateWorld expected struct type, got {s}", .{
+                            @typeInfo(events[i]),
+                        });
+                        @compileError(err_msg);
+                    },
+                }
+            },
+            else => {
+                const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct, got {s}", .{
+                    @typeName(field_info.field_type),
+                });
+                @compileError(err_msg);
+            },
+        }
+    }
+    return event_count;
+}
 
 /// count dispatch systems and verify system argument
 pub fn countSystems(comptime systems: anytype) comptime_int {

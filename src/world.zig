@@ -15,6 +15,12 @@ const EntityRef = @import("entity_type.zig").EntityRef;
 const Color = @import("misc.zig").Color;
 const SystemMetadata = meta.SystemMetadata;
 
+/// Create an event which can be triggered and dispatch associated systems
+/// Parameters:
+///     - event_name: the name of the event
+///     - systems: the systems that should be dispatched if this event is triggered
+pub const Event = meta.Event;
+
 /// Create a ecs instance. Systems are initially included into the World.
 /// Parameters:
 ///     - systems: a tuple of each system used by the world each frame
