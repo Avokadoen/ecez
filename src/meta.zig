@@ -1,6 +1,8 @@
 const std = @import("std");
 const FnInfo = std.builtin.Type.Fn;
 
+const testing = std.testing;
+
 pub const SystemMetadata = struct {
     pub const Arg = enum {
         ptr,
@@ -188,7 +190,7 @@ fn SystemInfo(comptime system_count: comptime_int) type {
     };
 }
 
-/// perform compile-time reflection on systems to extrapolate different information about registered ssytems
+/// perform compile-time reflection on systems to extrapolate different information about registered systems
 pub fn systemInfo(comptime system_count: comptime_int, comptime systems: anytype) SystemInfo(system_count) {
     const SystemsType = @TypeOf(systems);
     const systems_type_info = @typeInfo(SystemsType);
@@ -240,4 +242,191 @@ pub fn systemInfo(comptime system_count: comptime_int, comptime systems: anytype
         }
     }
     return systems_info;
+}
+
+test "SystemMetadata errorSet return null with non-failable functions" {
+    const A = struct {};
+    const testFn = struct {
+        pub fn func(a: A) void {
+            _ = a;
+        }
+    }.func;
+    const FuncType = @TypeOf(testFn);
+    const metadata = SystemMetadata.init(FuncType, @typeInfo(FuncType).Fn);
+
+    try testing.expectEqual(@as(?type, null), metadata.errorSet());
+}
+
+test "SystemMetadata errorSet return error set with failable functions" {
+    const A = struct { b: bool };
+    const TestErrorSet = error{ ErrorOne, ErrorTwo };
+    const testFn = struct {
+        pub fn func(a: A) TestErrorSet!void {
+            if (a.b) {
+                return TestErrorSet.ErrorOne;
+            }
+            return TestErrorSet.ErrorTwo;
+        }
+    }.func;
+    const FuncType = @TypeOf(testFn);
+    const metadata = SystemMetadata.init(FuncType, @typeInfo(FuncType).Fn);
+
+    try testing.expectEqual(TestErrorSet, metadata.errorSet().?);
+}
+
+test "SystemMetadata queryArgTypes results in queryable types" {
+    const A = struct {};
+    const B = struct {};
+    const TestSystems = struct {
+        pub fn func1(a: A, b: B) void {
+            _ = a;
+            _ = b;
+        }
+        pub fn func2(a: *A, b: B) void {
+            _ = a;
+            _ = b;
+        }
+        pub fn func3(a: A, b: *B) void {
+            _ = a;
+            _ = b;
+        }
+    };
+
+    const Func1Type = @TypeOf(TestSystems.func1);
+    const Func2Type = @TypeOf(TestSystems.func2);
+    const Func3Type = @TypeOf(TestSystems.func3);
+    const metadatas = [3]SystemMetadata{
+        SystemMetadata.init(Func1Type, @typeInfo(Func1Type).Fn),
+        SystemMetadata.init(Func2Type, @typeInfo(Func2Type).Fn),
+        SystemMetadata.init(Func3Type, @typeInfo(Func3Type).Fn),
+    };
+
+    inline for (metadatas) |metadata| {
+        const args = metadata.queryArgTypes();
+
+        try testing.expectEqual(args.len, 2);
+        try testing.expectEqual(A, args[0]);
+        try testing.expectEqual(B, args[1]);
+    }
+}
+
+test "SystemMetadata paramArgTypes results in pointer types" {
+    const A = struct {};
+    const B = struct {};
+    const TestSystems = struct {
+        pub fn func1(a: A, b: B) void {
+            _ = a;
+            _ = b;
+        }
+        pub fn func2(a: *A, b: B) void {
+            _ = a;
+            _ = b;
+        }
+        pub fn func3(a: A, b: *B) void {
+            _ = a;
+            _ = b;
+        }
+    };
+
+    const Func1Type = @TypeOf(TestSystems.func1);
+    const Func2Type = @TypeOf(TestSystems.func2);
+    const Func3Type = @TypeOf(TestSystems.func3);
+    const metadatas = [3]SystemMetadata{
+        SystemMetadata.init(Func1Type, @typeInfo(Func1Type).Fn),
+        SystemMetadata.init(Func2Type, @typeInfo(Func2Type).Fn),
+        SystemMetadata.init(Func3Type, @typeInfo(Func3Type).Fn),
+    };
+
+    {
+        const args = metadatas[0].paramArgTypes();
+        try testing.expectEqual(A, args[0]);
+        try testing.expectEqual(B, args[1]);
+    }
+    {
+        const args = metadatas[1].paramArgTypes();
+        try testing.expectEqual(*A, args[0]);
+        try testing.expectEqual(B, args[1]);
+    }
+    {
+        const args = metadatas[2].paramArgTypes();
+        try testing.expectEqual(A, args[0]);
+        try testing.expectEqual(*B, args[1]);
+    }
+}
+
+test "SystemMetadata canReturnError results in correct type" {
+    const A = struct {};
+    const TestFunctions = struct {
+        pub fn func1(a: A) void {
+            _ = a;
+        }
+        pub fn func2(a: A) !void {
+            _ = a;
+            return error.NotFound;
+        }
+    };
+
+    {
+        const FuncType = @TypeOf(TestFunctions.func1);
+        const metadata = SystemMetadata.init(FuncType, @typeInfo(FuncType).Fn);
+        try testing.expectEqual(false, metadata.canReturnError());
+    }
+
+    {
+        const FuncType = @TypeOf(TestFunctions.func2);
+        const metadata = SystemMetadata.init(FuncType, @typeInfo(FuncType).Fn);
+        try testing.expectEqual(true, metadata.canReturnError());
+    }
+}
+
+test "systemCount count systems" {
+    const TestSystems = struct {
+        pub fn hello() void {}
+        pub fn world() void {}
+    };
+    const count = countSystems(.{ countSystems, TestSystems });
+
+    try testing.expectEqual(3, count);
+}
+
+test "systemInfo generate accurate system information" {
+    const A = struct { a: u32 };
+    const testFn = struct {
+        pub fn func(a: *A) void {
+            a.a += 1;
+        }
+    }.func;
+
+    const TestSystems = struct {
+        pub fn hello(a: *A) void {
+            a.a += 1;
+        }
+        pub fn world(b: A) !void {
+            _ = b;
+            return error.BadStuff;
+        }
+    };
+    const info = systemInfo(3, .{ testFn, TestSystems });
+
+    try testing.expectEqual(3, info.functions.len);
+    try testing.expectEqual(3, info.metadata.len);
+
+    try testing.expectEqual(1, info.metadata[0].args.len);
+    try testing.expectEqual(1, info.metadata[1].args.len);
+    try testing.expectEqual(1, info.metadata[2].args.len);
+
+    const hello_ptr = @ptrCast(*const info.metadata[1].function_type, info.functions[1]);
+    var a: A = .{ .a = 0 };
+    hello_ptr.*(&a);
+    try testing.expectEqual(a.a, 1);
+}
+
+test "systemCount count systems" {
+    const TestSystems = struct {
+        pub fn hello() void {}
+        pub fn world() void {}
+    };
+    const count = countSystems(.{ countSystems, TestSystems });
+
+    try testing.expectEqual(3, count);
 }

@@ -13,10 +13,11 @@ const Archetype = @import("Archetype.zig");
 const Entity = @import("entity_type.zig").Entity;
 const EntityRef = @import("entity_type.zig").EntityRef;
 const Color = @import("misc.zig").Color;
+const SystemMetadata = meta.SystemMetadata;
 
 /// Create a ecs instance. Systems are initially included into the World.
 /// Parameters:
-///     - systems: a tuple consisting of each system used by the world each frame
+///     - systems: a tuple of each system used by the world each frame
 pub fn CreateWorld(comptime systems: anytype) type {
     @setEvalBranchQuota(10_000);
     const system_count = meta.countSystems(systems);
