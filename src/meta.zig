@@ -153,10 +153,10 @@ pub fn countEvents(comptime events: anytype) comptime_int {
         switch (@typeInfo(field_info.field_type)) {
             .Type => {
                 switch (@typeInfo(events[i])) {
-                    .Struct => |stru| {
-                        const Type = @Type(stru);
+                    .Struct => {
+                        const Type = events[i];
                         const error_msg = "invalid event type, use ecez.Event() to generate event type";
-                        if (@hasField(Type, secret_field) == false) {
+                        if (@hasDecl(Type, secret_field) == false) {
                             @compileError(error_msg);
                         }
                         if (@field(Type, secret_field) != event_magic) {
@@ -435,6 +435,15 @@ test "SystemMetadata canReturnError results in correct type" {
         const metadata = SystemMetadata.init(FuncType, @typeInfo(FuncType).Fn);
         try testing.expectEqual(true, metadata.canReturnError());
     }
+}
+
+test "countEvents count events" {
+    const event_count = countEvents(.{
+        Event("eventOne", .{}),
+        Event("eventTwo", .{}),
+        Event("eventThree", .{}),
+    });
+    try testing.expectEqual(3, event_count);
 }
 
 test "systemCount count systems" {
