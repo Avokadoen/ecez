@@ -7,7 +7,7 @@ const Color = ecez.misc.Color;
 
 const spawn_threshold = 0.5;
 const characters_per_cell = 3;
-const grid_dimensions = 40;
+const grid_dimensions = 30;
 const cell_count = grid_dimensions * grid_dimensions;
 const new_lines = grid_dimensions;
 
@@ -32,7 +32,7 @@ pub fn main() anyerror!void {
         NewLine.render,
         Flush.buffer,
         Cell.tick,
-    }).init(allocator);
+    }, .{}).init(allocator);
     defer world.deinit();
 
     var rng = std.rand.DefaultPrng.init(@intCast(u64, std.time.timestamp()));
