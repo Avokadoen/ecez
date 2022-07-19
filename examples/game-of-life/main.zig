@@ -74,9 +74,12 @@ pub fn main() anyerror!void {
         _ = try world.fromEntityBuilder(&builder);
     }
 
+    var refresh_delay = std.Thread.ResetEvent{};
     while (true) {
         ztracy.FrameMarkNamed("gameloop");
         try world.dispatch();
+
+        refresh_delay.timedWait(std.time.ns_per_s) catch {};
     }
 }
 
