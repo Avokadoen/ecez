@@ -128,6 +128,10 @@ pub const SystemMetadata = struct {
     }
 };
 
+/// Create an event which can be triggered and dispatch associated systems
+/// Parameters:
+///     - event_name: the name of the event
+///     - systems: the systems that should be dispatched if this event is triggered
 pub fn Event(comptime event_name: []const u8, comptime systems: anytype) type {
     if (@typeInfo(@TypeOf(systems)) != .Struct) {
         @compileError("systems must be a tuple of systems");

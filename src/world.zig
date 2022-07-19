@@ -25,7 +25,8 @@ pub const Event = meta.Event;
 /// Parameters:
 ///     - systems: a tuple of each system used by the world each frame
 ///     - events:  a tuple of events created using the ecez.Event function
-/// Example:
+///
+/// Examples:
 ///     See tests below
 pub fn CreateWorld(comptime systems: anytype, comptime events: anytype) type {
     @setEvalBranchQuota(10_000);
