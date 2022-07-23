@@ -1,3 +1,5 @@
+# This job checks incomming changes by building example code and
+# running unit tests
 name: test
 
 on:

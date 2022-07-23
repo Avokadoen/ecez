@@ -1,0 +1,26 @@
+# This cron job will run every 23h 59min to check if zig 
+# master has breaking changes
+name: zig changes watch
+
+on:
+  schedule:
+    # Run every night at 04:00
+    - cron: "00 04 * * 0-6"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cron:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Download zig
+        run: sudo snap install zig --classic --edge
+
+      - name: Build examples 
+        run: zig build
