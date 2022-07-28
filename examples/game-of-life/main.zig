@@ -5,7 +5,7 @@ const ztracy = @import("ztracy");
 
 const Color = ecez.misc.Color;
 
-const spawn_threshold = 0.5;
+const spawn_threshold = 0.4;
 const characters_per_cell = 3;
 const grid_dimensions = 30;
 const cell_count = grid_dimensions * grid_dimensions;
@@ -30,7 +30,7 @@ pub fn main() anyerror!void {
     var world = try ecez.CreateWorld(.{
         Cell.render,
         NewLine.render,
-        Flush.buffer,
+        Flush,
         Cell.tick,
     }, .{}).init(allocator);
     defer world.deinit();

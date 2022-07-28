@@ -7,12 +7,13 @@ const Allocator = std.mem.Allocator;
 const Color = @import("misc.zig").Color;
 const query = @import("query.zig");
 // const hashfn = @import("query.zig").hashfn;
-const Entity = @import("entity_type.zig").Entity;
+const entity_type = @import("entity_type.zig");
+const Entity = entity_type.Entity;
 const EntityContext = struct {
     pub fn hash(self: EntityContext, e: Entity) u32 {
         _ = self;
         // id is already unique
-        return e.id;
+        return @intCast(u32, e.id);
     }
     pub fn eql(self: EntityContext, e1: Entity, e2: Entity, index: usize) bool {
         _ = self;
@@ -24,7 +25,7 @@ const EntityMap = std.ArrayHashMap(Entity, usize, EntityContext, false);
 
 pub fn FromTypesTuple(comptime component_types: anytype) type {
     const component_count = comptime countAndVerifyComponentTypes(component_types);
-    const unsorted_types = comptime componentTypesTupleToTypeArr(component_count, component_types);
+    const unsorted_types = comptime componentTypesTupleOrStructToTypeArr(component_count, component_types);
     return FromTypesArray(&unsorted_types);
 }
 
@@ -97,10 +98,20 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
             //     }
             // }
 
-            // add component data to entity
-            inline for (component_type_arr) |ComponentType, i| {
-                if (@sizeOf(ComponentType) > 0) {
-                    try self.component_storage[i].append(components[type_map[i]]);
+            const components_type_info = @typeInfo(@TypeOf(components)).Struct;
+            // add component data to entity according to if it is a struct or tuple
+            if (components_type_info.is_tuple) {
+                inline for (component_type_arr) |ComponentType, i| {
+                    if (@sizeOf(ComponentType) > 0) {
+                        try self.component_storage[i].append(components[type_map[i]]);
+                    }
+                }
+            } else {
+                inline for (component_type_arr) |ComponentType, i| {
+                    if (@sizeOf(ComponentType) > 0) {
+                        const field = @field(components, components_type_info.fields[type_map[i]].name);
+                        try self.component_storage[i].append(field);
+                    }
                 }
             }
         }
@@ -163,15 +174,16 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
             const RemStruct = @TypeOf(rem_components);
 
             // get type maps and verify that each field is defined and only once
-            const self_type_map = comptime tuplesTypeMap(map_len, SelfStruct, DestStruct);
+            comptime var self_type_map = tuplesTypeMap(map_len, SelfStruct, DestStruct);
             const rem_type_map = comptime tuplesTypeMap(map_len, RemStruct, DestStruct);
-            comptime {
-                inline for (self_type_map) |map, i| {
-                    if (map != null) {
-                        if (rem_type_map[i] != null) {
-                            @compileError("submitted remaining component already defined in previous archetype, this is an ecez bug please submit an issue");
-                        }
-                    }
+            inline for (self_type_map) |*map, i| {
+                if (rem_type_map[i] == .index) {
+                    // new data takes precendence
+                    map.* = .none;
+                }
+
+                if (map.* == .none and rem_type_map[i] == .none) {
+                    return error.MissingComponentData; // entity changed type without supplying it sufficient components
                 }
             }
 
@@ -179,9 +191,9 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
             {
                 // TODO: errdefer: backtrack partially added components
                 inline for (self_type_map) |map, i| {
-                    if (map) |index| {
+                    if (map == .index) {
                         // move component from self to dest
-                        const src_component = self.component_storage[index].items[moving_kv.value];
+                        const src_component = self.component_storage[map.index].items[moving_kv.value];
                         try dest.component_storage[i].append(src_component);
                     }
                 }
@@ -191,8 +203,8 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
             {
                 // TODO: errdefer: backtrack partially added components
                 inline for (rem_type_map) |map, i| {
-                    if (map) |index| {
-                        const src_component = rem_components[index];
+                    if (map == .index) {
+                        const src_component = rem_components[map.index];
                         try dest.component_storage[i].append(src_component);
                     }
                 }
@@ -232,13 +244,10 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
             // move components from self to dest
             {
                 inline for (type_map) |map, i| {
-                    if (map) |index| {
-                        rtr_storage[i] = self.component_storage[index];
-                    } else {
-                        if (@sizeOf(types[i]) > 0) {
-                            @compileError("requested component storage with invalid type " ++ @typeName(types[i]) ++ " this is an ecez bug please submit and issue");
-                        }
-                        rtr_storage[i] = types[i]{};
+                    switch (map) {
+                        .index => |index| rtr_storage[i] = self.component_storage[index],
+                        .empty_type => rtr_storage[i] = types[i]{},
+                        .none => @compileError("requested component storage with invalid type " ++ @typeName(types[i]) ++ " this is an ecez bug please submit and issue"),
                     }
                 }
             }
@@ -255,14 +264,18 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
 /// Count and verify component types
 fn countAndVerifyComponentTypes(comptime component_types: anytype) comptime_int {
     const type_info = blk: {
-        const info = @typeInfo(@TypeOf(component_types));
+        var info = @typeInfo(@TypeOf(component_types));
+        if (info == .Type) {
+            info = @typeInfo(component_types);
+        }
         if (info != .Struct) {
             @compileError("invalid use of countAndVerifyComponentTypes, this is a ecez bug, please submit an issue");
         }
         break :blk info.Struct;
     };
     inline for (type_info.fields) |field| {
-        if (@typeInfo(field.field_type) != .Type) {
+        const field_type = @typeInfo(field.field_type);
+        if (field_type != .Type and field_type != .Struct) {
             @compileError("invalid use of countAndVerifyComponentTypes, this is a ecez bug, please submit an issue");
         }
     }
@@ -297,18 +310,28 @@ fn mapComponentStruct(
     return map;
 }
 
-fn componentTypesTupleToTypeArr(comptime elem_count: comptime_int, comptime tuple: anytype) [elem_count]type {
+fn componentTypesTupleOrStructToTypeArr(comptime elem_count: comptime_int, comptime tuple: anytype) [elem_count]type {
     var type_arr: [elem_count]type = undefined;
 
-    const type_info = @typeInfo(@TypeOf(tuple)).Struct;
-    inline for (type_info.fields) |_, i| {
-        type_arr[i] = tuple[i];
+    switch (@typeInfo(@TypeOf(tuple))) {
+        .Struct => |type_info| {
+            inline for (type_info.fields) |_, i| {
+                type_arr[i] = tuple[i];
+            }
+        },
+        .Type => {
+            const type_info = @typeInfo(tuple).Struct;
+            inline for (type_info.fields) |field, i| {
+                type_arr[i] = field.field_type;
+            }
+        },
+        else => @compileError("unexpected type info in componentTypesTupleOrStructToTypeArr, this is an ecez bug please file an issue"),
     }
     return type_arr;
 }
 
 fn indexOfType(comptime T: type, comptime types: []const type) ?usize {
-    for (types) |TT, i| {
+    inline for (types) |TT, i| {
         if (T == TT) return i;
     }
     return null;
@@ -327,9 +350,14 @@ fn tuplesTypeMapLen(comptime B: type) usize {
     return info_b.fields.len;
 }
 
+const TypeMapEntry = union(enum) {
+    index: usize,
+    empty_type: void,
+    none: void,
+};
 /// return type map given two tuples, the map consist of an array where map[i] correspond to field i in type B
 /// the array value at i correspond to the field valued j of type A
-inline fn tuplesTypeMap(comptime map_len: usize, comptime A: type, comptime B: type) [map_len]?usize {
+inline fn tuplesTypeMap(comptime map_len: usize, comptime A: type, comptime B: type) [map_len]TypeMapEntry {
     const info_a = blk: {
         const info = @typeInfo(A);
         if (info != .Struct) {
@@ -345,13 +373,15 @@ inline fn tuplesTypeMap(comptime map_len: usize, comptime A: type, comptime B: t
         break :blk info.Struct;
     };
 
-    comptime var map: [map_len]?usize = [_]?usize{null} ** map_len;
+    comptime var map: [map_len]TypeMapEntry = [_]TypeMapEntry{.none} ** map_len;
     inline for (info_b.fields) |field_b, i| {
-        if (@sizeOf(field_b.field_type) == 0) continue;
         inner: inline for (info_a.fields) |field_a, j| {
-            if (@sizeOf(field_a.field_type) == 0) continue :inner;
             if (field_a.field_type == field_b.field_type) {
-                map[i] = j;
+                if (@sizeOf(field_b.field_type) == 0 and @sizeOf(field_a.field_type) == 0) {
+                    map[i] = TypeMapEntry.empty_type;
+                } else {
+                    map[i] = TypeMapEntry{ .index = j };
+                }
                 break :inner;
             }
         }
@@ -392,7 +422,7 @@ fn ArcheComponentStruct(comptime types: []const type) type {
 
     var struct_fields: [types.len]Type.StructField = undefined;
     inline for (types) |T, i| {
-        var num_buf: [32]u8 = undefined;
+        var num_buf: [8]u8 = undefined;
         struct_fields[i] = .{
             .name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable,
             .field_type = T,
@@ -643,12 +673,12 @@ test "tuplesTypeMap() correctly map components" {
 
     {
         const result = tuplesTypeMap(2, struct { a: A, b: B, c: C }, struct { c: C, a: A });
-        const expected = [2]?usize{ 2, null };
+        const expected = [2]TypeMapEntry{ .{ .index = 2 }, .empty_type };
         try testing.expectEqual(expected, result);
     }
     {
         const result = tuplesTypeMap(3, struct { c: C, a: A }, struct { a: A, b: B, c: C });
-        const expected = [3]?usize{ null, null, 0 };
+        const expected = [3]TypeMapEntry{ .empty_type, .none, .{ .index = 0 } };
         try testing.expectEqual(expected, result);
     }
 }
