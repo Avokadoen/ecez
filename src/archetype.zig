@@ -2,6 +2,8 @@ const std = @import("std");
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 
+const IArchetype = @import("IArchetype.zig");
+
 // const ztracy = @import("ztracy");
 
 const Color = @import("misc.zig").Color;
@@ -117,19 +119,45 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
         }
 
         /// Retrieve a component value from a given entity
-        pub fn getComponent(self: Archetype, entity: Entity, comptime T: type) !T {
+        pub fn getComponent(self: *Archetype, entity: Entity, comptime T: type) IArchetype.Error!T {
             // const zone = ztracy.ZoneNC(@src(), "Archetype getComponent", Color.archetype);
             // defer zone.End();
+            const bytes = try self.getComponentRaw(entity, comptime query.hashType(T));
+            if (@sizeOf(T) <= 0) return T{};
+            return @ptrCast(*const T, @alignCast(@alignOf(T), bytes.ptr)).*;
+        }
 
-            if (comptime indexOfType(T, &component_type_arr)) |index| {
-                const entity_index = self.entities.get(entity) orelse return error.EntityMissing;
-                if (@sizeOf(T) == 0) {
-                    return T{};
+        /// Retrieve a component value as bytes from a given entity
+        pub fn getComponentRaw(self: *Archetype, entity: Entity, type_hash: u64) IArchetype.Error![]const u8 {
+            // const zone = ztracy.ZoneNC(@src(), "Archetype getComponent", Color.archetype);
+            // defer zone.End();
+            const entity_index = self.entities.get(entity) orelse {
+                return IArchetype.Error.EntityMissing;
+            };
+
+            inline for (component_type_arr) |Component, i| {
+                if (query.hashType(Component) == type_hash) {
+                    if (@sizeOf(Component) == 0) {
+                        return &[0]u8{};
+                    }
+                    // TODO: is this stack memory
+                    return std.mem.asBytes(&self.component_storage[i].items[entity_index]);
                 }
-                return self.component_storage[index].items[entity_index];
-            } else {
-                @compileError("attempted to retrieve component from invalid arche type, this is an ecez bug please submit an issue");
             }
+            // given that this is called by retrieving the correct archetpye in the archetypes_container
+            // we know that this can not occur unless this function has been called externally, which is a big no no!
+            unreachable;
+        }
+
+        /// Implementation of IArchetype hasComponent
+        pub fn hasComponent(self: *Archetype, type_hash: u64) bool {
+            _ = self;
+            inline for (component_type_arr) |Component| {
+                if (query.hashType(Component) == type_hash) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         /// Assign a component value to the entity
@@ -147,6 +175,11 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
             } else {
                 @compileError("attempted to retrieve component from invalid arche type, this is an ecez bug please submit an issue");
             }
+        }
+
+        /// get the archetype dynamic dispatch interface
+        pub fn archetypeInterface(self: *Archetype) IArchetype {
+            return IArchetype.init(self, hasComponent, getComponentRaw);
         }
 
         pub fn componentIndex(self: Archetype, comptime T: type) ?usize {
@@ -566,6 +599,19 @@ test "setComponent() overwrite original component value" {
     try testing.expectEqual(c, try archetype.getComponent(mock_entity, C));
 }
 
+test "hasComponent() return expected result" {
+    const A = struct {};
+    const B = struct {};
+    const C = struct {};
+
+    var archetype = FromTypesTuple(.{ A, B }).init(testing.allocator);
+    defer archetype.deinit();
+
+    try testing.expectEqual(true, archetype.hasComponent(comptime query.hashType(A)));
+    try testing.expectEqual(true, archetype.hasComponent(comptime query.hashType(B)));
+    try testing.expectEqual(false, archetype.hasComponent(comptime query.hashType(C)));
+}
+
 test "componentIndex() find index of components" {
     const A = struct {};
     const B = struct {};
@@ -681,4 +727,22 @@ test "tuplesTypeMap() correctly map components" {
         const expected = [3]TypeMapEntry{ .empty_type, .none, .{ .index = 0 } };
         try testing.expectEqual(expected, result);
     }
+}
+
+test "archetype IArchetype hasComponent returns expected" {
+    const A = struct { a: u32 };
+    const B = struct { a: i32 };
+    const C = struct { a: u2 };
+
+    const Archetype = FromTypesTuple(.{ A, B });
+    var archetype = Archetype.init(testing.allocator);
+    defer archetype.deinit();
+
+    const i_archetype = archetype.archetypeInterface();
+
+    try testing.expectEqual(true, i_archetype.hasComponent(A));
+    try testing.expectEqual(true, i_archetype.hasComponent(B));
+    try testing.expectEqual(false, i_archetype.hasComponent(C));
+
+    // std.heap.ArenaAllocator
 }
