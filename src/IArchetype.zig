@@ -9,7 +9,7 @@ const hashType = @import("query.zig").hashType;
 
 const IArchetype = @This();
 
-pub const Error = error{EntityMissing};
+pub const Error = error{ EntityMissing, ComponentMissing };
 
 // The type erased pointer to the archetype implementation
 ptr: *anyopaque,
@@ -73,5 +73,6 @@ pub fn hasComponent(self: IArchetype, comptime T: type) bool {
 pub fn getComponent(self: IArchetype, entity: Entity, comptime T: type) Error!T {
     // TODO: this might return stack memory :/
     const bytes = try self.vtable.getComponent(self.ptr, entity, comptime hashType(T));
-    return std.mem.bytesToValue(T, bytes);
+    if (@sizeOf(T) <= 0) return T{};
+    return @ptrCast(*const T, @alignCast(@alignOf(T), bytes.ptr)).*;
 }

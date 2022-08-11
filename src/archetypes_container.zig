@@ -1,13 +1,18 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const archetype = @import("archetype.zig");
 
+const archetype = @import("archetype.zig");
+const IArchetype = @import("IArchetype.zig");
 const entity_type = @import("entity_type.zig");
 const Entity = entity_type.Entity;
 const EntityRef = entity_type.EntityRef;
 
+const meta = @import("meta.zig");
+
 // TODO: issue - setEntityType should give compile error if stat fields will be unused
 // TODO: issue - setEntityType should give compile error if stat fields does not exist in dest type
+
+pub const Error = IArchetype.Error;
 
 const testing = std.testing;
 pub fn FromArchetypes(comptime submitted_archetypes: []const type) type {
@@ -36,20 +41,27 @@ pub fn FromArchetypes(comptime submitted_archetypes: []const type) type {
         const ArcheContainer = @This();
 
         archetypes: [kv.len]*anyopaque,
+        archetype_interfaces: [kv.len]IArchetype,
         // map entity id to a archetypes index
         entity_references: std.ArrayList(EntityRef),
 
         pub fn init(allocator: Allocator) !ArcheContainer {
             var archetypes: [kv.len]*anyopaque = undefined;
+            var archetype_interfaces: [kv.len]IArchetype = undefined;
             comptime var i: comptime_int = 0;
             inline while (i < kv.len) : (i += 1) {
                 var arche = try allocator.create(Archetypes[i]);
                 arche.* = Archetypes[i].init(allocator);
+
+                // while types are not erased we extract the dynamic
+                // dispatch interface of the archetype
+                archetype_interfaces[i] = arche.archetypeInterface();
                 archetypes[i] = @ptrCast(*anyopaque, arche);
             }
 
             return ArcheContainer{
                 .archetypes = archetypes,
+                .archetype_interfaces = archetype_interfaces,
                 .entity_references = std.ArrayList(EntityRef).init(allocator),
             };
         }
@@ -87,9 +99,9 @@ pub fn FromArchetypes(comptime submitted_archetypes: []const type) type {
         ///     - entity: the entity to update type of
         ///     - NewType: the new archetype of *entity*
         ///     - state: tuple of some components of *NewType*, or struct of type *NewType*
-        ///                  if *state* is a subset of *NewType*, then the missing components of *state*
-        ///                  must exist in *entity*'s previous type. Void is valid if *NewType* is a subset of
-        ///                  *entity* previous type.
+        ///              if *state* is a subset of *NewType*, then the missing components of *state*
+        ///              must exist in *entity*'s previous type. Void is valid if *NewType* is a subset of
+        ///              *entity* previous type.
         pub fn setEntityType(self: *ArcheContainer, entity: Entity, comptime NewType: type, state: anytype) !void {
             // get target archetype
             const target_index = comptime getTypeIndex(NewType);
@@ -143,26 +155,39 @@ pub fn FromArchetypes(comptime submitted_archetypes: []const type) type {
             unreachable;
         }
 
-        /// check if a given entity is the specified type T
+        /// Check if a given entity is the specified type T
         /// Returns true if entity is of type T, false otherwise
         pub fn isEntityType(self: ArcheContainer, entity: Entity, comptime Archetype: type) bool {
             const archetype_index = comptime ArcheContainer.getTypeIndex(Archetype);
             return self.entity_references.items[entity.id].index == archetype_index;
         }
 
+        /// Check if entity has type Component in it's archetype
+        /// Returns true if entity has a Component value
         pub fn hasComponent(self: ArcheContainer, entity: Entity, comptime Component: type) bool {
             const entity_ref = self.entity_references.items[entity.id];
-            inline for (Archetypes) |_, i| {
-                if (entity_ref.index == i) {
-                    const field_info_a = @typeInfo(submitted_archetypes[i]).Struct;
-                    inline for (field_info_a.fields) |field| {
-                        if (field.field_type == Component) {
-                            return true;
-                        }
-                    }
-                }
+            return self.archetype_interfaces[entity_ref.index].hasComponent(Component);
+        }
+
+        /// Get immutable component of type Component from entity
+        pub fn getComponent(self: ArcheContainer, entity: Entity, comptime Component: type) Error!Component {
+            const entity_ref = self.entity_references.items[entity.id];
+            return self.archetype_interfaces[entity_ref.index].getComponent(entity, Component);
+        }
+
+        pub fn getTypeSubsets(
+            self: *ArcheContainer,
+            comptime types: []const type,
+        ) [meta.countRelevantStructuresContainingTs(submitted_archetypes, types)]meta.ComponentStorage(types) {
+            var components: [meta.countRelevantStructuresContainingTs(submitted_archetypes, types)]meta.ComponentStorage(types) = undefined;
+
+            const archetype_indices = comptime meta.indexOfStructuresContainingTs(submitted_archetypes, types);
+            inline for (archetype_indices) |arche_index, comp_index| {
+                const typed_archetype = self.archetypeTyped(arche_index, Archetypes[arche_index]);
+                components[comp_index] = typed_archetype.getComponentStorage(types);
             }
-            return false;
+
+            return components;
         }
 
         inline fn archetypeTyped(self: ArcheContainer, archetype_index: usize, comptime T: type) *T {
@@ -235,27 +260,27 @@ fn uniquelyCountComponents(comptime total_count: comptime_int, comptime submitte
 
 const Testing = struct {
     const Component = struct {
-        const A = struct { value: u32 };
-        const B = struct { value: u8 };
+        const A = struct { value: u32 = 2 };
+        const B = struct { value: u8 = 4 };
         const C = struct {};
     };
 
     const Archetype = struct {
         const A = struct {
-            a: Component.A,
+            a: Component.A = .{},
         };
         const AB = struct {
-            a: Component.A,
-            b: Component.B,
+            a: Component.A = .{},
+            b: Component.B = .{},
         };
         const AC = struct {
-            a: Component.A,
-            c: Component.C,
+            a: Component.A = .{},
+            c: Component.C = .{},
         };
         const ABC = struct {
-            a: Component.A,
-            b: Component.B,
-            c: Component.C,
+            a: Component.A = .{},
+            b: Component.B = .{},
+            c: Component.C = .{},
         };
     };
 
@@ -434,5 +459,131 @@ test "Archetypes hasComponent correctly identify entity component types" {
         try testing.expectEqual(true, archetypes.hasComponent(entity, Testing.Component.A));
         try testing.expectEqual(true, archetypes.hasComponent(entity, Testing.Component.B));
         try testing.expectEqual(true, archetypes.hasComponent(entity, Testing.Component.C));
+    }
+}
+
+test "Archetypes getComponent fetch component data" {
+    const Archetypes = FromArchetypes(&Testing.AllArchetypes);
+    var archetypes = try Archetypes.init(testing.allocator);
+    defer archetypes.deinit(testing.allocator);
+
+    var i: u32 = 0;
+    while (i < 50) : (i += 1) {
+        const a = Testing.Component.A{ .value = i };
+        const b = Testing.Component.B{ .value = @intCast(u8, i) };
+        const entity = try archetypes.createEntity(Testing.Archetype.ABC{ .a = a, .b = b });
+
+        try testing.expectEqual(
+            a,
+            try archetypes.getComponent(entity, Testing.Component.A),
+        );
+        try testing.expectEqual(
+            b,
+            try archetypes.getComponent(entity, Testing.Component.B),
+        );
+        try testing.expectEqual(
+            Testing.Component.C{},
+            try archetypes.getComponent(entity, Testing.Component.C),
+        );
+    }
+
+    i = 0;
+    while (i < 50) : (i += 1) {
+        const a = Testing.Component.A{ .value = i };
+        const entity = try archetypes.createEntity(Testing.Archetype.AC{
+            .a = a,
+        });
+
+        try testing.expectEqual(
+            a,
+            try archetypes.getComponent(entity, Testing.Component.A),
+        );
+        try testing.expectEqual(
+            Testing.Component.C{},
+            try archetypes.getComponent(entity, Testing.Component.C),
+        );
+    }
+}
+
+test "Archetypes interfaces hasComponent correctly identify entity component types" {
+    const Archetypes = FromArchetypes(&Testing.AllArchetypes);
+    var archetypes = try Archetypes.init(testing.allocator);
+    defer archetypes.deinit(testing.allocator);
+
+    inline for (Testing.AllArchetypes) |T, i| {
+        const info = @typeInfo(T).Struct;
+        inline for (info.fields) |field| {
+            try testing.expectEqual(true, archetypes.archetype_interfaces[i].hasComponent(field.field_type));
+        }
+    }
+
+    // check if archetype A has B and C component
+    try testing.expectEqual(false, archetypes.archetype_interfaces[0].hasComponent(Testing.Component.B));
+    try testing.expectEqual(false, archetypes.archetype_interfaces[0].hasComponent(Testing.Component.C));
+}
+
+test "Archetypes interfaces getComponent correctly fetch component" {
+    const Archetypes = FromArchetypes(&Testing.AllArchetypes);
+    var archetypes = try Archetypes.init(testing.allocator);
+    defer archetypes.deinit(testing.allocator);
+
+    inline for (Testing.AllArchetypes) |T, i| {
+        const entity = try archetypes.createEntity(T{});
+        const info = @typeInfo(T).Struct;
+        inline for (info.fields) |field| {
+            switch (field.field_type) {
+                Testing.Component.A => {
+                    try testing.expectEqual(
+                        Testing.Component.A{},
+                        try archetypes.archetype_interfaces[i].getComponent(entity, Testing.Component.A),
+                    );
+                },
+                Testing.Component.B => {
+                    try testing.expectEqual(
+                        Testing.Component.B{},
+                        try archetypes.archetype_interfaces[i].getComponent(entity, Testing.Component.B),
+                    );
+                },
+                Testing.Component.C => {
+                    try testing.expectEqual(
+                        Testing.Component.C{},
+                        try archetypes.archetype_interfaces[i].getComponent(entity, Testing.Component.C),
+                    );
+                },
+                else => unreachable,
+            }
+        }
+    }
+}
+
+test "Archetypes getTypeSubsets return expected components containers" {
+    const Archetypes = FromArchetypes(&Testing.AllArchetypes);
+    var archetypes = try Archetypes.init(testing.allocator);
+    defer archetypes.deinit(testing.allocator);
+
+    _ = try archetypes.createEntity(Testing.Archetype.A{ .a = .{ .value = 1 } });
+    _ = try archetypes.createEntity(Testing.Archetype.AB{ .a = .{ .value = 2 }, .b = .{ .value = 2 } });
+    _ = try archetypes.createEntity(Testing.Archetype.AC{ .a = .{ .value = 3 } });
+    _ = try archetypes.createEntity(Testing.Archetype.ABC{ .a = .{ .value = 4 }, .b = .{ .value = 4 } });
+
+    {
+        const a_container = archetypes.getTypeSubsets(&[_]type{Testing.Component.A});
+        for (a_container) |container, i| {
+            try testing.expectEqual(Testing.Component.A{ .value = @intCast(u32, i + 1) }, container[0].items[0]);
+        }
+    }
+
+    {
+        const ba_container = archetypes.getTypeSubsets(&[_]type{ Testing.Component.B, Testing.Component.A });
+        for (ba_container) |container, i| {
+            const value: usize = blk: {
+                if (i == 0) break :blk 2;
+                if (i == 1) break :blk 4;
+                return error.IncorrectReturnValue; // something wrong with returned storage
+            };
+
+            try testing.expectEqual(Testing.Component.B{ .value = @intCast(u8, value) }, container[0].items[0]);
+            try testing.expectEqual(Testing.Component.A{ .value = @intCast(u32, value) }, container[1].items[0]);
+        }
     }
 }

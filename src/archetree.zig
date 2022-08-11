@@ -9,6 +9,7 @@ const Entity = @import("entity_type.zig").Entity;
 const query = @import("query.zig");
 const Color = @import("misc.zig").Color;
 
+/// an index in the archetype_paths array
 pub const ArchetypeRef = usize;
 /// Archetable contains the path to the correct archetype given a archetype ref
 pub const Archetable = std.ArrayList([]const usize);
@@ -23,6 +24,7 @@ pub fn FromTypeArray(comptime submitted_components: []const type) type {
         root_node: Node,
         // maps entity with index to correct archetype path
         entity_references: std.ArrayList(ArchetypeRef),
+        archetype_paths: std.ArrayList(ArchetypePath),
         archetable: Archetable,
 
         /// initialize the arche type tree
@@ -58,21 +60,28 @@ pub fn FromTypeArray(comptime submitted_components: []const type) type {
             const entity_references = std.ArrayList(ArchetypeRef).init(allocator);
             errdefer entity_references.deinit();
 
+            const archetype_paths = std.ArrayList(ArchetypePath).init(allocator);
+            errdefer archetype_paths.deinit();
+            try archetype_paths.append(ArchetypePath.init(&[0]usize{}));
+
             return ArcheTree{
                 .allocator = allocator,
                 .root_node = root_node,
-                .entity_references = entity_references,
                 .archetable = archetable,
+                .entity_references = entity_references,
+                .archetype_paths = archetype_paths,
             };
         }
 
         /// deinitialize the arche type tree, freeing allocated memory
         pub fn deinit(self: *ArcheTree) void {
+            self.root_node.deinit(&[0]type{}, self.allocator);
             self.archetable.deinit();
             self.entity_references.deinit();
-            self.root_node.deinit(&[0]type{}, self.allocator);
+            self.archetype_paths.deinit();
         }
 
+        // TODO: start component type
         /// create a new entity that will exist in the archetree and a single archetype
         pub fn createEntity(self: *ArcheTree) !Entity {
             const entity = Entity{ .id = self.entity_references.items.len };
@@ -86,12 +95,17 @@ pub fn FromTypeArray(comptime submitted_components: []const type) type {
             return entity;
         }
 
+        pub fn setComponent(self: *ArcheTree, entity: Entity, component: anytype) void {
+            const path_index = self.entity_references.items[entity.id];
+            const entity_archetype_path = self.archetype_paths.items[path_index];
+        }
+
         const Node = struct {
             arche: *anyopaque,
             children: []?Node,
 
             pub fn init(comptime types: []const type, allocator: Allocator) !Node {
-                const children = try allocator.alloc(?Node, components.len - types.len);
+                const children = try allocator.alloc(?Node, components.len + 1 - types.len);
 
                 const Archetype = archetype.FromTypesArray(types);
                 var arche = try allocator.create(Archetype);
@@ -132,6 +146,30 @@ pub fn FromTypeArray(comptime submitted_components: []const type) type {
                         child.deinit(&appended_types, allocator);
                     }
                 }
+            }
+        };
+
+        // A way of storing the path to a given archetype
+        const ArchetypePath = struct {
+            index_sequence: [components.len]usize,
+
+            fn init(comptime types: []const type) ArchetypePath {
+                var indices: [components.len]usize = undefined;
+                inline for (types) |T, i| {
+                    inline for (components) |Component, j| {
+                        if (T == Component) {
+                            indices[i] = j;
+                        }
+                    }
+                }
+
+                return ArchetypePath{
+                    .index_sequence = indices,
+                };
+            }
+
+            inline fn len(self: ArchetypePath) usize {
+                return types.len;
             }
         };
     };

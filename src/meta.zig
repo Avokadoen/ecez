@@ -336,6 +336,87 @@ pub fn systemInfo(comptime system_count: comptime_int, comptime systems: anytype
     return systems_info;
 }
 
+/// Generate an archetype's SOA component storage
+pub fn ComponentStorage(comptime types: []const type) type {
+    const Type = std.builtin.Type;
+
+    var struct_fields: [types.len]Type.StructField = undefined;
+    inline for (types) |T, i| {
+        const ArrT = std.ArrayList(T);
+        var num_buf: [8]u8 = undefined;
+        struct_fields[i] = .{
+            .name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable,
+            .field_type = if (@sizeOf(T) > 0) ArrT else T,
+            .default_value = null,
+            .is_comptime = false,
+            .alignment = if (@sizeOf(T) > 0) @alignOf(ArrT) else 0,
+        };
+    }
+
+    const RtrTypeInfo = std.builtin.Type{ .Struct = .{
+        .layout = .Auto,
+        .fields = &struct_fields,
+        .decls = &[0]std.builtin.Type.Declaration{},
+        .is_tuple = true,
+    } };
+
+    return @Type(RtrTypeInfo);
+}
+
+/// Given a slice of structures, count how many contains the slice of types t
+pub fn countRelevantStructuresContainingTs(comptime structures: []const type, comptime t: []const type) comptime_int {
+    comptime var count = 0;
+    inline for (structures) |S| {
+        const s_info = @typeInfo(S);
+        if (s_info != .Struct) {
+            @compileError("countRelevantStructuresContainingTs recieved non struct structure");
+        }
+        comptime var matched = 0;
+        inline for (s_info.Struct.fields) |field| {
+            inner: inline for (t) |T| {
+                if (T == field.field_type) {
+                    matched += 1;
+                    break :inner;
+                }
+            }
+        }
+
+        if (matched == t.len) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+pub fn indexOfStructuresContainingTs(
+    comptime structures: []const type,
+    comptime t: []const type,
+) [countRelevantStructuresContainingTs(structures, t)]usize {
+    comptime var indices: [countRelevantStructuresContainingTs(structures, t)]usize = undefined;
+    comptime var i: usize = 0;
+    inline for (structures) |S, j| {
+        const s_info = @typeInfo(S);
+        if (s_info != .Struct) {
+            @compileError("countRelevantStructuresContainingTs recieved non struct structure");
+        }
+        comptime var matched = 0;
+        inline for (s_info.Struct.fields) |field| {
+            inner: inline for (t) |T| {
+                if (T == field.field_type) {
+                    matched += 1;
+                    break :inner;
+                }
+            }
+        }
+
+        if (matched == t.len) {
+            indices[i] = j;
+            i += 1;
+        }
+    }
+    return indices;
+}
+
 test "SystemMetadata errorSet return null with non-failable functions" {
     const A = struct {};
     const testFn = struct {
@@ -541,4 +622,52 @@ test "systemCount count systems" {
     const count = countAndVerifySystems(.{ countAndVerifySystems, TestSystems });
 
     try testing.expectEqual(3, count);
+}
+
+test "countRelevantStructuresContainingTs count all relevant structures" {
+    const A = struct {};
+    const B = struct {};
+    const C = struct {};
+    const D = struct {};
+
+    const SA = struct { a: A };
+    const SAB = struct { a: A, b: B };
+    const SABC = struct { a: A, b: B, c: C };
+    const SABD = struct { a: A, b: B, c: C, d: D };
+    const structs = &[_]type{ SA, SAB, SABC, SABD };
+
+    try testing.expectEqual(1, countRelevantStructuresContainingTs(structs, &[_]type{D}));
+    try testing.expectEqual(4, countRelevantStructuresContainingTs(structs, &[_]type{A}));
+    try testing.expectEqual(2, countRelevantStructuresContainingTs(structs, &[_]type{ C, A }));
+    try testing.expectEqual(1, countRelevantStructuresContainingTs(structs, &[_]type{ D, C, B, A }));
+}
+
+test "indexOfStructuresContainingTs get the index of relevant structures" {
+    const A = struct {};
+    const B = struct {};
+    const C = struct {};
+    const D = struct {};
+
+    const SA = struct { a: A };
+    const SAB = struct { a: A, b: B };
+    const SABC = struct { a: A, b: B, c: C };
+    const SABD = struct { a: A, b: B, c: C, d: D };
+    const structs = &[_]type{ SA, SAB, SABC, SABD };
+
+    try testing.expectEqual(
+        [_]usize{3},
+        indexOfStructuresContainingTs(structs, &[_]type{D}),
+    );
+    try testing.expectEqual(
+        [_]usize{ 0, 1, 2, 3 },
+        indexOfStructuresContainingTs(structs, &[_]type{A}),
+    );
+    try testing.expectEqual(
+        [_]usize{ 2, 3 },
+        indexOfStructuresContainingTs(structs, &[_]type{ C, A }),
+    );
+    try testing.expectEqual(
+        [_]usize{3},
+        indexOfStructuresContainingTs(structs, &[_]type{ D, C, B, A }),
+    );
 }

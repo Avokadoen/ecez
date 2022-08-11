@@ -3,6 +3,7 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 
 const IArchetype = @import("IArchetype.zig");
+const meta = @import("meta.zig");
 
 // const ztracy = @import("ztracy");
 
@@ -33,7 +34,7 @@ pub fn FromTypesTuple(comptime component_types: anytype) type {
 
 pub fn FromTypesArray(comptime component_types: []const type) type {
     const component_type_arr = comptime query.sortTypes(component_types);
-    const ComponentStorage = ArcheComponentStorage(&component_type_arr);
+    const ComponentStorage = meta.ComponentStorage(&component_type_arr);
 
     return struct {
         const Archetype = @This();
@@ -118,48 +119,6 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
             }
         }
 
-        /// Retrieve a component value from a given entity
-        pub fn getComponent(self: *Archetype, entity: Entity, comptime T: type) IArchetype.Error!T {
-            // const zone = ztracy.ZoneNC(@src(), "Archetype getComponent", Color.archetype);
-            // defer zone.End();
-            const bytes = try self.getComponentRaw(entity, comptime query.hashType(T));
-            if (@sizeOf(T) <= 0) return T{};
-            return @ptrCast(*const T, @alignCast(@alignOf(T), bytes.ptr)).*;
-        }
-
-        /// Retrieve a component value as bytes from a given entity
-        pub fn getComponentRaw(self: *Archetype, entity: Entity, type_hash: u64) IArchetype.Error![]const u8 {
-            // const zone = ztracy.ZoneNC(@src(), "Archetype getComponent", Color.archetype);
-            // defer zone.End();
-            const entity_index = self.entities.get(entity) orelse {
-                return IArchetype.Error.EntityMissing;
-            };
-
-            inline for (component_type_arr) |Component, i| {
-                if (query.hashType(Component) == type_hash) {
-                    if (@sizeOf(Component) == 0) {
-                        return &[0]u8{};
-                    }
-                    // TODO: is this stack memory
-                    return std.mem.asBytes(&self.component_storage[i].items[entity_index]);
-                }
-            }
-            // given that this is called by retrieving the correct archetpye in the archetypes_container
-            // we know that this can not occur unless this function has been called externally, which is a big no no!
-            unreachable;
-        }
-
-        /// Implementation of IArchetype hasComponent
-        pub fn hasComponent(self: *Archetype, type_hash: u64) bool {
-            _ = self;
-            inline for (component_type_arr) |Component| {
-                if (query.hashType(Component) == type_hash) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
         /// Assign a component value to the entity
         pub fn setComponent(self: Archetype, entity: Entity, comptime T: type, value: T) !void {
             // const zone = ztracy.ZoneNC(@src(), "Archetype setComponent", Color.archetype);
@@ -179,7 +138,7 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
 
         /// get the archetype dynamic dispatch interface
         pub fn archetypeInterface(self: *Archetype) IArchetype {
-            return IArchetype.init(self, hasComponent, getComponentRaw);
+            return IArchetype.init(self, rawHasComponent, rawGetComponent);
         }
 
         pub fn componentIndex(self: Archetype, comptime T: type) ?usize {
@@ -263,9 +222,54 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
             }
         }
 
+        /// Retrieve a component value from a given entity
+        pub fn getComponent(self: *Archetype, entity: Entity, comptime T: type) IArchetype.Error!T {
+            // const zone = ztracy.ZoneNC(@src(), "Archetype getComponent", Color.archetype);
+            // defer zone.End();
+            const bytes = try self.rawGetComponent(entity, comptime query.hashType(T));
+            if (@sizeOf(T) <= 0) return T{};
+            return @ptrCast(*const T, @alignCast(@alignOf(T), bytes.ptr)).*;
+        }
+
+        /// Retrieve a component value as bytes from a given entity
+        pub fn rawGetComponent(self: *Archetype, entity: Entity, type_hash: u64) IArchetype.Error![]const u8 {
+            // const zone = ztracy.ZoneNC(@src(), "Archetype getComponent", Color.archetype);
+            // defer zone.End();
+            if (self.rawHasComponent(type_hash) == false) {
+                return IArchetype.Error.ComponentMissing; // Component type not part of archetype
+            }
+
+            const entity_index = self.entities.get(entity) orelse {
+                return IArchetype.Error.EntityMissing; // Entity not part of archetype
+            };
+
+            inline for (component_type_arr) |Component, i| {
+                if (query.hashType(Component) == type_hash) {
+                    if (@sizeOf(Component) == 0) {
+                        return &[0]u8{};
+                    }
+                    // TODO: is this stack memory
+                    return std.mem.asBytes(&self.component_storage[i].items[entity_index]);
+                }
+            }
+            // we return in begining of function for the case that would reach this point
+            unreachable;
+        }
+
+        /// Implementation of IArchetype hasComponent
+        pub fn rawHasComponent(self: *Archetype, type_hash: u64) bool {
+            _ = self;
+            inline for (component_type_arr) |Component| {
+                if (query.hashType(Component) == type_hash) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         /// Retrieve the component slices relative to the requested types
         /// Ie. you can request component (A, C) from archetype (A, B, C) and get the slices for A and C
-        pub fn getComponentStorage(self: *Archetype, comptime types: []const type) ArcheComponentStorage(types) {
+        pub fn getComponentStorage(self: *Archetype, comptime types: []const type) meta.ComponentStorage(types) {
             // const zone = ztracy.ZoneNC(@src(), "Archetype getComponentStorages", Color.archetype);
             // defer zone.End();
 
@@ -273,7 +277,7 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
             const map_len = comptime tuplesTypeMapLen(RtrMapStruct);
             const type_map = comptime tuplesTypeMap(map_len, Archetype.ComponentStruct(), RtrMapStruct);
 
-            var rtr_storage: ArcheComponentStorage(types) = undefined;
+            var rtr_storage: meta.ComponentStorage(types) = undefined;
             // move components from self to dest
             {
                 inline for (type_map) |map, i| {
@@ -420,33 +424,6 @@ inline fn tuplesTypeMap(comptime map_len: usize, comptime A: type, comptime B: t
         }
     }
     return map;
-}
-
-/// Generate an archetype's SOA component storage
-fn ArcheComponentStorage(comptime types: []const type) type {
-    const Type = std.builtin.Type;
-
-    var struct_fields: [types.len]Type.StructField = undefined;
-    inline for (types) |T, i| {
-        const ArrT = std.ArrayList(T);
-        var num_buf: [32]u8 = undefined;
-        struct_fields[i] = .{
-            .name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable,
-            .field_type = if (@sizeOf(T) > 0) ArrT else T,
-            .default_value = null,
-            .is_comptime = false,
-            .alignment = if (@sizeOf(T) > 0) @alignOf(ArrT) else 0,
-        };
-    }
-
-    const RtrTypeInfo = std.builtin.Type{ .Struct = .{
-        .layout = .Auto,
-        .fields = &struct_fields,
-        .decls = &[0]std.builtin.Type.Declaration{},
-        .is_tuple = true,
-    } };
-
-    return @Type(RtrTypeInfo);
 }
 
 /// Generate a entity's component data struct type
@@ -607,9 +584,9 @@ test "hasComponent() return expected result" {
     var archetype = FromTypesTuple(.{ A, B }).init(testing.allocator);
     defer archetype.deinit();
 
-    try testing.expectEqual(true, archetype.hasComponent(comptime query.hashType(A)));
-    try testing.expectEqual(true, archetype.hasComponent(comptime query.hashType(B)));
-    try testing.expectEqual(false, archetype.hasComponent(comptime query.hashType(C)));
+    try testing.expectEqual(true, archetype.rawHasComponent(comptime query.hashType(A)));
+    try testing.expectEqual(true, archetype.rawHasComponent(comptime query.hashType(B)));
+    try testing.expectEqual(false, archetype.rawHasComponent(comptime query.hashType(C)));
 }
 
 test "componentIndex() find index of components" {
