@@ -5,7 +5,7 @@ const ztracy = @import("ztracy");
 
 const Color = ecez.misc.Color;
 
-const spawn_threshold = 0.5;
+const spawn_threshold = 0.4;
 const characters_per_cell = 3;
 const grid_dimensions = 30;
 const cell_count = grid_dimensions * grid_dimensions;
@@ -25,14 +25,21 @@ pub fn main() anyerror!void {
         }
     }
     var aa = std.heap.ArenaAllocator.init(gpa.allocator());
+    // optionally profile memory usage with tracy
     const allocator = ecez.tracy_alloc.TracyAllocator(std.heap.ArenaAllocator).init(aa).allocator();
 
-    var world = try ecez.CreateWorld(.{
+    var world = try ecez.WorldBuilder().WithArchetypes(.{
+        Cell,
+        Flush,
+        NewLine,
+    }).WithSystems(.{
+        // systems are currently order-dependent
+        // this will change in the future, but there will also be order forcing semantics
         Cell.render,
         NewLine.render,
-        Flush.buffer,
+        Flush,
         Cell.tick,
-    }, .{}).init(allocator);
+    }).init(allocator);
     defer world.deinit();
 
     var rng = std.rand.DefaultPrng.init(@intCast(u64, std.time.timestamp()));
@@ -44,13 +51,13 @@ pub fn main() anyerror!void {
 
         var i: usize = 0;
         while (i < cell_count) : (i += 1) {
-            var builder = try world.entityBuilder();
-            try builder.addComponent(Cell{
-                .x = @intCast(u8, i % grid_dimensions),
-                .y = @intCast(u8, i / grid_dimensions),
-                .alive = rng.random().float(f32) < spawn_threshold,
+            _ = try world.createEntity(Cell{
+                .pos = .{
+                    .x = @intCast(u8, i % grid_dimensions),
+                    .y = @intCast(u8, i / grid_dimensions),
+                },
+                .health = .{ .alive = rng.random().float(f32) < spawn_threshold },
             });
-            _ = try world.fromEntityBuilder(&builder);
         }
     }
 
@@ -61,18 +68,12 @@ pub fn main() anyerror!void {
 
         var i: u8 = 1;
         while (i <= new_lines) : (i += 1) {
-            var builder = try world.entityBuilder();
-            try builder.addComponent(NewLine{ .nth = i });
-            _ = try world.fromEntityBuilder(&builder);
+            _ = try world.createEntity(NewLine{ .pos = .{ .nth = i } });
         }
     }
 
     // create flush entity
-    {
-        var builder = try world.entityBuilder();
-        try builder.addComponent(Flush{});
-        _ = try world.fromEntityBuilder(&builder);
-    }
+    _ = try world.createEntity(Flush{});
 
     var refresh_delay = std.Thread.ResetEvent{};
     while (true) {
@@ -83,22 +84,32 @@ pub fn main() anyerror!void {
     }
 }
 
-const Cell = struct {
+// Cell components
+const GridPos = struct {
     x: u8,
     y: u8,
-    // TODO: when iterators are implemnted we can use tag components instead
+};
+const Health = struct {
     alive: bool,
+};
 
-    pub fn render(cell: Cell) void {
+// The cell archetype
+const Cell = struct {
+    pos: GridPos,
+    health: Health,
+
+    // systems must work on components (not archetypes)
+    pub fn render(pos: GridPos, health: Health) void {
         const zone = ztracy.ZoneNC(@src(), "Render Cell", Color.Light.red);
         defer zone.End();
 
-        const cell_x = @intCast(usize, cell.x);
-        const cell_y = @intCast(usize, cell.y);
+        const cell_x = @intCast(usize, pos.x);
+        const cell_y = @intCast(usize, pos.y);
 
         const new_line_count = cell_y;
         const start: usize = (cell_x + (cell_y * grid_dimensions)) * characters_per_cell + new_line_count;
-        if (cell.alive) {
+
+        if (health.alive) {
             const output = "[X]";
             inline for (output) |o, i| {
                 output_buffer[start + i] = o;
@@ -111,12 +122,12 @@ const Cell = struct {
         }
     }
 
-    pub fn tick(cell: *Cell) void {
+    pub fn tick(pos: GridPos, health: *Health) void {
         const zone = ztracy.ZoneNC(@src(), "Update Cell", Color.Light.red);
         defer zone.End();
 
-        const cell_x = @intCast(usize, cell.x);
-        const cell_y = @intCast(usize, cell.y);
+        const cell_x = @intCast(usize, pos.x);
+        const cell_y = @intCast(usize, pos.y);
 
         // again here we have to cheat by reading the output buffer
         const new_line_count = cell_y;
@@ -124,21 +135,12 @@ const Cell = struct {
 
         const up = -@intCast(i32, cell_y * grid_dimensions * characters_per_cell + 1);
         const down = -up;
-        const left = -3;
-        const right = 3;
+        const left = -characters_per_cell;
+        const right = characters_per_cell;
         var index = @intCast(i32, start);
 
         var neighbour_sum: u8 = 0;
-        for ([8]i32{
-            left,
-            up,
-            right,
-            right,
-            down,
-            down,
-            left,
-            left,
-        }) |delta| {
+        for ([_]i32{ left, up, right, right, down, down, left, left }) |delta| {
             index += delta;
             if (index > 0 and index < output_buffer.len) {
                 if (output_buffer[@intCast(usize, index)] == 'X') {
@@ -147,17 +149,23 @@ const Cell = struct {
             }
         }
 
-        if (neighbour_sum == 2) {
-            cell.alive = cell.alive;
-        } else if (neighbour_sum == 3) {
-            cell.alive = true;
-        } else {
-            cell.alive = false;
-        }
+        health.alive = blk: {
+            if (neighbour_sum == 2) {
+                break :blk health.alive;
+            } else if (neighbour_sum == 3) {
+                break :blk true;
+            } else {
+                break :blk false;
+            }
+        };
     }
 };
+
+const FlushTag = struct {};
 const Flush = struct {
-    pub fn buffer(flush: Flush) void {
+    tag: FlushTag = .{},
+
+    pub fn buffer(flush: FlushTag) void {
         const zone = ztracy.ZoneNC(@src(), "Flush buffer", Color.Light.turquoise);
         defer zone.End();
 
@@ -166,13 +174,19 @@ const Flush = struct {
         std.debug.print("-" ** (grid_dimensions * characters_per_cell) ++ "\n", .{});
     }
 };
-const NewLine = struct {
-    nth: u8,
 
-    pub fn render(new_line: NewLine) void {
+// new line line component
+const LinePos = struct {
+    nth: u8,
+};
+// new line archetype
+const NewLine = struct {
+    pos: LinePos,
+
+    pub fn render(pos: LinePos) void {
         const zone = ztracy.ZoneNC(@src(), "Render newline", Color.Light.turquoise);
         defer zone.End();
-        const nth = @intCast(usize, new_line.nth);
+        const nth = @intCast(usize, pos.nth);
 
         output_buffer[nth * grid_dimensions * characters_per_cell + nth - 1] = '\n';
     }

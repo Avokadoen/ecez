@@ -1,7 +1,7 @@
 pub const Color = struct {
     pub const world = Light.turquoise;
     pub const archetype = Light.red;
-    pub const arche_tree = Light.green;
+    pub const arche_container = Light.green;
     pub const entity_builder = Light.purple;
 
     pub const Light = struct {
