@@ -1,6 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const ztracy = @import("ztracy");
+const Color = @import("misc.zig").Color;
+
 const archetype = @import("archetype.zig");
 const IArchetype = @import("IArchetype.zig");
 const entity_type = @import("entity_type.zig");
@@ -8,6 +11,7 @@ const Entity = entity_type.Entity;
 const EntityRef = entity_type.EntityRef;
 
 const meta = @import("meta.zig");
+const Testing = @import("Testing.zig");
 
 // TODO: issue - setEntityType should give compile error if stat fields will be unused
 // TODO: issue - setEntityType should give compile error if stat fields does not exist in dest type
@@ -40,12 +44,16 @@ pub fn FromArchetypes(comptime submitted_archetypes: []const type) type {
     return struct {
         const ArcheContainer = @This();
 
+        allocator: Allocator,
         archetypes: [kv.len]*anyopaque,
         archetype_interfaces: [kv.len]IArchetype,
         // map entity id to a archetypes index
         entity_references: std.ArrayList(EntityRef),
 
-        pub fn init(allocator: Allocator) !ArcheContainer {
+        pub inline fn init(allocator: Allocator) !ArcheContainer {
+            const zone = ztracy.ZoneNC(@src(), "Container init", Color.arche_container);
+            defer zone.End();
+
             var archetypes: [kv.len]*anyopaque = undefined;
             var archetype_interfaces: [kv.len]IArchetype = undefined;
             comptime var i: comptime_int = 0;
@@ -60,19 +68,23 @@ pub fn FromArchetypes(comptime submitted_archetypes: []const type) type {
             }
 
             return ArcheContainer{
+                .allocator = allocator,
                 .archetypes = archetypes,
                 .archetype_interfaces = archetype_interfaces,
                 .entity_references = std.ArrayList(EntityRef).init(allocator),
             };
         }
 
-        pub fn deinit(self: ArcheContainer, allocator: Allocator) void {
+        pub inline fn deinit(self: ArcheContainer) void {
+            const zone = ztracy.ZoneNC(@src(), "Container deinit", Color.arche_container);
+            defer zone.End();
+
             comptime var i: comptime_int = 0;
             inline while (i < kv.len) : (i += 1) {
                 const T = archetype.FromTypesTuple(submitted_archetypes[i]);
                 var arche = self.archetypeTyped(i, T);
                 arche.deinit();
-                allocator.destroy(arche);
+                self.allocator.destroy(arche);
             }
             self.entity_references.deinit();
         }
@@ -80,7 +92,10 @@ pub fn FromArchetypes(comptime submitted_archetypes: []const type) type {
         /// create a new entity and supply it an initial state
         /// Parameters:
         ///     - inital_state: the initial state of the entity, this must be a registered archetype
-        pub fn createEntity(self: *ArcheContainer, initial_state: anytype) !Entity {
+        pub inline fn createEntity(self: *ArcheContainer, initial_state: anytype) !Entity {
+            const zone = ztracy.ZoneNC(@src(), "Container createEntity", Color.arche_container);
+            defer zone.End();
+
             const ArchetypeStruct = @TypeOf(initial_state);
             const archetype_index = comptime ArcheContainer.getTypeIndex(ArchetypeStruct);
 
@@ -103,6 +118,9 @@ pub fn FromArchetypes(comptime submitted_archetypes: []const type) type {
         ///              must exist in *entity*'s previous type. Void is valid if *NewType* is a subset of
         ///              *entity* previous type.
         pub fn setEntityType(self: *ArcheContainer, entity: Entity, comptime NewType: type, state: anytype) !void {
+            const zone = ztracy.ZoneNC(@src(), "Container setEntityType", Color.arche_container);
+            defer zone.End();
+
             // get target archetype
             const target_index = comptime getTypeIndex(NewType);
             var target_archetype = self.archetypeTyped(target_index, Archetypes[target_index]);
@@ -158,6 +176,9 @@ pub fn FromArchetypes(comptime submitted_archetypes: []const type) type {
         /// Check if a given entity is the specified type T
         /// Returns true if entity is of type T, false otherwise
         pub fn isEntityType(self: ArcheContainer, entity: Entity, comptime Archetype: type) bool {
+            const zone = ztracy.ZoneNC(@src(), "Container isEntityType", Color.arche_container);
+            defer zone.End();
+
             const archetype_index = comptime ArcheContainer.getTypeIndex(Archetype);
             return self.entity_references.items[entity.id].index == archetype_index;
         }
@@ -165,21 +186,43 @@ pub fn FromArchetypes(comptime submitted_archetypes: []const type) type {
         /// Check if entity has type Component in it's archetype
         /// Returns true if entity has a Component value
         pub fn hasComponent(self: ArcheContainer, entity: Entity, comptime Component: type) bool {
+            const zone = ztracy.ZoneNC(@src(), "Container hasComponent", Color.arche_container);
+            defer zone.End();
+
             const entity_ref = self.entity_references.items[entity.id];
             return self.archetype_interfaces[entity_ref.index].hasComponent(Component);
         }
 
         /// Get immutable component of type Component from entity
         pub fn getComponent(self: ArcheContainer, entity: Entity, comptime Component: type) Error!Component {
+            const zone = ztracy.ZoneNC(@src(), "Container getComponent", Color.arche_container);
+            defer zone.End();
+
             const entity_ref = self.entity_references.items[entity.id];
             return self.archetype_interfaces[entity_ref.index].getComponent(entity, Component);
+        }
+
+        /// Reassign component state of entity, component must be part of entity's current archetype
+        pub fn setComponent(self: *ArcheContainer, entity: Entity, component: anytype) Error!void {
+            const zone = ztracy.ZoneNC(@src(), "Container setComponent", Color.arche_container);
+            defer zone.End();
+
+            const entity_ref = self.entity_references.items[entity.id];
+            return self.archetype_interfaces[entity_ref.index].setComponent(entity, component);
         }
 
         pub fn getTypeSubsets(
             self: *ArcheContainer,
             comptime types: []const type,
-        ) [meta.countRelevantStructuresContainingTs(submitted_archetypes, types)]meta.ComponentStorage(types) {
-            var components: [meta.countRelevantStructuresContainingTs(submitted_archetypes, types)]meta.ComponentStorage(types) = undefined;
+        ) blk: {
+            const archetypes_count = meta.countRelevantStructuresContainingTs(submitted_archetypes, types);
+            break :blk [archetypes_count]meta.ComponentStorage(types);
+        } {
+            const zone = ztracy.ZoneNC(@src(), "Container getTypeSubsets", Color.arche_container);
+            defer zone.End();
+
+            const archetypes_count = meta.countRelevantStructuresContainingTs(submitted_archetypes, types);
+            var components: [archetypes_count]meta.ComponentStorage(types) = undefined;
 
             const archetype_indices = comptime meta.indexOfStructuresContainingTs(submitted_archetypes, types);
             inline for (archetype_indices) |arche_index, comp_index| {
@@ -258,39 +301,6 @@ fn uniquelyCountComponents(comptime total_count: comptime_int, comptime submitte
     return counted;
 }
 
-const Testing = struct {
-    const Component = struct {
-        const A = struct { value: u32 = 2 };
-        const B = struct { value: u8 = 4 };
-        const C = struct {};
-    };
-
-    const Archetype = struct {
-        const A = struct {
-            a: Component.A = .{},
-        };
-        const AB = struct {
-            a: Component.A = .{},
-            b: Component.B = .{},
-        };
-        const AC = struct {
-            a: Component.A = .{},
-            c: Component.C = .{},
-        };
-        const ABC = struct {
-            a: Component.A = .{},
-            b: Component.B = .{},
-            c: Component.C = .{},
-        };
-    };
-
-    const AllArchetypes = [_]type{
-        Testing.Archetype.A,
-        Testing.Archetype.AB,
-        Testing.Archetype.AC,
-        Testing.Archetype.ABC,
-    };
-};
 test "countComponentsAndVerifyArchetype() counts components" {
     try testing.expectEqual(1, countComponentsAndVerifyArchetype(Testing.Archetype.A));
     try testing.expectEqual(2, countComponentsAndVerifyArchetype(Testing.Archetype.AB));
@@ -298,23 +308,23 @@ test "countComponentsAndVerifyArchetype() counts components" {
 }
 
 test "countAndVerifyAllComponents() correctly count types once" {
-    try testing.expectEqual(8, countAndVerifyAllComponents(&Testing.AllArchetypes));
+    try testing.expectEqual(8, countAndVerifyAllComponents(&Testing.AllArchetypesArr));
 }
 
 test "uniquelyCountComponents() correctly count types once" {
-    try testing.expectEqual(3, uniquelyCountComponents(6, &Testing.AllArchetypes));
+    try testing.expectEqual(3, uniquelyCountComponents(6, &Testing.AllArchetypesArr));
 }
 
 test "Archetypes init + deinit is idempotent" {
-    const Archetypes = FromArchetypes(&Testing.AllArchetypes);
+    const Archetypes = FromArchetypes(&Testing.AllArchetypesArr);
     const archetypes = try Archetypes.init(testing.allocator);
-    archetypes.deinit(testing.allocator);
+    archetypes.deinit();
 }
 
 test "Archetypes createEntity returns a valid entity" {
-    const Archetypes = FromArchetypes(&Testing.AllArchetypes);
+    const Archetypes = FromArchetypes(&Testing.AllArchetypesArr);
     var archetypes = try Archetypes.init(testing.allocator);
-    defer archetypes.deinit(testing.allocator);
+    defer archetypes.deinit();
 
     const entity = try archetypes.createEntity(Testing.Archetype.ABC{
         .a = .{ .value = 32 },
@@ -325,7 +335,7 @@ test "Archetypes createEntity returns a valid entity" {
     try testing.expectEqual(@as(entity_type.EntityId, 0), entity.id);
 
     // 2 is the index of Testing.Archetype.ABC because it is the 3. element in the
-    // Testing.AllArchetypes array
+    // Testing.AllArchetypesArr array
     const archetype_index = comptime Archetypes.getTypeIndex(Testing.Archetype.ABC);
     const Archetype = archetype.FromTypesTuple(Testing.Archetype.ABC);
     const archetype_abc = @ptrCast(*Archetype, @alignCast(@alignOf(Archetype), archetypes.archetypes[archetype_index]));
@@ -345,9 +355,9 @@ test "Archetypes createEntity returns a valid entity" {
 }
 
 test "Archetypes setEntityType update to subtype" {
-    const Archetypes = FromArchetypes(&Testing.AllArchetypes);
+    const Archetypes = FromArchetypes(&Testing.AllArchetypesArr);
     var archetypes = try Archetypes.init(testing.allocator);
-    defer archetypes.deinit(testing.allocator);
+    defer archetypes.deinit();
 
     const entity = try archetypes.createEntity(Testing.Archetype.ABC{
         .a = .{ .value = 1 },
@@ -369,9 +379,9 @@ test "Archetypes setEntityType update to subtype" {
 }
 
 test "Archetypes setEntityType update to superset" {
-    const Archetypes = FromArchetypes(&Testing.AllArchetypes);
+    const Archetypes = FromArchetypes(&Testing.AllArchetypesArr);
     var archetypes = try Archetypes.init(testing.allocator);
-    defer archetypes.deinit(testing.allocator);
+    defer archetypes.deinit();
 
     const entity = try archetypes.createEntity(Testing.Archetype.A{
         .a = .{ .value = 1 },
@@ -403,9 +413,9 @@ test "Archetypes setEntityType update to superset" {
 }
 
 test "Archetypes isEntityType correctly identify type of entity" {
-    const Archetypes = FromArchetypes(&Testing.AllArchetypes);
+    const Archetypes = FromArchetypes(&Testing.AllArchetypesArr);
     var archetypes = try Archetypes.init(testing.allocator);
-    defer archetypes.deinit(testing.allocator);
+    defer archetypes.deinit();
 
     const entity = try archetypes.createEntity(Testing.Archetype.AB{
         .a = .{ .value = 0 },
@@ -417,9 +427,9 @@ test "Archetypes isEntityType correctly identify type of entity" {
 }
 
 test "Archetypes hasComponent correctly identify entity component types" {
-    const Archetypes = FromArchetypes(&Testing.AllArchetypes);
+    const Archetypes = FromArchetypes(&Testing.AllArchetypesArr);
     var archetypes = try Archetypes.init(testing.allocator);
-    defer archetypes.deinit(testing.allocator);
+    defer archetypes.deinit();
 
     {
         const entity = try archetypes.createEntity(Testing.Archetype.A{
@@ -463,9 +473,9 @@ test "Archetypes hasComponent correctly identify entity component types" {
 }
 
 test "Archetypes getComponent fetch component data" {
-    const Archetypes = FromArchetypes(&Testing.AllArchetypes);
+    const Archetypes = FromArchetypes(&Testing.AllArchetypesArr);
     var archetypes = try Archetypes.init(testing.allocator);
-    defer archetypes.deinit(testing.allocator);
+    defer archetypes.deinit();
 
     var i: u32 = 0;
     while (i < 50) : (i += 1) {
@@ -506,11 +516,11 @@ test "Archetypes getComponent fetch component data" {
 }
 
 test "Archetypes interfaces hasComponent correctly identify entity component types" {
-    const Archetypes = FromArchetypes(&Testing.AllArchetypes);
+    const Archetypes = FromArchetypes(&Testing.AllArchetypesArr);
     var archetypes = try Archetypes.init(testing.allocator);
-    defer archetypes.deinit(testing.allocator);
+    defer archetypes.deinit();
 
-    inline for (Testing.AllArchetypes) |T, i| {
+    inline for (Testing.AllArchetypesArr) |T, i| {
         const info = @typeInfo(T).Struct;
         inline for (info.fields) |field| {
             try testing.expectEqual(true, archetypes.archetype_interfaces[i].hasComponent(field.field_type));
@@ -523,11 +533,11 @@ test "Archetypes interfaces hasComponent correctly identify entity component typ
 }
 
 test "Archetypes interfaces getComponent correctly fetch component" {
-    const Archetypes = FromArchetypes(&Testing.AllArchetypes);
+    const Archetypes = FromArchetypes(&Testing.AllArchetypesArr);
     var archetypes = try Archetypes.init(testing.allocator);
-    defer archetypes.deinit(testing.allocator);
+    defer archetypes.deinit();
 
-    inline for (Testing.AllArchetypes) |T, i| {
+    inline for (Testing.AllArchetypesArr) |T, i| {
         const entity = try archetypes.createEntity(T{});
         const info = @typeInfo(T).Struct;
         inline for (info.fields) |field| {
@@ -557,9 +567,9 @@ test "Archetypes interfaces getComponent correctly fetch component" {
 }
 
 test "Archetypes getTypeSubsets return expected components containers" {
-    const Archetypes = FromArchetypes(&Testing.AllArchetypes);
+    const Archetypes = FromArchetypes(&Testing.AllArchetypesArr);
     var archetypes = try Archetypes.init(testing.allocator);
-    defer archetypes.deinit(testing.allocator);
+    defer archetypes.deinit();
 
     _ = try archetypes.createEntity(Testing.Archetype.A{ .a = .{ .value = 1 } });
     _ = try archetypes.createEntity(Testing.Archetype.AB{ .a = .{ .value = 2 }, .b = .{ .value = 2 } });

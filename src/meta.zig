@@ -222,7 +222,7 @@ pub fn countAndVerifySystems(comptime systems: anytype) comptime_int {
     const SystemsType = @TypeOf(systems);
     const systems_type_info = @typeInfo(SystemsType);
     if (systems_type_info != .Struct) {
-        @compileError("CreateWorld expected tuple or struct argument, found " ++ @typeName(SystemsType));
+        @compileError("CreateWorld system argument expected tuple- or struct type, found " ++ @typeName(SystemsType));
     }
 
     const fields_info = systems_type_info.Struct.fields;

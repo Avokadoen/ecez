@@ -17,6 +17,7 @@ vtable: *const VTable,
 
 const hasComponentProto = fn (ptr: *anyopaque, type_hash: u64) bool;
 const getComponentProto = fn (ptr: *anyopaque, entity: Entity, type_hash: u64) Error![]const u8;
+const setComponentProto = fn (ptr: *anyopaque, entity: Entity, type_hash: u64, component: []const u8) Error!void;
 
 pub const VTable = struct {
     hasComponent: switch (builtin.zig_backend) {
@@ -28,12 +29,18 @@ pub const VTable = struct {
         .stage1 => getComponentProto, // temporary workaround until we replace stage1 with stage2
         else => *const getComponentProto,
     },
+
+    setComponent: switch (builtin.zig_backend) {
+        .stage1 => setComponentProto, // temporary workaround until we replace stage1 with stage2
+        else => *const setComponentProto,
+    },
 };
 
 pub fn init(
     pointer: anytype,
     comptime hasComponentFn: fn (ptr: @TypeOf(pointer), type_hash: u64) bool,
     comptime getComponentFn: fn (ptr: @TypeOf(pointer), entity: Entity, type_hash: u64) Error![]const u8,
+    comptime setComponentFn: fn (ptr: @TypeOf(pointer), entity: Entity, type_hash: u64, component: []const u8) Error!void,
 ) IArchetype {
     const Ptr = @TypeOf(pointer);
     const ptr_info = @typeInfo(Ptr);
@@ -54,9 +61,15 @@ pub fn init(
             return @call(.{ .modifier = .always_inline }, getComponentFn, .{ self, entity, type_hash });
         }
 
+        fn setComponentImpl(ptr: *anyopaque, entity: Entity, type_hash: u64, component: []const u8) Error!void {
+            const self = @ptrCast(Ptr, @alignCast(alignment, ptr));
+            return @call(.{ .modifier = .always_inline }, setComponentFn, .{ self, entity, type_hash, component });
+        }
+
         const vtable = VTable{
             .hasComponent = hasComponentImpl,
             .getComponent = getComponentImpl,
+            .setComponent = setComponentImpl,
         };
     };
 
@@ -75,4 +88,10 @@ pub fn getComponent(self: IArchetype, entity: Entity, comptime T: type) Error!T 
     const bytes = try self.vtable.getComponent(self.ptr, entity, comptime hashType(T));
     if (@sizeOf(T) <= 0) return T{};
     return @ptrCast(*const T, @alignCast(@alignOf(T), bytes.ptr)).*;
+}
+
+pub fn setComponent(self: IArchetype, entity: Entity, component: anytype) Error!void {
+    const T = @TypeOf(component);
+    const bytes = std.mem.asBytes(&component);
+    try self.vtable.setComponent(self.ptr, entity, comptime hashType(T), bytes);
 }
