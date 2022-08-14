@@ -302,7 +302,7 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
 
         /// Retrieve the component slices relative to the requested types
         /// Ie. you can request component (A, C) from archetype (A, B, C) and get the slices for A and C
-        pub fn getComponentStorage(self: *Archetype, comptime types: []const type) meta.ComponentStorage(types) {
+        pub fn getComponentStorage(self: *Archetype, comptime types: []const type) meta.LengthComponentStorage(types) {
             // const zone = ztracy.ZoneNC(@src(), "Archetype getComponentStorages", Color.archetype);
             // defer zone.End();
 
@@ -311,18 +311,25 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
             const type_map = comptime tuplesTypeMap(map_len, Archetype.ComponentStruct(), RtrMapStruct);
 
             var rtr_storage: meta.ComponentStorage(types) = undefined;
+            var len: usize = 0;
             // move components from self to dest
             {
                 inline for (type_map) |map, i| {
                     switch (map) {
-                        .index => |index| rtr_storage[i] = self.component_storage[index],
-                        .empty_type => rtr_storage[i] = types[i]{},
+                        .index => |index| {
+                            len = self.component_storage[index].items.len;
+                            rtr_storage[i] = self.component_storage[index];
+                        },
+                        .empty_type => {
+                            len = if (len <= 1) 1 else len;
+                            rtr_storage[i] = types[i]{};
+                        },
                         .none => @compileError("requested component storage with invalid type " ++ @typeName(types[i]) ++ " this is an ecez bug please submit and issue"),
                     }
                 }
             }
 
-            return rtr_storage;
+            return .{ .len = len, .storage = rtr_storage };
         }
 
         pub fn ComponentStruct() type {
@@ -699,18 +706,20 @@ test "getComponentStorage() returns subset or all of an archetype storage" {
     try archetype.registerEntity(mock_entity, .{ a, b, c, d });
 
     {
-        const storage = archetype.getComponentStorage(&[_]type{ B, C, A });
-        try testing.expectEqual(b, storage[0].items[0]);
-        try testing.expectEqual(c, storage[1].items[0]);
-        try testing.expectEqual(a, storage[2].items[0]);
+        const component_storage = archetype.getComponentStorage(&[_]type{ B, C, A });
+        try testing.expectEqual(component_storage.len, 1);
+        try testing.expectEqual(b, component_storage.storage[0].items[0]);
+        try testing.expectEqual(c, component_storage.storage[1].items[0]);
+        try testing.expectEqual(a, component_storage.storage[2].items[0]);
     }
 
     {
-        const storage = archetype.getComponentStorage(&[_]type{ A, B, C, D });
-        try testing.expectEqual(a, storage[0].items[0]);
-        try testing.expectEqual(b, storage[1].items[0]);
-        try testing.expectEqual(c, storage[2].items[0]);
-        try testing.expectEqual(d, storage[3]);
+        const component_storage = archetype.getComponentStorage(&[_]type{ A, B, C, D });
+        try testing.expectEqual(component_storage.len, 1);
+        try testing.expectEqual(a, component_storage.storage[0].items[0]);
+        try testing.expectEqual(b, component_storage.storage[1].items[0]);
+        try testing.expectEqual(c, component_storage.storage[2].items[0]);
+        try testing.expectEqual(d, component_storage.storage[3]);
     }
 }
 

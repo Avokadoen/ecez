@@ -363,6 +363,10 @@ pub fn ComponentStorage(comptime types: []const type) type {
     return @Type(RtrTypeInfo);
 }
 
+pub fn LengthComponentStorage(comptime types: []const type) type {
+    return struct { len: usize, storage: ComponentStorage(types) };
+}
+
 /// Given a slice of structures, count how many contains the slice of types t
 pub fn countRelevantStructuresContainingTs(comptime structures: []const type, comptime t: []const type) comptime_int {
     comptime var count = 0;

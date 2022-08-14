@@ -9,7 +9,6 @@ const query = @import("query.zig");
 const meta = @import("meta.zig");
 
 const archetype_container = @import("archetype_container.zig");
-const Archetype = @import("Archetype.zig");
 const Entity = @import("entity_type.zig").Entity;
 const EntityRef = @import("entity_type.zig").EntityRef;
 const Color = @import("misc.zig").Color;
@@ -31,6 +30,8 @@ pub fn WorldBuilder() type {
 // temporary type state for world
 fn WorldIntermediate(comptime prev_archetypes: anytype, comptime prev_systems: anytype, comptime prev_events: anytype) type {
     return struct {
+        const Self = @This();
+
         /// define application archetypes
         /// Parameters:
         ///     - archetypes: structures of archetypes that will used by the application
@@ -52,8 +53,8 @@ fn WorldIntermediate(comptime prev_archetypes: anytype, comptime prev_systems: a
         }
 
         /// build the world instance **type** which can be initialized
-        pub fn Build() type {
-            return CreateWorld(prev_archetypes, prev_systems, prev_events);
+        pub fn init(allocator: Allocator) !CreateWorld(prev_archetypes, prev_systems, prev_events) {
+            return CreateWorld(prev_archetypes, prev_systems, prev_events).init(allocator);
         }
     };
 }
@@ -83,14 +84,10 @@ fn CreateWorld(
     return struct {
         const World = @This();
 
-        /// EventsEnum is used to trigger events, if you registered an event named "onPlay"
-        /// then you can trigger this event by calling ``world.triggerEvent(EventsEnum.onPlay);``
         pub const EventsEnum = meta.GenerateEventsEnum(event_count, events);
-
         container: Container,
 
         pub fn init(allocator: Allocator) !World {
-            _ = EventsEnum;
             const zone = ztracy.ZoneNC(@src(), "World init", Color.world);
             defer zone.End();
 
@@ -172,15 +169,14 @@ fn CreateWorld(
                 // extract data relative to system for each relevant archetype
                 const archetypes_system_data = self.container.getTypeSubsets(&query_types);
                 for (archetypes_system_data) |archetype_system_data| {
-                    const archetypes_data_count = archetype_system_data[0].items.len;
                     var i: usize = 0;
-                    while (i < archetypes_data_count) : (i += 1) {
+                    while (i < archetype_system_data.len) : (i += 1) {
                         var component: std.meta.Tuple(&param_types) = undefined;
                         inline for (param_types) |Param, j| {
                             if (@sizeOf(Param) > 0) {
                                 switch (metadata.args[j]) {
-                                    .value => component[j] = archetype_system_data[j].items[i],
-                                    .ptr => component[j] = &archetype_system_data[j].items[i],
+                                    .value => component[j] = archetype_system_data.storage[j].items[i],
+                                    .ptr => component[j] = &archetype_system_data.storage[j].items[i],
                                 }
                             } else {
                                 switch (metadata.args[j]) {
@@ -215,15 +211,14 @@ fn CreateWorld(
                 // extract data relative to system for each relevant archetype
                 const archetypes_system_data = self.container.getTypeSubsets(&query_types);
                 for (archetypes_system_data) |archetype_system_data| {
-                    const archetypes_data_count = archetype_system_data[0].items.len;
                     var i: usize = 0;
-                    while (i < archetypes_data_count) : (i += 1) {
+                    while (i < archetype_system_data.len) : (i += 1) {
                         var component: std.meta.Tuple(&param_types) = undefined;
                         inline for (param_types) |Param, j| {
                             if (@sizeOf(Param) > 0) {
                                 switch (metadata.args[j]) {
-                                    .value => component[j] = archetype_system_data[j].items[i],
-                                    .ptr => component[j] = &archetype_system_data[j].items[i],
+                                    .value => component[j] = archetype_system_data.storage[j].items[i],
+                                    .ptr => component[j] = &archetype_system_data.storage[j].items[i],
                                 }
                             } else {
                                 switch (metadata.args[j]) {
@@ -259,10 +254,9 @@ fn failableCallWrapper(func: anytype, args: anytype) !void {
 
 // world without systems
 const WorldStub = WorldBuilder().WithArchetypes(Testing.AllArchetypesTuple);
-const StateWorld = WorldStub.Build();
 
 test "init() + deinit() is idempotent" {
-    var world = try StateWorld.init(testing.allocator);
+    var world = try WorldStub.init(testing.allocator);
     defer world.deinit();
 
     const entity0 = try world.createEntity(Testing.Archetype.A{});
@@ -275,7 +269,7 @@ test "init() + deinit() is idempotent" {
 //     const A = struct { some_value: u32 };
 //     const B = struct { some_value: u8 };
 
-//     var world = try StateWorld.init(testing.allocator);
+//     var world = try WorldStub.init(testing.allocator);
 //     defer world.deinit();
 
 //     const entity1 = try world.createEntity();
@@ -297,7 +291,7 @@ test "init() + deinit() is idempotent" {
 // }
 
 test "setComponent() update entities component state" {
-    var world = try StateWorld.init(testing.allocator);
+    var world = try WorldStub.init(testing.allocator);
     defer world.deinit();
 
     const entity = try world.createEntity(Testing.Archetype.AB{});
@@ -312,7 +306,7 @@ test "setComponent() update entities component state" {
 }
 
 test "hasComponent() responds as expected" {
-    var world = try StateWorld.init(testing.allocator);
+    var world = try WorldStub.init(testing.allocator);
     defer world.deinit();
 
     const entity = try world.createEntity(Testing.Archetype.AC{});
@@ -322,7 +316,7 @@ test "hasComponent() responds as expected" {
 }
 
 test "getComponent() retrieve component value" {
-    var world = try StateWorld.init(testing.allocator);
+    var world = try WorldStub.init(testing.allocator);
     defer world.deinit();
 
     _ = try world.createEntity(Testing.Archetype.A{ .a = .{ .value = 0 } });
@@ -352,7 +346,7 @@ test "systems can fail" {
 
     var world = try WorldStub.WithSystems(.{
         SystemStruct,
-    }).Build().init(testing.allocator);
+    }).init(testing.allocator);
     defer world.deinit();
 
     _ = try world.createEntity(Testing.Archetype.AB{
@@ -371,7 +365,7 @@ test "systems can mutate values" {
 
     var world = try WorldStub.WithSystems(.{
         SystemStruct,
-    }).Build().init(testing.allocator);
+    }).init(testing.allocator);
     defer world.deinit();
 
     const entity = try world.createEntity(Testing.Archetype.AB{
@@ -412,7 +406,7 @@ test "systems can be registered through struct or individual function(s)" {
         SystemStruct1.func1,
         SystemStruct1.func2,
         SystemStruct2,
-    }).Build().init(testing.allocator);
+    }).init(testing.allocator);
     defer world.deinit();
 
     const entity = try world.createEntity(Testing.Archetype.A{
@@ -447,8 +441,7 @@ test "events call systems" {
     const World = WorldStub.WithEvents(.{
         Event("onFoo", .{SystemType}),
         Event("onBar", .{systemThree}),
-    }).Build();
-    const Events = World.EventsEnum;
+    });
 
     var world = try World.init(testing.allocator);
     defer world.deinit();
@@ -461,7 +454,7 @@ test "events call systems" {
         .a = .{ .value = 2 },
     });
 
-    try world.triggerEvent(Events.onFoo);
+    try world.triggerEvent(.onFoo);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 1 },
@@ -476,7 +469,7 @@ test "events call systems" {
         try world.getComponent(entity2, Testing.Component.A),
     );
 
-    try world.triggerEvent(Events.onBar);
+    try world.triggerEvent(.onBar);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 2 },
@@ -499,13 +492,12 @@ test "events call propagate error" {
 
     const World = WorldStub.WithEvents(.{
         Event("onFoo", .{SystemType}),
-    }).Build();
-    const Events = World.EventsEnum;
+    });
 
     var world = try World.init(testing.allocator);
     defer world.deinit();
 
     _ = try world.createEntity(Testing.Archetype.A{});
 
-    try testing.expectError(error.Spooky, world.triggerEvent(Events.onFoo));
+    try testing.expectError(error.Spooky, world.triggerEvent(.onFoo));
 }

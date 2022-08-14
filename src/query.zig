@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
 
-const Query = struct {
+pub const Query = struct {
     /// How many elements can exist in the desired types array, and how many
     /// elements can exist in the exclude types array
     const max_query_elements = 32;

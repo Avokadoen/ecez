@@ -216,13 +216,13 @@ pub fn FromArchetypes(comptime submitted_archetypes: []const type) type {
             comptime types: []const type,
         ) blk: {
             const archetypes_count = meta.countRelevantStructuresContainingTs(submitted_archetypes, types);
-            break :blk [archetypes_count]meta.ComponentStorage(types);
+            break :blk [archetypes_count]meta.LengthComponentStorage(types);
         } {
             const zone = ztracy.ZoneNC(@src(), "Container getTypeSubsets", Color.arche_container);
             defer zone.End();
 
             const archetypes_count = meta.countRelevantStructuresContainingTs(submitted_archetypes, types);
-            var components: [archetypes_count]meta.ComponentStorage(types) = undefined;
+            var components: [archetypes_count]meta.LengthComponentStorage(types) = undefined;
 
             const archetype_indices = comptime meta.indexOfStructuresContainingTs(submitted_archetypes, types);
             inline for (archetype_indices) |arche_index, comp_index| {
@@ -579,7 +579,7 @@ test "Archetypes getTypeSubsets return expected components containers" {
     {
         const a_container = archetypes.getTypeSubsets(&[_]type{Testing.Component.A});
         for (a_container) |container, i| {
-            try testing.expectEqual(Testing.Component.A{ .value = @intCast(u32, i + 1) }, container[0].items[0]);
+            try testing.expectEqual(Testing.Component.A{ .value = @intCast(u32, i + 1) }, container.storage[0].items[0]);
         }
     }
 
@@ -592,8 +592,8 @@ test "Archetypes getTypeSubsets return expected components containers" {
                 return error.IncorrectReturnValue; // something wrong with returned storage
             };
 
-            try testing.expectEqual(Testing.Component.B{ .value = @intCast(u8, value) }, container[0].items[0]);
-            try testing.expectEqual(Testing.Component.A{ .value = @intCast(u32, value) }, container[1].items[0]);
+            try testing.expectEqual(Testing.Component.B{ .value = @intCast(u8, value) }, container.storage[0].items[0]);
+            try testing.expectEqual(Testing.Component.A{ .value = @intCast(u32, value) }, container.storage[1].items[0]);
         }
     }
 }
