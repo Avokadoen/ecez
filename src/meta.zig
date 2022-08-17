@@ -421,6 +421,103 @@ pub fn indexOfStructuresContainingTs(
     return indices;
 }
 
+pub fn countTypeMapIndices(comptime type_tuple: anytype, runtime_struct: anytype) comptime_int {
+    const type_tuple_info = blk: {
+        const info = @typeInfo(@TypeOf(type_tuple));
+        if (info != .Struct) {
+            @compileError("expected type tuple to be a struct");
+        }
+        break :blk info.Struct;
+    };
+
+    const runtime_struct_info = blk: {
+        const info = @typeInfo(@TypeOf(runtime_struct));
+        if (info != .Struct) {
+            @compileError("expected runtime struct to be a struct");
+        }
+        break :blk info.Struct;
+    };
+
+    var counter = 0;
+    outer: inline for (type_tuple_info.fields) |_, i| {
+        if (@TypeOf(type_tuple[i]) != type) {
+            @compileError("expected type tuple to only have types");
+        }
+        inline for (runtime_struct_info.fields) |runtime_field| {
+            if (type_tuple[i] == runtime_field.field_type) {
+                counter += 1;
+                continue :outer;
+            }
+        }
+        @compileError("runtime_struct does not contain type " ++ @typeName(type_tuple[i]) ++ ", but type tuple does");
+    }
+    return counter;
+}
+
+pub fn typeMap(comptime type_tuple: anytype, runtime_struct: anytype) blk: {
+    const rtr_array_size = countTypeMapIndices(type_tuple, runtime_struct);
+    break :blk [rtr_array_size]comptime_int;
+} {
+    const type_tuple_info = @typeInfo(@TypeOf(type_tuple)).Struct;
+    const runtime_struct_info = @typeInfo(@TypeOf(runtime_struct)).Struct;
+    const rtr_array_size = countTypeMapIndices(type_tuple, runtime_struct);
+
+    var map: [rtr_array_size]comptime_int = undefined;
+    inline for (type_tuple_info.fields) |_, i| {
+        inline for (runtime_struct_info.fields) |runtime_field, j| {
+            if (type_tuple[i] == runtime_field.field_type) {
+                map[i] = j;
+            }
+        }
+    }
+    return map;
+}
+
+pub fn SharedStateStorage(comptime shared_state: anytype) type {
+    const Type = std.builtin.Type;
+
+    const shared_info = blk: {
+        const info = @typeInfo(@TypeOf(shared_state));
+        if (info != .Struct) {
+            @compileError("submitted invalid shared state type, must be a tuple of types");
+        }
+        break :blk info.Struct;
+    };
+
+    // var used_types: [shared_info.fields.len]type = undefined;
+    var storage_fields: [shared_info.fields.len]Type.StructField = undefined;
+    inline for (shared_info.fields) |field, i| {
+        // for (used_types[0..i]) |used_type| {
+        //     if (used_type == shared_state[i]) {
+        //         @compileError("duplicate types are not allowed in shared state");
+        //     }
+        // }
+
+        var num_buf: [8]u8 = undefined;
+        const str_i = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable;
+
+        if (@typeInfo(field.field_type) != .Type) {
+            @compileError("expected shared state field " ++ str_i ++ " to be a type, was " ++ @typeName(shared_state[i]));
+        }
+
+        storage_fields[i] = Type.StructField{
+            .name = str_i,
+            .field_type = shared_state[i],
+            .default_value = null,
+            .is_comptime = false,
+            .alignment = @alignOf(shared_state[i]),
+        };
+        // used_types[i] = shared_state[i];
+    }
+
+    return @Type(Type{ .Struct = .{
+        .layout = .Auto,
+        .fields = &storage_fields,
+        .decls = &[0]Type.Declaration{},
+        .is_tuple = true,
+    } });
+}
+
 test "SystemMetadata errorSet return null with non-failable functions" {
     const A = struct {};
     const testFn = struct {
@@ -674,4 +771,38 @@ test "indexOfStructuresContainingTs get the index of relevant structures" {
         [_]usize{3},
         indexOfStructuresContainingTs(structs, &[_]type{ D, C, B, A }),
     );
+}
+
+test "countTypeMapIndices count expected amount" {
+    const A = struct {};
+    const B = struct {};
+    const C = struct {};
+
+    const type_counter = countTypeMapIndices(.{ A, B, C }, .{ C{}, B{}, A{} });
+    try testing.expectEqual(3, type_counter);
+}
+
+test "typeMap maps a type tuple to a value tuple" {
+    const A = struct {};
+    const B = struct {};
+    const C = struct {};
+
+    const type_map = typeMap(.{ A, B, C }, .{ C{}, B{}, A{} });
+    try testing.expectEqual(3, type_map.len);
+    try testing.expectEqual(2, type_map[0]);
+    try testing.expectEqual(1, type_map[1]);
+    try testing.expectEqual(0, type_map[2]);
+}
+
+test "SharedStateStorage generate suitable storage tuple" {
+    const A = struct { value: u64 };
+    const B = struct { value1: i32, value2: u8 };
+    const C = struct { value: u8 };
+
+    // generate type at compile time and let the compiler verify that the type are correct
+    const Storage = SharedStateStorage(.{ A, B, C });
+    var storage: Storage = undefined;
+    storage[0] = A{ .value = std.math.maxInt(u64) };
+    storage[1] = B{ .value1 = 2, .value2 = 2 };
+    storage[2] = C{ .value = 4 };
 }
