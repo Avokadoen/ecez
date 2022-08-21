@@ -39,7 +39,7 @@ pub fn main() anyerror!void {
         NewLine.render,
         Flush,
         Cell.tick,
-    }).init(allocator);
+    }).init(allocator, .{});
     defer world.deinit();
 
     var rng = std.rand.DefaultPrng.init(@intCast(u64, std.time.timestamp()));

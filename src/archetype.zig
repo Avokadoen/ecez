@@ -66,8 +66,8 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
         }
 
         pub fn deinit(self: *Archetype) void {
-            // const zone = ztracy.ZoneNC(@src(), "Archetype deinit", Color.archetype);
-            // defer zone.End();
+            const zone = ztracy.ZoneNC(@src(), "Archetype deinit", Color.archetype);
+            defer zone.End();
 
             self.entities.deinit();
             inline for (component_type_arr) |ComponentType, i| {
@@ -141,9 +141,7 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
             return IArchetype.init(self, rawHasComponent, rawGetComponent, rawSetComponent);
         }
 
-        pub fn componentIndex(self: Archetype, comptime T: type) ?usize {
-            const zone = ztracy.ZoneNC(@src(), "Archetype componentIndex", Color.archetype);
-            defer zone.End();
+        pub inline fn componentIndex(self: Archetype, comptime T: type) ?usize {
             _ = self;
             return comptime indexOfType(T, &component_type_arr);
         }
@@ -303,8 +301,8 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
         /// Retrieve the component slices relative to the requested types
         /// Ie. you can request component (A, C) from archetype (A, B, C) and get the slices for A and C
         pub fn getComponentStorage(self: *Archetype, comptime types: []const type) meta.LengthComponentStorage(types) {
-            // const zone = ztracy.ZoneNC(@src(), "Archetype getComponentStorages", Color.archetype);
-            // defer zone.End();
+            const zone = ztracy.ZoneNC(@src(), "Archetype getComponentStorages", Color.archetype);
+            defer zone.End();
 
             const RtrMapStruct = ArcheComponentStruct(types);
             const map_len = comptime tuplesTypeMapLen(RtrMapStruct);

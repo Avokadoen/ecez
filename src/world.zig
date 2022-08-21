@@ -24,11 +24,11 @@ pub const Event = meta.Event;
 
 /// Create a ecs instance by gradually defining application types, systems and events.
 pub fn WorldBuilder() type {
-    return WorldIntermediate(.{}, .{}, .{});
+    return WorldIntermediate(.{}, .{}, .{}, .{});
 }
 
 // temporary type state for world
-fn WorldIntermediate(comptime prev_archetypes: anytype, comptime prev_systems: anytype, comptime prev_events: anytype) type {
+fn WorldIntermediate(comptime prev_archetypes: anytype, comptime prev_shared_state: anytype, comptime prev_systems: anytype, comptime prev_events: anytype) type {
     return struct {
         const Self = @This();
 
@@ -36,39 +36,43 @@ fn WorldIntermediate(comptime prev_archetypes: anytype, comptime prev_systems: a
         /// Parameters:
         ///     - archetypes: structures of archetypes that will used by the application
         pub fn WithArchetypes(comptime archetypes: anytype) type {
-            return WorldIntermediate(archetypes, prev_systems, prev_events);
+            return WorldIntermediate(archetypes, prev_shared_state, prev_systems, prev_events);
+        }
+
+        /// define application shared state
+        /// Parameters:
+        ///     - archetypes: structures of archetypes that will used by the application
+        pub fn WithSharedState(comptime shared_state: anytype) type {
+            return WorldIntermediate(prev_archetypes, shared_state, prev_systems, prev_events);
         }
 
         /// define application systems which should run on each dispatch
         /// Parameters:
         ///     - systems: a tuple of each system used by the world each frame
         pub fn WithSystems(comptime systems: anytype) type {
-            return WorldIntermediate(prev_archetypes, systems, prev_events);
+            return WorldIntermediate(prev_archetypes, prev_shared_state, systems, prev_events);
         }
 
         /// define application events that can be triggered programmatically
         ///     - events: a tuple of events created using the ecez.Event function
         pub fn WithEvents(comptime events: anytype) type {
-            return WorldIntermediate(prev_archetypes, prev_systems, events);
+            return WorldIntermediate(prev_archetypes, prev_shared_state, prev_systems, events);
         }
 
         /// build the world instance **type** which can be initialized
-        pub fn init(allocator: Allocator) !CreateWorld(prev_archetypes, prev_systems, prev_events) {
-            return CreateWorld(prev_archetypes, prev_systems, prev_events).init(allocator);
+        pub fn init(allocator: Allocator, shared_state: anytype) !CreateWorld(prev_archetypes, prev_shared_state, prev_systems, prev_events) {
+            return CreateWorld(prev_archetypes, prev_shared_state, prev_systems, prev_events).init(allocator, shared_state);
         }
     };
 }
 
 fn CreateWorld(
     comptime archetypes: anytype,
+    comptime shared_state_types: anytype,
     comptime systems: anytype,
     comptime events: anytype,
 ) type {
     @setEvalBranchQuota(10_000);
-    const system_count = meta.countAndVerifySystems(systems);
-    const systems_info = meta.systemInfo(system_count, systems);
-    const event_count = meta.countAndVerifyEvents(events);
-
     const Container = blk: {
         const archetypes_info = @typeInfo(@TypeOf(archetypes));
         if (archetypes_info != .Struct) {
@@ -81,19 +85,37 @@ fn CreateWorld(
         break :blk archetype_container.FromArchetypes(&archetype_types);
     };
 
+    const SharedState = meta.SharedStateStorage(shared_state_types);
+
+    const system_count = meta.countAndVerifySystems(systems);
+    const systems_info = meta.systemInfo(system_count, systems);
+    const event_count = meta.countAndVerifyEvents(events);
+
     return struct {
         const World = @This();
 
         pub const EventsEnum = meta.GenerateEventsEnum(event_count, events);
         container: Container,
+        shared_state: SharedState,
 
-        pub fn init(allocator: Allocator) !World {
+        /// intialize the world structure
+        /// Parameters:
+        ///     - allocator: allocator used when initiating entities
+        ///     - shared_state: a tuple with an initial state for ALL shared state data declared when constructing world type
+        pub fn init(allocator: Allocator, shared_state: anytype) !World {
             const zone = ztracy.ZoneNC(@src(), "World init", Color.world);
             defer zone.End();
+
+            var actual_shared_state: SharedState = undefined;
+            const shared_state_map = meta.typeMap(shared_state_types, shared_state);
+            inline for (shared_state_map) |index, i| {
+                actual_shared_state[i] = shared_state[index];
+            }
 
             const container = try Container.init(allocator);
             return World{
                 .container = container,
+                .shared_state = actual_shared_state,
             };
         }
 
@@ -185,7 +207,7 @@ fn CreateWorld(
                                 }
                             }
                         }
-                        const system_ptr = @ptrCast(*const metadata.function_type, systems_info.functions[system_index]);
+                        const system_ptr = @ptrCast(*const systems_info.function_types[system_index], systems_info.functions[system_index]);
                         // call either a failable system, or a normal void system
                         if (comptime metadata.canReturnError()) {
                             try failableCallWrapper(system_ptr.*, component);
@@ -228,7 +250,7 @@ fn CreateWorld(
                             }
                         }
 
-                        const system_ptr = @ptrCast(*const metadata.function_type, e.systems_info.functions[system_index]);
+                        const system_ptr = @ptrCast(*const e.systems_info.function_types[system_index], e.systems_info.functions[system_index]);
                         // call either a failable system, or a normal void system
                         if (comptime metadata.canReturnError()) {
                             try failableCallWrapper(system_ptr.*, component);
@@ -256,7 +278,7 @@ fn failableCallWrapper(func: anytype, args: anytype) !void {
 const WorldStub = WorldBuilder().WithArchetypes(Testing.AllArchetypesTuple);
 
 test "init() + deinit() is idempotent" {
-    var world = try WorldStub.init(testing.allocator);
+    var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
     const entity0 = try world.createEntity(Testing.Archetype.A{});
@@ -291,7 +313,7 @@ test "init() + deinit() is idempotent" {
 // }
 
 test "setComponent() update entities component state" {
-    var world = try WorldStub.init(testing.allocator);
+    var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
     const entity = try world.createEntity(Testing.Archetype.AB{});
@@ -306,7 +328,7 @@ test "setComponent() update entities component state" {
 }
 
 test "hasComponent() responds as expected" {
-    var world = try WorldStub.init(testing.allocator);
+    var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
     const entity = try world.createEntity(Testing.Archetype.AC{});
@@ -316,7 +338,7 @@ test "hasComponent() responds as expected" {
 }
 
 test "getComponent() retrieve component value" {
-    var world = try WorldStub.init(testing.allocator);
+    var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
     _ = try world.createEntity(Testing.Archetype.A{ .a = .{ .value = 0 } });
@@ -346,7 +368,7 @@ test "systems can fail" {
 
     var world = try WorldStub.WithSystems(.{
         SystemStruct,
-    }).init(testing.allocator);
+    }).init(testing.allocator, .{});
     defer world.deinit();
 
     _ = try world.createEntity(Testing.Archetype.AB{
@@ -365,7 +387,7 @@ test "systems can mutate values" {
 
     var world = try WorldStub.WithSystems(.{
         SystemStruct,
-    }).init(testing.allocator);
+    }).init(testing.allocator, .{});
     defer world.deinit();
 
     const entity = try world.createEntity(Testing.Archetype.AB{
@@ -406,7 +428,7 @@ test "systems can be registered through struct or individual function(s)" {
         SystemStruct1.func1,
         SystemStruct1.func2,
         SystemStruct2,
-    }).init(testing.allocator);
+    }).init(testing.allocator, .{});
     defer world.deinit();
 
     const entity = try world.createEntity(Testing.Archetype.A{
@@ -443,7 +465,7 @@ test "events call systems" {
         Event("onBar", .{systemThree}),
     });
 
-    var world = try World.init(testing.allocator);
+    var world = try World.init(testing.allocator, .{});
     defer world.deinit();
 
     const entity1 = try world.createEntity(Testing.Archetype.AB{
@@ -494,7 +516,7 @@ test "events call propagate error" {
         Event("onFoo", .{SystemType}),
     });
 
-    var world = try World.init(testing.allocator);
+    var world = try World.init(testing.allocator, .{});
     defer world.deinit();
 
     _ = try world.createEntity(Testing.Archetype.A{});

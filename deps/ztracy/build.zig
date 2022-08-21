@@ -30,7 +30,7 @@ pub const BuildOptionsStep = struct {
 pub fn getPkg(dependencies: []const std.build.Pkg) std.build.Pkg {
     return .{
         .name = "ztracy",
-        .source = .{ .path = thisDir() ++ "/src/ztracy.zig" },
+        .source = .{ .path = comptime thisDir() ++ "/src/ztracy.zig" },
         .dependencies = dependencies,
     };
 }
@@ -40,8 +40,8 @@ pub fn link(exe: *std.build.LibExeObjStep, bos: BuildOptionsStep) void {
     if (bos.options.enable_ztracy) {
         const enable_fibers = if (bos.options.enable_fibers) "-DTRACY_FIBERS" else "";
 
-        exe.addIncludeDir(thisDir() ++ "/libs/tracy");
-        exe.addCSourceFile(thisDir() ++ "/libs/tracy/TracyClient.cpp", &.{
+        exe.addIncludeDir(comptime thisDir() ++ "/libs/tracy");
+        exe.addCSourceFile(comptime thisDir() ++ "/libs/tracy/TracyClient.cpp", &.{
             "-DTRACY_ENABLE",
             enable_fibers,
             // MinGW doesn't have all the newfangled windows features,

@@ -12,7 +12,6 @@ pub const SystemMetadata = struct {
         value,
     };
 
-    function_type: type,
     fn_info: FnInfo,
     args: []const Arg,
 
@@ -73,7 +72,6 @@ pub const SystemMetadata = struct {
             }
         }
         return SystemMetadata{
-            .function_type = function_type,
             .fn_info = fn_info,
             .args = args[0..],
         };
@@ -271,11 +269,13 @@ fn SystemInfo(comptime system_count: comptime_int) type {
         const Self = @This();
 
         metadata: [system_count]SystemMetadata,
+        function_types: [system_count]type,
         functions: [system_count]*const anyopaque,
 
         pub fn undef() Self {
             return Self{
                 .metadata = undefined,
+                .function_types = undefined,
                 .functions = undefined,
             };
         }
@@ -294,6 +294,7 @@ pub fn systemInfo(comptime system_count: comptime_int, comptime systems: anytype
             switch (@typeInfo(field_info.field_type)) {
                 .Fn => |func| {
                     systems_info.metadata[i] = SystemMetadata.init(field_info.field_type, func);
+                    systems_info.function_types[i] = field_info.field_type;
                     systems_info.functions[i] = field_info.default_value.?;
                     i += 1;
                 },
@@ -309,6 +310,7 @@ pub fn systemInfo(comptime system_count: comptime_int, comptime systems: anytype
                                         // const err_msg = std.fmt.comptimePrint("{d}", .{func.args.len});
                                         // @compileError(err_msg);
                                         systems_info.metadata[i] = SystemMetadata.init(DeclType, func);
+                                        systems_info.function_types[i] = DeclType;
                                         systems_info.functions[i] = &function;
                                         i += 1;
                                     },
@@ -352,14 +354,12 @@ pub fn ComponentStorage(comptime types: []const type) type {
             .alignment = if (@sizeOf(T) > 0) @alignOf(ArrT) else 0,
         };
     }
-
-    const RtrTypeInfo = std.builtin.Type{ .Struct = .{
+    const RtrTypeInfo = Type{ .Struct = .{
         .layout = .Auto,
         .fields = &struct_fields,
-        .decls = &[0]std.builtin.Type.Declaration{},
+        .decls = &[0]Type.Declaration{},
         .is_tuple = true,
     } };
-
     return @Type(RtrTypeInfo);
 }
 
@@ -569,7 +569,7 @@ test "SystemMetadata queryArgTypes results in queryable types" {
     const Func1Type = @TypeOf(TestSystems.func1);
     const Func2Type = @TypeOf(TestSystems.func2);
     const Func3Type = @TypeOf(TestSystems.func3);
-    const metadatas = [3]SystemMetadata{
+    const metadatas = comptime [3]SystemMetadata{
         SystemMetadata.init(Func1Type, @typeInfo(Func1Type).Fn),
         SystemMetadata.init(Func2Type, @typeInfo(Func2Type).Fn),
         SystemMetadata.init(Func3Type, @typeInfo(Func3Type).Fn),
@@ -605,7 +605,7 @@ test "SystemMetadata paramArgTypes results in pointer types" {
     const Func1Type = @TypeOf(TestSystems.func1);
     const Func2Type = @TypeOf(TestSystems.func2);
     const Func3Type = @TypeOf(TestSystems.func3);
-    const metadatas = [3]SystemMetadata{
+    const metadatas = comptime [_]SystemMetadata{
         SystemMetadata.init(Func1Type, @typeInfo(Func1Type).Fn),
         SystemMetadata.init(Func2Type, @typeInfo(Func2Type).Fn),
         SystemMetadata.init(Func3Type, @typeInfo(Func3Type).Fn),
@@ -709,7 +709,7 @@ test "systemInfo generate accurate system information" {
     try testing.expectEqual(1, info.metadata[1].args.len);
     try testing.expectEqual(1, info.metadata[2].args.len);
 
-    const hello_ptr = @ptrCast(*const info.metadata[1].function_type, info.functions[1]);
+    const hello_ptr = @ptrCast(*const info.function_types[1], info.functions[1]);
     var a: A = .{ .a = 0 };
     hello_ptr.*(&a);
     try testing.expectEqual(a.a, 1);
@@ -799,10 +799,23 @@ test "SharedStateStorage generate suitable storage tuple" {
     const B = struct { value1: i32, value2: u8 };
     const C = struct { value: u8 };
 
-    // generate type at compile time and let the compiler verify that the type are correct
+    // generate type at compile time and let the compiler verify that the type is correct
     const Storage = SharedStateStorage(.{ A, B, C });
     var storage: Storage = undefined;
     storage[0] = A{ .value = std.math.maxInt(u64) };
     storage[1] = B{ .value1 = 2, .value2 = 2 };
     storage[2] = C{ .value = 4 };
+}
+
+test "ComponentStorage generate suitable storage tuple" {
+    const A = struct { value: u64 };
+    const B = struct { value1: i32, value2: u8 };
+    const C = struct { value: u8 };
+
+    // generate type at compile time and let the compiler verify that the type is correct
+    const Storage = ComponentStorage(&[_]type{ A, B, C });
+    var storage: Storage = undefined;
+    storage[0] = std.ArrayList(A).init(testing.allocator);
+    storage[1] = std.ArrayList(B).init(testing.allocator);
+    storage[2] = std.ArrayList(C).init(testing.allocator);
 }

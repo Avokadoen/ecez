@@ -111,6 +111,6 @@ test "sortTypes() sorts" {
     const sorted_types2 = comptime sortTypes(&types2);
 
     inline for (sorted_types1) |T, i| {
-        try testing.expectEqual(@typeName(T), @typeName(sorted_types2[i]));
+        try testing.expect(T == sorted_types2[i]);
     }
 }
