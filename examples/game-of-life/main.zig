@@ -11,10 +11,6 @@ const grid_dimensions = 30;
 const cell_count = grid_dimensions * grid_dimensions;
 const new_lines = grid_dimensions;
 
-// Currently we have to "cheat" a bit by storing some global state
-// add one character extra per line for newline
-var output_buffer: [cell_count * characters_per_cell + new_lines]u8 = undefined;
-
 pub fn main() anyerror!void {
     ztracy.SetThreadName("main thread");
 
@@ -28,6 +24,11 @@ pub fn main() anyerror!void {
     // optionally profile memory usage with tracy
     const allocator = ecez.tracy_alloc.TracyAllocator(std.heap.ArenaAllocator).init(aa).allocator();
 
+    // initialize the output buffer on the stack
+    const render_target = RenderTarget{
+        .output_buffer = undefined,
+    };
+
     var world = try ecez.WorldBuilder().WithArchetypes(.{
         Cell,
         Flush,
@@ -39,7 +40,9 @@ pub fn main() anyerror!void {
         NewLine.render,
         Flush,
         Cell.tick,
-    }).init(allocator, .{});
+    }).WithSharedState(.{
+        RenderTarget,
+    }).init(allocator, .{render_target});
     defer world.deinit();
 
     var rng = std.rand.DefaultPrng.init(@intCast(u64, std.time.timestamp()));
@@ -84,6 +87,11 @@ pub fn main() anyerror!void {
     }
 }
 
+// Shared state render target
+const RenderTarget = struct {
+    output_buffer: [cell_count * characters_per_cell + new_lines]u8,
+};
+
 // Cell components
 const GridPos = struct {
     x: u8,
@@ -99,7 +107,7 @@ const Cell = struct {
     health: Health,
 
     // systems must work on components (not archetypes)
-    pub fn render(pos: GridPos, health: Health) void {
+    pub fn render(pos: GridPos, health: Health, render_target: *ecez.SharedState(RenderTarget)) void {
         const zone = ztracy.ZoneNC(@src(), "Render Cell", Color.Light.red);
         defer zone.End();
 
@@ -112,17 +120,17 @@ const Cell = struct {
         if (health.alive) {
             const output = "[X]";
             inline for (output) |o, i| {
-                output_buffer[start + i] = o;
+                render_target.output_buffer[start + i] = o;
             }
         } else {
             const output = "[ ]";
             inline for (output) |o, i| {
-                output_buffer[start + i] = o;
+                render_target.output_buffer[start + i] = o;
             }
         }
     }
 
-    pub fn tick(pos: GridPos, health: *Health) void {
+    pub fn tick(pos: GridPos, health: *Health, render_target: ecez.SharedState(RenderTarget)) void {
         const zone = ztracy.ZoneNC(@src(), "Update Cell", Color.Light.red);
         defer zone.End();
 
@@ -142,8 +150,8 @@ const Cell = struct {
         var neighbour_sum: u8 = 0;
         for ([_]i32{ left, up, right, right, down, down, left, left }) |delta| {
             index += delta;
-            if (index > 0 and index < output_buffer.len) {
-                if (output_buffer[@intCast(usize, index)] == 'X') {
+            if (index > 0 and index < render_target.output_buffer.len) {
+                if (render_target.output_buffer[@intCast(usize, index)] == 'X') {
                     neighbour_sum += 1;
                 }
             }
@@ -165,12 +173,12 @@ const FlushTag = struct {};
 const Flush = struct {
     tag: FlushTag = .{},
 
-    pub fn buffer(flush: FlushTag) void {
+    pub fn buffer(flush: FlushTag, render_target: ecez.SharedState(RenderTarget)) void {
         const zone = ztracy.ZoneNC(@src(), "Flush buffer", Color.Light.turquoise);
         defer zone.End();
 
         _ = flush;
-        std.debug.print("{s}\n", .{output_buffer});
+        std.debug.print("{s}\n", .{render_target.output_buffer});
         std.debug.print("-" ** (grid_dimensions * characters_per_cell) ++ "\n", .{});
     }
 };
@@ -183,11 +191,11 @@ const LinePos = struct {
 const NewLine = struct {
     pos: LinePos,
 
-    pub fn render(pos: LinePos) void {
+    pub fn render(pos: LinePos, render_target: *ecez.SharedState(RenderTarget)) void {
         const zone = ztracy.ZoneNC(@src(), "Render newline", Color.Light.turquoise);
         defer zone.End();
         const nth = @intCast(usize, pos.nth);
 
-        output_buffer[nth * grid_dimensions * characters_per_cell + nth - 1] = '\n';
+        render_target.output_buffer[nth * grid_dimensions * characters_per_cell + nth - 1] = '\n';
     }
 };

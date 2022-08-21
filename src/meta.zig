@@ -1,18 +1,23 @@
 const std = @import("std");
 const FnInfo = std.builtin.Type.Fn;
+const Type = std.builtin.Type;
 
 const testing = std.testing;
 
 pub const secret_field = "magic_secret_sauce";
+pub const shared_secret_field = "shared_magic_secret_sauce";
 pub const event_magic = 0xaa_bb_cc;
 
 pub const SystemMetadata = struct {
     pub const Arg = enum {
-        ptr,
-        value,
+        component_ptr,
+        component_value,
+        shared_state_ptr,
+        shared_state_value,
     };
 
     fn_info: FnInfo,
+    component_args_count: usize,
     args: []const Arg,
 
     /// initalize metadata for a system using a supplied function type info
@@ -40,39 +45,91 @@ pub const SystemMetadata = struct {
             }
         }
 
+        const ParsingState = enum {
+            component_parsing,
+            shared_state_parsing,
+        };
+
+        var component_args_count: usize = 0;
+        var parsing_state = ParsingState.component_parsing;
         var args: [fn_info.args.len]Arg = undefined;
         inline for (fn_info.args) |arg, i| {
-            if (arg.arg_type) |T| {
-                switch (@typeInfo(T)) {
-                    .Pointer => |pointer| {
-                        if (@typeInfo(pointer.child) != .Struct) {
-                            const err_msg = std.fmt.comptimePrint("system {s} argument {d} must point to a component struct", .{
+            const T = arg.arg_type orelse {
+                const err_msg = std.fmt.comptimePrint("system {s} argument {d} is missing type", .{
+                    function_name,
+                    i,
+                });
+                @compileError(err_msg);
+            };
+
+            // TODO: refactor this beast
+            switch (@typeInfo(T)) {
+                .Pointer => |pointer| {
+                    // we enforce struct arguments because it is easier to identify requested data while
+                    // mainting type safety
+                    if (@typeInfo(pointer.child) != .Struct) {
+                        const err_msg = std.fmt.comptimePrint("system {s} argument {d} must point to a struct", .{
+                            function_name,
+                            i,
+                        });
+                        @compileError(err_msg);
+                    }
+
+                    if (parsing_state == .component_parsing) {
+                        // if argument is a shared state argument
+                        if (@hasField(pointer.child, shared_secret_field)) {
+                            parsing_state = .shared_state_parsing;
+                            args[i] = Arg.shared_state_ptr;
+                        } else {
+                            component_args_count = i + 1;
+                            args[i] = Arg.component_ptr;
+                        }
+                    } else {
+                        // if argument is a shared state argument
+                        if (!@hasField(pointer.child, shared_secret_field)) {
+                            const err_msg = std.fmt.comptimePrint("system {s} argument {d} is not a shared state argument but comes after one", .{
                                 function_name,
                                 i,
                             });
                             @compileError(err_msg);
                         }
-                        args[i] = Arg.ptr;
-                    },
-                    .Struct => args[i] = Arg.value,
-                    else => {
-                        const err_msg = std.fmt.comptimePrint("system {s} argument {d} is not a component struct", .{
-                            function_name,
-                            i,
-                        });
-                        @compileError(err_msg);
-                    },
-                }
-            } else {
-                const err_msg = std.fmt.comptimePrint("system {s} argument {d} is missing component type", .{
-                    function_name,
-                    i,
-                });
-                @compileError(err_msg);
+                        args[i] = Arg.shared_state_ptr;
+                    }
+                },
+                .Struct => {
+                    if (parsing_state == .component_parsing) {
+                        // if argument is a shared state argument
+                        if (@hasField(T, shared_secret_field)) {
+                            parsing_state = .shared_state_parsing;
+                            args[i] = Arg.shared_state_value;
+                        } else {
+                            component_args_count = i + 1;
+                            args[i] = Arg.component_value;
+                        }
+                    } else {
+                        // if argument is a shared state argument
+                        if (!@hasField(T, shared_secret_field)) {
+                            const err_msg = std.fmt.comptimePrint("system {s} argument {d} is not a shared state argument but comes after one", .{
+                                function_name,
+                                i,
+                            });
+                            @compileError(err_msg);
+                        }
+                        args[i] = Arg.shared_state_value;
+                    }
+                },
+                else => {
+                    const err_msg = std.fmt.comptimePrint("system {s} argument {d} is not a struct", .{
+                        function_name,
+                        i,
+                    });
+                    @compileError(err_msg);
+                },
             }
         }
         return SystemMetadata{
             .fn_info = fn_info,
+            .component_args_count = component_args_count,
             .args = args[0..],
         };
     }
@@ -90,9 +147,13 @@ pub const SystemMetadata = struct {
 
     /// Get the argument types as proper component types
     /// This function will extrapolate interior types from pointers
-    pub fn queryArgTypes(comptime self: SystemMetadata) [self.args.len]type {
-        comptime var args: [self.fn_info.args.len]type = undefined;
+    pub fn componentQueryArgTypes(comptime self: SystemMetadata) [self.component_args_count]type {
+        comptime var args: [self.component_args_count]type = undefined;
         inline for (self.fn_info.args) |arg, i| {
+            if (self.component_args_count == i) {
+                break;
+            }
+
             switch (@typeInfo(arg.arg_type.?)) {
                 .Pointer => |p| {
                     args[i] = p.child;
@@ -160,12 +221,11 @@ pub fn countAndVerifyEvents(comptime events: anytype) comptime_int {
             .Type => {
                 switch (@typeInfo(events[i])) {
                     .Struct => {
-                        const Type = events[i];
                         const error_msg = "invalid event type, use ecez.Event() to generate event type";
-                        if (@hasDecl(Type, secret_field) == false) {
+                        if (@hasDecl(events[i], secret_field) == false) {
                             @compileError(error_msg);
                         }
-                        if (@field(Type, secret_field) != event_magic) {
+                        if (@field(events[i], secret_field) != event_magic) {
                             @compileError(error_msg);
                         }
                         event_count += 1;
@@ -190,25 +250,23 @@ pub fn countAndVerifyEvents(comptime events: anytype) comptime_int {
 }
 
 pub fn GenerateEventsEnum(comptime event_count: comptime_int, events: anytype) type {
-    const EnumField = std.builtin.Type.EnumField;
-
     const EventsType = @TypeOf(events);
     const events_type_info = @typeInfo(EventsType);
     const fields_info = events_type_info.Struct.fields;
 
-    var enum_fields: [event_count]EnumField = undefined;
+    var enum_fields: [event_count]Type.EnumField = undefined;
     inline for (fields_info) |_, i| {
-        enum_fields[i] = EnumField{
+        enum_fields[i] = Type.EnumField{
             .name = events[i].name,
             .value = i,
         };
     }
 
-    const event_enum_info = std.builtin.Type{ .Enum = .{
+    const event_enum_info = Type{ .Enum = .{
         .layout = .Auto,
         .tag_type = usize,
         .fields = &enum_fields,
-        .decls = &[0]std.builtin.Type.Declaration{},
+        .decls = &[0]Type.Declaration{},
         .is_exhaustive = true,
     } };
 
@@ -340,8 +398,6 @@ pub fn systemInfo(comptime system_count: comptime_int, comptime systems: anytype
 
 /// Generate an archetype's SOA component storage
 pub fn ComponentStorage(comptime types: []const type) type {
-    const Type = std.builtin.Type;
-
     var struct_fields: [types.len]Type.StructField = undefined;
     inline for (types) |T, i| {
         const ArrT = std.ArrayList(T);
@@ -421,7 +477,7 @@ pub fn indexOfStructuresContainingTs(
     return indices;
 }
 
-pub fn countTypeMapIndices(comptime type_tuple: anytype, runtime_struct: anytype) comptime_int {
+pub fn countTypeMapIndices(comptime type_tuple: anytype, runtime_tuple_type: type) comptime_int {
     const type_tuple_info = blk: {
         const info = @typeInfo(@TypeOf(type_tuple));
         if (info != .Struct) {
@@ -431,7 +487,7 @@ pub fn countTypeMapIndices(comptime type_tuple: anytype, runtime_struct: anytype
     };
 
     const runtime_struct_info = blk: {
-        const info = @typeInfo(@TypeOf(runtime_struct));
+        const info = @typeInfo(runtime_tuple_type);
         if (info != .Struct) {
             @compileError("expected runtime struct to be a struct");
         }
@@ -454,13 +510,13 @@ pub fn countTypeMapIndices(comptime type_tuple: anytype, runtime_struct: anytype
     return counter;
 }
 
-pub fn typeMap(comptime type_tuple: anytype, runtime_struct: anytype) blk: {
-    const rtr_array_size = countTypeMapIndices(type_tuple, runtime_struct);
+pub fn typeMap(comptime type_tuple: anytype, runtime_tuple_type: type) blk: {
+    const rtr_array_size = countTypeMapIndices(type_tuple, runtime_tuple_type);
     break :blk [rtr_array_size]comptime_int;
 } {
     const type_tuple_info = @typeInfo(@TypeOf(type_tuple)).Struct;
-    const runtime_struct_info = @typeInfo(@TypeOf(runtime_struct)).Struct;
-    const rtr_array_size = countTypeMapIndices(type_tuple, runtime_struct);
+    const runtime_struct_info = @typeInfo(runtime_tuple_type).Struct;
+    const rtr_array_size = countTypeMapIndices(type_tuple, runtime_tuple_type);
 
     var map: [rtr_array_size]comptime_int = undefined;
     inline for (type_tuple_info.fields) |_, i| {
@@ -474,8 +530,6 @@ pub fn typeMap(comptime type_tuple: anytype, runtime_struct: anytype) blk: {
 }
 
 pub fn SharedStateStorage(comptime shared_state: anytype) type {
-    const Type = std.builtin.Type;
-
     const shared_info = blk: {
         const info = @typeInfo(@TypeOf(shared_state));
         if (info != .Struct) {
@@ -487,6 +541,7 @@ pub fn SharedStateStorage(comptime shared_state: anytype) type {
     // var used_types: [shared_info.fields.len]type = undefined;
     var storage_fields: [shared_info.fields.len]Type.StructField = undefined;
     inline for (shared_info.fields) |field, i| {
+        // // TODO: uncomment this when it does not crash compiler :)
         // for (used_types[0..i]) |used_type| {
         //     if (used_type == shared_state[i]) {
         //         @compileError("duplicate types are not allowed in shared state");
@@ -499,13 +554,13 @@ pub fn SharedStateStorage(comptime shared_state: anytype) type {
         if (@typeInfo(field.field_type) != .Type) {
             @compileError("expected shared state field " ++ str_i ++ " to be a type, was " ++ @typeName(shared_state[i]));
         }
-
+        const ActualStoredSharedState = SharedState(shared_state[i]);
         storage_fields[i] = Type.StructField{
             .name = str_i,
-            .field_type = shared_state[i],
+            .field_type = ActualStoredSharedState,
             .default_value = null,
             .is_comptime = false,
-            .alignment = @alignOf(shared_state[i]),
+            .alignment = @alignOf(ActualStoredSharedState),
         };
         // used_types[i] = shared_state[i];
     }
@@ -515,6 +570,35 @@ pub fn SharedStateStorage(comptime shared_state: anytype) type {
         .fields = &storage_fields,
         .decls = &[0]Type.Declaration{},
         .is_tuple = true,
+    } });
+}
+
+/// This function will generate a type that is sufficient to mark a parameter as a shared state type
+pub fn SharedState(comptime State: type) type {
+    const state_info = blk: {
+        const info = @typeInfo(State);
+        if (info != .Struct) {
+            @compileError("shared state must be of type struct");
+        }
+        break :blk info.Struct;
+    };
+
+    var shared_state_fields: [state_info.fields.len + 1]Type.StructField = undefined;
+    shared_state_fields[0] = Type.StructField{
+        .name = shared_secret_field,
+        .field_type = u8,
+        .default_value = null,
+        .is_comptime = false,
+        .alignment = @alignOf(u8),
+    };
+    inline for (state_info.fields) |field, i| {
+        shared_state_fields[i + 1] = field;
+    }
+    return @Type(Type{ .Struct = .{
+        .layout = state_info.layout,
+        .fields = &shared_state_fields,
+        .decls = state_info.decls,
+        .is_tuple = state_info.is_tuple,
     } });
 }
 
@@ -548,7 +632,7 @@ test "SystemMetadata errorSet return error set with failable functions" {
     try testing.expectEqual(TestErrorSet, metadata.errorSet().?);
 }
 
-test "SystemMetadata queryArgTypes results in queryable types" {
+test "SystemMetadata componentQueryArgTypes results in queryable types" {
     const A = struct {};
     const B = struct {};
     const TestSystems = struct {
@@ -576,7 +660,7 @@ test "SystemMetadata queryArgTypes results in queryable types" {
     };
 
     inline for (metadatas) |metadata| {
-        const args = metadata.queryArgTypes();
+        const args = metadata.componentQueryArgTypes();
 
         try testing.expectEqual(args.len, 2);
         try testing.expectEqual(A, args[0]);
@@ -778,7 +862,7 @@ test "countTypeMapIndices count expected amount" {
     const B = struct {};
     const C = struct {};
 
-    const type_counter = countTypeMapIndices(.{ A, B, C }, .{ C{}, B{}, A{} });
+    const type_counter = countTypeMapIndices(.{ A, B, C }, @TypeOf(.{ C{}, B{}, A{} }));
     try testing.expectEqual(3, type_counter);
 }
 
@@ -787,7 +871,7 @@ test "typeMap maps a type tuple to a value tuple" {
     const B = struct {};
     const C = struct {};
 
-    const type_map = typeMap(.{ A, B, C }, .{ C{}, B{}, A{} });
+    const type_map = typeMap(.{ A, B, C }, @TypeOf(.{ C{}, B{}, A{} }));
     try testing.expectEqual(3, type_map.len);
     try testing.expectEqual(2, type_map[0]);
     try testing.expectEqual(1, type_map[1]);
@@ -802,9 +886,10 @@ test "SharedStateStorage generate suitable storage tuple" {
     // generate type at compile time and let the compiler verify that the type is correct
     const Storage = SharedStateStorage(.{ A, B, C });
     var storage: Storage = undefined;
-    storage[0] = A{ .value = std.math.maxInt(u64) };
-    storage[1] = B{ .value1 = 2, .value2 = 2 };
-    storage[2] = C{ .value = 4 };
+    storage[0].value = std.math.maxInt(u64);
+    storage[1].value1 = 2;
+    storage[1].value1 = 2;
+    storage[2].value = 4;
 }
 
 test "ComponentStorage generate suitable storage tuple" {

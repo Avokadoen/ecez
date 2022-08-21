@@ -22,6 +22,9 @@ const Testing = @import("Testing.zig");
 ///     - systems: the systems that should be dispatched if this event is triggered
 pub const Event = meta.Event;
 
+/// Mark system arguments as shared state
+pub const SharedState = meta.SharedState;
+
 /// Create a ecs instance by gradually defining application types, systems and events.
 pub fn WorldBuilder() type {
     return WorldIntermediate(.{}, .{}, .{}, .{});
@@ -85,7 +88,7 @@ fn CreateWorld(
         break :blk archetype_container.FromArchetypes(&archetype_types);
     };
 
-    const SharedState = meta.SharedStateStorage(shared_state_types);
+    const SharedStateStorage = meta.SharedStateStorage(shared_state_types);
 
     const system_count = meta.countAndVerifySystems(systems);
     const systems_info = meta.systemInfo(system_count, systems);
@@ -96,7 +99,7 @@ fn CreateWorld(
 
         pub const EventsEnum = meta.GenerateEventsEnum(event_count, events);
         container: Container,
-        shared_state: SharedState,
+        shared_state: SharedStateStorage,
 
         /// intialize the world structure
         /// Parameters:
@@ -106,10 +109,14 @@ fn CreateWorld(
             const zone = ztracy.ZoneNC(@src(), "World init", Color.world);
             defer zone.End();
 
-            var actual_shared_state: SharedState = undefined;
-            const shared_state_map = meta.typeMap(shared_state_types, shared_state);
+            var actual_shared_state: SharedStateStorage = undefined;
+            const shared_state_map = meta.typeMap(shared_state_types, @TypeOf(shared_state));
             inline for (shared_state_map) |index, i| {
-                actual_shared_state[i] = shared_state[index];
+                const shared_info = @typeInfo(@TypeOf(shared_state[index]));
+                // copy all data except the added magic field
+                inline for (shared_info.Struct.fields) |field| {
+                    @field(actual_shared_state[i], field.name) = @field(shared_state[index], field.name);
+                }
             }
 
             const container = try Container.init(allocator);
@@ -185,34 +192,39 @@ fn CreateWorld(
             defer zone.End();
 
             inline for (systems_info.metadata) |metadata, system_index| {
-                const query_types = comptime metadata.queryArgTypes();
+                const component_query_types = comptime metadata.componentQueryArgTypes();
                 const param_types = comptime metadata.paramArgTypes();
 
                 // extract data relative to system for each relevant archetype
-                const archetypes_system_data = self.container.getTypeSubsets(&query_types);
+                const archetypes_system_data = self.container.getTypeSubsets(&component_query_types);
                 for (archetypes_system_data) |archetype_system_data| {
                     var i: usize = 0;
                     while (i < archetype_system_data.len) : (i += 1) {
-                        var component: std.meta.Tuple(&param_types) = undefined;
+                        var arguments: std.meta.Tuple(&param_types) = undefined;
                         inline for (param_types) |Param, j| {
+                            // TODO: FIXME: checking size of pointers is not valid ...
                             if (@sizeOf(Param) > 0) {
                                 switch (metadata.args[j]) {
-                                    .value => component[j] = archetype_system_data.storage[j].items[i],
-                                    .ptr => component[j] = &archetype_system_data.storage[j].items[i],
+                                    .component_value => arguments[j] = archetype_system_data.storage[j].items[i],
+                                    .component_ptr => arguments[j] = &archetype_system_data.storage[j].items[i],
+                                    .shared_state_value => arguments[j] = self.getSharedState(Param),
+                                    .shared_state_ptr => arguments[j] = self.getSharedStatePtr(Param),
                                 }
                             } else {
                                 switch (metadata.args[j]) {
-                                    .value => component[j] = Param{},
-                                    .ptr => component[j] = &Param{},
+                                    .component_value => arguments[j] = Param{},
+                                    .component_ptr => arguments[j] = &Param{},
+                                    .shared_state_value => @compileError("requested shared state value with zero size is not allowed"),
+                                    .shared_state_ptr => @compileError("requested shared state ptr with zero size is not allowed"),
                                 }
                             }
                         }
                         const system_ptr = @ptrCast(*const systems_info.function_types[system_index], systems_info.functions[system_index]);
                         // call either a failable system, or a normal void system
                         if (comptime metadata.canReturnError()) {
-                            try failableCallWrapper(system_ptr.*, component);
+                            try failableCallWrapper(system_ptr.*, arguments);
                         } else {
-                            callWrapper(system_ptr.*, component);
+                            callWrapper(system_ptr.*, arguments);
                         }
                     }
                 }
@@ -227,25 +239,30 @@ fn CreateWorld(
             const e = events[@enumToInt(event)];
 
             inline for (e.systems_info.metadata) |metadata, system_index| {
-                const query_types = comptime metadata.queryArgTypes();
+                const component_query_types = comptime metadata.componentQueryArgTypes();
                 const param_types = comptime metadata.paramArgTypes();
 
                 // extract data relative to system for each relevant archetype
-                const archetypes_system_data = self.container.getTypeSubsets(&query_types);
+                const archetypes_system_data = self.container.getTypeSubsets(&component_query_types);
                 for (archetypes_system_data) |archetype_system_data| {
                     var i: usize = 0;
                     while (i < archetype_system_data.len) : (i += 1) {
-                        var component: std.meta.Tuple(&param_types) = undefined;
+                        var arguments: std.meta.Tuple(&param_types) = undefined;
                         inline for (param_types) |Param, j| {
+                            // TODO: FIXME: checking size of pointers is not valid ...
                             if (@sizeOf(Param) > 0) {
                                 switch (metadata.args[j]) {
-                                    .value => component[j] = archetype_system_data.storage[j].items[i],
-                                    .ptr => component[j] = &archetype_system_data.storage[j].items[i],
+                                    .component_value => arguments[j] = archetype_system_data.storage[j].items[i],
+                                    .component_ptr => arguments[j] = &archetype_system_data.storage[j].items[i],
+                                    .shared_state_value => arguments[j] = self.getSharedState(Param),
+                                    .shared_state_ptr => arguments[j] = self.getSharedStatePtr(Param),
                                 }
                             } else {
                                 switch (metadata.args[j]) {
-                                    .value => component[j] = Param{},
-                                    .ptr => component[j] = &Param{},
+                                    .component_value => arguments[j] = Param{},
+                                    .component_ptr => arguments[j] = &Param{},
+                                    .shared_state_value => @compileError("requested shared state value with zero size is not allowed"),
+                                    .shared_state_ptr => @compileError("requested shared state ptr with zero size is not allowed"),
                                 }
                             }
                         }
@@ -253,13 +270,50 @@ fn CreateWorld(
                         const system_ptr = @ptrCast(*const e.systems_info.function_types[system_index], e.systems_info.functions[system_index]);
                         // call either a failable system, or a normal void system
                         if (comptime metadata.canReturnError()) {
-                            try failableCallWrapper(system_ptr.*, component);
+                            try failableCallWrapper(system_ptr.*, arguments);
                         } else {
-                            callWrapper(system_ptr.*, component);
+                            callWrapper(system_ptr.*, arguments);
                         }
                     }
                 }
             }
+        }
+
+        /// given a shared state type T retrieve it's current value
+        pub fn getSharedState(self: World, comptime T: type) T {
+            const index = indexOfSharedType(T);
+            return self.shared_state[index];
+        }
+
+        /// given a shared state type T retrieve it's pointer
+        pub fn getSharedStatePtr(self: *World, comptime PtrT: type) PtrT {
+            // figure out which type we are looking for in the storage
+            const QueryT = blk: {
+                const info = @typeInfo(PtrT);
+                if (info != .Pointer) {
+                    @compileError("PtrT '" ++ @typeName(PtrT) ++ "' is not a pointer type, this is a ecez bug. please file an issue!");
+                }
+                const ptr_info = info.Pointer;
+
+                const child_info = @typeInfo(ptr_info.child);
+                if (child_info != .Struct) {
+                    @compileError("PtrT child '" ++ @typeName(ptr_info.child) ++ " is not a struct type, this is a ecez bug. please file an issue!");
+                }
+                break :blk ptr_info.child;
+            };
+
+            const index = indexOfSharedType(QueryT);
+            return &self.shared_state[index];
+        }
+
+        fn indexOfSharedType(comptime Shared: type) comptime_int {
+            const shared_storage_fields = @typeInfo(SharedStateStorage).Struct.fields;
+            inline for (shared_storage_fields) |field, i| {
+                if (field.field_type == Shared) {
+                    return i;
+                }
+            }
+            @compileError(@typeName(Shared) ++ " is not a shared state");
         }
     };
 }
@@ -357,7 +411,7 @@ test "getComponent() retrieve component value" {
 test "systems can fail" {
     const SystemStruct = struct {
         pub fn aSystem(a: Testing.Component.A) !void {
-            try testing.expectEqual(a, .{ .value = 42 });
+            try testing.expectEqual(Testing.Component.A{ .value = 42 }, a);
         }
 
         pub fn bSystem(b: Testing.Component.B) !void {
@@ -378,7 +432,7 @@ test "systems can fail" {
     try testing.expectError(error.SomethingWentVeryWrong, world.dispatch());
 }
 
-test "systems can mutate values" {
+test "systems can mutate components" {
     const SystemStruct = struct {
         pub fn mutateStuff(a: *Testing.Component.A, b: Testing.Component.B) void {
             a.value += @intCast(u32, b.value);
@@ -401,6 +455,135 @@ test "systems can mutate values" {
         Testing.Component.A{ .value = 3 },
         try world.getComponent(entity, Testing.Component.A),
     );
+}
+
+test "systems can access shared state" {
+    const A = struct {
+        value: u8,
+    };
+
+    const SystemStruct = struct {
+        pub fn aSystem(a: Testing.Component.A, shared: SharedState(A)) !void {
+            _ = a;
+            try testing.expectEqual(@as(u8, 8), shared.value);
+        }
+
+        pub fn bSystem(a: Testing.Component.A, b: Testing.Component.B, shared: SharedState(A)) !void {
+            _ = a;
+            _ = b;
+            if (shared.value == 8) {
+                return error.EightIsGreat;
+            }
+        }
+    };
+
+    var world = try WorldStub.WithSystems(.{
+        SystemStruct,
+    }).WithSharedState(.{
+        A,
+    }).init(testing.allocator, .{
+        A{ .value = 8 },
+    });
+    defer world.deinit();
+
+    _ = try world.createEntity(Testing.Archetype.AB{});
+
+    try testing.expectError(error.EightIsGreat, world.dispatch());
+}
+
+test "systems can mutate shared state" {
+    const A = struct {
+        value: u8,
+    };
+    const SystemStruct = struct {
+        pub fn func(a: Testing.Component.A, shared: *SharedState(A)) !void {
+            _ = a;
+            shared.value += 1;
+        }
+
+        pub fn bSystem(a: Testing.Component.A, b: Testing.Component.B, shared: *SharedState(A)) !void {
+            _ = a;
+            _ = b;
+            shared.value += 1;
+        }
+    };
+
+    var world = try WorldStub.WithSystems(.{
+        SystemStruct,
+    }).WithSharedState(.{
+        A,
+    }).init(testing.allocator, .{
+        A{ .value = 0 },
+    });
+    defer world.deinit();
+
+    _ = try world.createEntity(Testing.Archetype.AB{});
+    try world.dispatch();
+
+    try testing.expectEqual(@as(u8, 2), world.shared_state[0].value);
+}
+
+test "systems can have many shared state" {
+    const A = struct {
+        value: u8,
+    };
+    const B = struct {
+        value: u8,
+    };
+    const C = struct {
+        value: u8,
+    };
+
+    const SystemStruct = struct {
+        pub fn system1(a: Testing.Component.A, shared: SharedState(A)) !void {
+            _ = a;
+            try testing.expectEqual(@as(u8, 0), shared.value);
+        }
+
+        pub fn system2(a: Testing.Component.A, shared: SharedState(B)) !void {
+            _ = a;
+            try testing.expectEqual(@as(u8, 1), shared.value);
+        }
+
+        pub fn system3(a: Testing.Component.A, shared: SharedState(C)) !void {
+            _ = a;
+            try testing.expectEqual(@as(u8, 2), shared.value);
+        }
+
+        pub fn system4(a: Testing.Component.A, shared_a: SharedState(A), shared_b: SharedState(B)) !void {
+            _ = a;
+            try testing.expectEqual(@as(u8, 0), shared_a.value);
+            try testing.expectEqual(@as(u8, 1), shared_b.value);
+        }
+
+        pub fn system5(a: Testing.Component.A, shared_b: SharedState(B), shared_a: SharedState(A)) !void {
+            _ = a;
+            try testing.expectEqual(@as(u8, 0), shared_a.value);
+            try testing.expectEqual(@as(u8, 1), shared_b.value);
+        }
+
+        pub fn system6(a: Testing.Component.A, shared_c: SharedState(C), shared_b: SharedState(B), shared_a: SharedState(A)) !void {
+            _ = a;
+            try testing.expectEqual(@as(u8, 0), shared_a.value);
+            try testing.expectEqual(@as(u8, 1), shared_b.value);
+            try testing.expectEqual(@as(u8, 2), shared_c.value);
+        }
+    };
+
+    var world = try WorldStub.WithSystems(.{
+        SystemStruct,
+    }).WithSharedState(.{
+        A, B, C,
+    }).init(testing.allocator, .{
+        A{ .value = 0 },
+        B{ .value = 1 },
+        C{ .value = 2 },
+    });
+    defer world.deinit();
+
+    _ = try world.createEntity(Testing.Archetype.A{});
+
+    try world.dispatch();
 }
 
 test "systems can be registered through struct or individual function(s)" {
@@ -522,4 +705,53 @@ test "events call propagate error" {
     _ = try world.createEntity(Testing.Archetype.A{});
 
     try testing.expectError(error.Spooky, world.triggerEvent(.onFoo));
+}
+
+test "events can access shared state" {
+    const A = struct { value: u8 };
+    // define a system type
+    const SystemType = struct {
+        pub fn systemOne(a: Testing.Component.A, shared: SharedState(A)) !void {
+            _ = a;
+            if (shared.value == 42) {
+                return error.Ok;
+            }
+        }
+    };
+
+    var world = try WorldStub.WithEvents(.{
+        Event("onFoo", .{SystemType}),
+    }).WithSharedState(.{
+        A,
+    }).init(testing.allocator, .{A{ .value = 42 }});
+
+    defer world.deinit();
+
+    _ = try world.createEntity(Testing.Archetype.A{});
+
+    try testing.expectError(error.Ok, world.triggerEvent(.onFoo));
+}
+
+test "events can mutate shared state" {
+    const A = struct { value: u8 };
+    // define a system type
+    const SystemType = struct {
+        pub fn systemOne(a: Testing.Component.A, shared: *SharedState(A)) void {
+            _ = a;
+            shared.value = 2;
+        }
+    };
+
+    var world = try WorldStub.WithEvents(.{
+        Event("onFoo", .{SystemType}),
+    }).WithSharedState(.{
+        A,
+    }).init(testing.allocator, .{A{ .value = 1 }});
+
+    defer world.deinit();
+
+    _ = try world.createEntity(Testing.Archetype.A{});
+
+    try world.triggerEvent(.onFoo);
+    try testing.expectEqual(@as(u8, 2), world.shared_state[0].value);
 }
