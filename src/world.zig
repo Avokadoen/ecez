@@ -24,6 +24,7 @@ pub const Event = meta.Event;
 
 /// Mark system arguments as shared state
 pub const SharedState = meta.SharedState;
+pub const EventArgument = meta.EventArgument;
 
 /// Create a ecs instance by gradually defining application types, systems and events.
 pub fn WorldBuilder() type {
@@ -207,15 +208,16 @@ fn CreateWorld(
                                 switch (metadata.args[j]) {
                                     .component_value => arguments[j] = archetype_system_data.storage[j].items[i],
                                     .component_ptr => arguments[j] = &archetype_system_data.storage[j].items[i],
-                                    .shared_state_value => arguments[j] = self.getSharedState(Param),
-                                    .shared_state_ptr => arguments[j] = self.getSharedStatePtr(Param),
+                                    .event_argument_ptr, .event_argument_value => @compileError("event arguments are illegal for dispatch systems"),
+                                    .shared_state_value => arguments[j] = self.getSharedStateWithSharedStateType(Param),
+                                    .shared_state_ptr => arguments[j] = self.getSharedStatePtrWithSharedStateType(Param),
                                 }
                             } else {
                                 switch (metadata.args[j]) {
                                     .component_value => arguments[j] = Param{},
                                     .component_ptr => arguments[j] = &Param{},
-                                    .shared_state_value => @compileError("requested shared state value with zero size is not allowed"),
-                                    .shared_state_ptr => @compileError("requested shared state ptr with zero size is not allowed"),
+                                    .event_argument_value, .event_argument_ptr => @compileError("requesting event argument with zero size is not allowed"),
+                                    .shared_state_value, .shared_state_ptr => @compileError("requesting shared state with zero size is not allowed"),
                                 }
                             }
                         }
@@ -231,12 +233,25 @@ fn CreateWorld(
             }
         }
 
-        fn triggerEvent(self: *World, comptime event: EventsEnum) !void {
+        fn triggerEvent(self: *World, comptime event: EventsEnum, event_extra_argument: anytype) !void {
             const tracy_zone_name = std.fmt.comptimePrint("World trigger {any}", .{event});
             const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.world);
             defer zone.End();
 
             const e = events[@enumToInt(event)];
+
+            // TODO: verify systems and arguments in type initialization
+            const EventExtraArgument = @TypeOf(event_extra_argument);
+            if (@sizeOf(e.EventArgument) > 0) {
+                if (comptime meta.isEventArgument(EventExtraArgument)) {
+                    @compileError("event arguments should not be wrapped in EventArgument type when triggering an event");
+                }
+                if (EventExtraArgument != e.EventArgument) {
+                    @compileError("event " ++ @tagName(event) ++ " was declared to accept " ++ @typeName(e.EventArgument) ++ " got " ++ @typeName(EventExtraArgument));
+                }
+            }
+
+            const TargetEventArg = meta.EventArgument(EventExtraArgument);
 
             inline for (e.systems_info.metadata) |metadata, system_index| {
                 const component_query_types = comptime metadata.componentQueryArgTypes();
@@ -254,15 +269,18 @@ fn CreateWorld(
                                 switch (metadata.args[j]) {
                                     .component_value => arguments[j] = archetype_system_data.storage[j].items[i],
                                     .component_ptr => arguments[j] = &archetype_system_data.storage[j].items[i],
-                                    .shared_state_value => arguments[j] = self.getSharedState(Param),
-                                    .shared_state_ptr => arguments[j] = self.getSharedStatePtr(Param),
+                                    .event_argument_value => arguments[j] = @bitCast(TargetEventArg, event_extra_argument),
+                                    .event_argument_ptr => arguments[j] = @ptrCast(*TargetEventArg, &event_extra_argument),
+                                    .shared_state_value => arguments[j] = self.getSharedStateWithSharedStateType(Param),
+                                    .shared_state_ptr => arguments[j] = self.getSharedStatePtrWithSharedStateType(Param),
                                 }
                             } else {
                                 switch (metadata.args[j]) {
                                     .component_value => arguments[j] = Param{},
                                     .component_ptr => arguments[j] = &Param{},
-                                    .shared_state_value => @compileError("requested shared state value with zero size is not allowed"),
-                                    .shared_state_ptr => @compileError("requested shared state ptr with zero size is not allowed"),
+                                    .event_argument_ptr => arguments[j] = @bitCast(TargetEventArg, event_extra_argument),
+                                    .event_argument_value => arguments[j] = @ptrCast(*TargetEventArg, &event_extra_argument),
+                                    .shared_state_value, .shared_state_ptr => @compileError("requesting shared state with zero size is not allowed"),
                                 }
                             }
                         }
@@ -279,14 +297,27 @@ fn CreateWorld(
             }
         }
 
-        /// given a shared state type T retrieve it's current value
-        pub fn getSharedState(self: World, comptime T: type) T {
+        /// get a shared state using the inner type
+        pub fn getSharedState(self: World, comptime T: type) meta.SharedState(T) {
+            return self.getSharedStateWithSharedStateType(meta.SharedState(T));
+        }
+
+        /// get a shared state using ecez.SharedState(InnerType) retrieve it's current value
+        pub fn getSharedStateWithSharedStateType(self: World, comptime T: type) T {
             const index = indexOfSharedType(T);
             return self.shared_state[index];
         }
 
+        // blocked by: https://github.com/ziglang/zig/issues/5497
+        // /// set a shared state using the shared state's inner type
+        // pub fn setSharedState(self: World, state: anytype) void {
+        //     const ActualType = meta.SharedState(@TypeOf(state));
+        //     const index = indexOfSharedType(ActualType);
+        //     self.shared_state[index] = @bitCast(ActualType, state);
+        // }
+
         /// given a shared state type T retrieve it's pointer
-        pub fn getSharedStatePtr(self: *World, comptime PtrT: type) PtrT {
+        pub fn getSharedStatePtrWithSharedStateType(self: *World, comptime PtrT: type) PtrT {
             // figure out which type we are looking for in the storage
             const QueryT = blk: {
                 const info = @typeInfo(PtrT);
@@ -407,6 +438,32 @@ test "getComponent() retrieve component value" {
 
     try testing.expectEqual(a, try world.getComponent(entity, Testing.Component.A));
 }
+
+test "getSharedState retrieve state" {
+    var world = try WorldStub.WithSharedState(.{ Testing.Component.A, Testing.Component.B }).init(testing.allocator, .{
+        Testing.Component.A{ .value = 4 },
+        Testing.Component.B{ .value = 2 },
+    });
+    defer world.deinit();
+
+    try testing.expectEqual(@as(u32, 4), world.getSharedState(Testing.Component.A).value);
+    try testing.expectEqual(@as(u8, 2), world.getSharedState(Testing.Component.B).value);
+}
+
+// blocked by: https://github.com/ziglang/zig/issues/5497
+// test "setSharedState retrieve state" {
+//     var world = try WorldStub.WithSharedState(.{ Testing.Component.A, Testing.Component.B }).init(testing.allocator, .{
+//         Testing.Component.A{ .value = 0 },
+//         Testing.Component.B{ .value = 0 },
+//     });
+//     defer world.deinit();
+
+//     world.setSharedState(Testing.Component.A{ .value = 4 });
+//     world.setSharedState(Testing.Component.B{ .value = 2 });
+
+//     try testing.expectEqual(@as(u32, 4), world.getSharedState(Testing.Component.A).value);
+//     try testing.expectEqual(@as(u8, 2), world.getSharedState(Testing.Component.B).value);
+// }
 
 test "systems can fail" {
     const SystemStruct = struct {
@@ -644,8 +701,8 @@ test "events call systems" {
     }.func;
 
     const World = WorldStub.WithEvents(.{
-        Event("onFoo", .{SystemType}),
-        Event("onBar", .{systemThree}),
+        Event("onFoo", .{SystemType}, .{}),
+        Event("onBar", .{systemThree}, .{}),
     });
 
     var world = try World.init(testing.allocator, .{});
@@ -659,7 +716,7 @@ test "events call systems" {
         .a = .{ .value = 2 },
     });
 
-    try world.triggerEvent(.onFoo);
+    try world.triggerEvent(.onFoo, .{});
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 1 },
@@ -674,7 +731,7 @@ test "events call systems" {
         try world.getComponent(entity2, Testing.Component.A),
     );
 
-    try world.triggerEvent(.onBar);
+    try world.triggerEvent(.onBar, .{});
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 2 },
@@ -696,7 +753,7 @@ test "events call propagate error" {
     };
 
     const World = WorldStub.WithEvents(.{
-        Event("onFoo", .{SystemType}),
+        Event("onFoo", .{SystemType}, .{}),
     });
 
     var world = try World.init(testing.allocator, .{});
@@ -704,7 +761,7 @@ test "events call propagate error" {
 
     _ = try world.createEntity(Testing.Archetype.A{});
 
-    try testing.expectError(error.Spooky, world.triggerEvent(.onFoo));
+    try testing.expectError(error.Spooky, world.triggerEvent(.onFoo, .{}));
 }
 
 test "events can access shared state" {
@@ -720,7 +777,7 @@ test "events can access shared state" {
     };
 
     var world = try WorldStub.WithEvents(.{
-        Event("onFoo", .{SystemType}),
+        Event("onFoo", .{SystemType}, .{}),
     }).WithSharedState(.{
         A,
     }).init(testing.allocator, .{A{ .value = 42 }});
@@ -729,7 +786,7 @@ test "events can access shared state" {
 
     _ = try world.createEntity(Testing.Archetype.A{});
 
-    try testing.expectError(error.Ok, world.triggerEvent(.onFoo));
+    try testing.expectError(error.Ok, world.triggerEvent(.onFoo, .{}));
 }
 
 test "events can mutate shared state" {
@@ -743,7 +800,7 @@ test "events can mutate shared state" {
     };
 
     var world = try WorldStub.WithEvents(.{
-        Event("onFoo", .{SystemType}),
+        Event("onFoo", .{SystemType}, .{}),
     }).WithSharedState(.{
         A,
     }).init(testing.allocator, .{A{ .value = 1 }});
@@ -752,6 +809,30 @@ test "events can mutate shared state" {
 
     _ = try world.createEntity(Testing.Archetype.A{});
 
-    try world.triggerEvent(.onFoo);
+    try world.triggerEvent(.onFoo, .{});
     try testing.expectEqual(@as(u8, 2), world.shared_state[0].value);
+}
+
+test "events can accepts event related data" {
+    const MouseInput = struct { x: u32, y: u32 };
+    // define a system type
+    const SystemType = struct {
+        pub fn systemOne(a: *Testing.Component.A, mouse: EventArgument(MouseInput)) void {
+            a.value = mouse.x + mouse.y;
+        }
+    };
+
+    var world = try WorldStub.WithEvents(.{
+        Event("onFoo", .{SystemType}, MouseInput),
+    }).init(testing.allocator, .{});
+
+    defer world.deinit();
+
+    const entity = try world.createEntity(Testing.Archetype.A{ .a = .{ .value = 0 } });
+
+    try world.triggerEvent(.onFoo, MouseInput{ .x = 40, .y = 2 });
+    try testing.expectEqual(
+        Testing.Component.A{ .value = 42 },
+        try world.getComponent(entity, Testing.Component.A),
+    );
 }

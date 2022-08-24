@@ -6,12 +6,15 @@ const testing = std.testing;
 
 pub const secret_field = "magic_secret_sauce";
 pub const shared_secret_field = "shared_magic_secret_sauce";
+pub const event_argument_secret_field = "event_magic_secret_sauce";
 pub const event_magic = 0xaa_bb_cc;
 
 pub const SystemMetadata = struct {
     pub const Arg = enum {
         component_ptr,
         component_value,
+        event_argument_ptr,
+        event_argument_value,
         shared_state_ptr,
         shared_state_value,
     };
@@ -47,7 +50,7 @@ pub const SystemMetadata = struct {
 
         const ParsingState = enum {
             component_parsing,
-            shared_state_parsing,
+            not_component_parsing,
         };
 
         var component_args_count: usize = 0;
@@ -76,46 +79,60 @@ pub const SystemMetadata = struct {
                     }
 
                     if (parsing_state == .component_parsing) {
-                        // if argument is a shared state argument
+                        // if argument is a shared state argument or event we are done parsing components
                         if (@hasField(pointer.child, shared_secret_field)) {
-                            parsing_state = .shared_state_parsing;
+                            parsing_state = .not_component_parsing;
                             args[i] = Arg.shared_state_ptr;
+                        } else if (@hasField(pointer.child, event_argument_secret_field)) {
+                            parsing_state = .not_component_parsing;
+                            args[i] = Arg.event_argument_ptr;
                         } else {
                             component_args_count = i + 1;
                             args[i] = Arg.component_ptr;
                         }
                     } else {
-                        // if argument is a shared state argument
-                        if (!@hasField(pointer.child, shared_secret_field)) {
-                            const err_msg = std.fmt.comptimePrint("system {s} argument {d} is not a shared state argument but comes after one", .{
+                        // we are now done parsing components which means that any argument
+                        // must be either shared state, or an event argument
+                        if (@hasField(pointer.child, shared_secret_field)) {
+                            args[i] = Arg.shared_state_ptr;
+                        } else if (@hasField(pointer.child, event_argument_secret_field)) {
+                            args[i] = Arg.event_argument_ptr;
+                        } else {
+                            const err_msg = std.fmt.comptimePrint("system {s} argument {d} is not a shared state or event argument but comes after one", .{
                                 function_name,
                                 i,
                             });
                             @compileError(err_msg);
                         }
-                        args[i] = Arg.shared_state_ptr;
                     }
                 },
                 .Struct => {
                     if (parsing_state == .component_parsing) {
-                        // if argument is a shared state argument
+                        // if argument is a shared state argument or event we are done parsing components
                         if (@hasField(T, shared_secret_field)) {
-                            parsing_state = .shared_state_parsing;
+                            parsing_state = .not_component_parsing;
                             args[i] = Arg.shared_state_value;
+                        } else if (@hasField(T, event_argument_secret_field)) {
+                            parsing_state = .not_component_parsing;
+                            args[i] = Arg.event_argument_value;
                         } else {
                             component_args_count = i + 1;
                             args[i] = Arg.component_value;
                         }
                     } else {
-                        // if argument is a shared state argument
-                        if (!@hasField(T, shared_secret_field)) {
-                            const err_msg = std.fmt.comptimePrint("system {s} argument {d} is not a shared state argument but comes after one", .{
+                        // we are now done parsing components which means that any argument
+                        // must be either shared state, or an event argument
+                        if (@hasField(T, shared_secret_field)) {
+                            args[i] = Arg.shared_state_value;
+                        } else if (@hasField(T, event_argument_secret_field)) {
+                            args[i] = Arg.event_argument_value;
+                        } else {
+                            const err_msg = std.fmt.comptimePrint("system {s} argument {d} is not a shared state or event argument but comes after one", .{
                                 function_name,
                                 i,
                             });
                             @compileError(err_msg);
                         }
-                        args[i] = Arg.shared_state_value;
                     }
                 },
                 else => {
@@ -189,12 +206,24 @@ pub const SystemMetadata = struct {
 
 /// Create an event which can be triggered and dispatch associated systems
 /// Parameters:
-///     - event_name: the name of the event
-///     - systems: the systems that should be dispatched if this event is triggered
-pub fn Event(comptime event_name: []const u8, comptime systems: anytype) type {
+///     - event_name:          name of the event
+///     - systems:             systems that should be dispatched if this event is triggered
+///     - event_argument_type: event specific argument type for each system
+pub fn Event(comptime event_name: []const u8, comptime systems: anytype, comptime event_argument_type: anytype) type {
     if (@typeInfo(@TypeOf(systems)) != .Struct) {
         @compileError("systems must be a tuple of systems");
     }
+
+    const EventArgumentType = blk: {
+        const info = @typeInfo(@TypeOf(event_argument_type));
+        if (info == .Type) {
+            break :blk event_argument_type;
+        }
+        if (info == .Struct) {
+            break :blk @TypeOf(event_argument_type);
+        }
+        @compileError("expected event_argument_type to be type or struct type");
+    };
 
     return struct {
         pub const name = event_name;
@@ -202,7 +231,12 @@ pub fn Event(comptime event_name: []const u8, comptime systems: anytype) type {
         pub const magic_secret_sauce = event_magic;
         pub const system_count = countAndVerifySystems(systems);
         pub const systems_info = systemInfo(system_count, systems);
+        pub const EventArgument = EventArgumentType;
     };
+}
+
+pub fn isEventArgument(comptime T: type) bool {
+    return @hasField(T, event_argument_secret_field);
 }
 
 /// count events and verify arguments
@@ -584,16 +618,51 @@ pub fn SharedState(comptime State: type) type {
     };
 
     var shared_state_fields: [state_info.fields.len + 1]Type.StructField = undefined;
-    shared_state_fields[0] = Type.StructField{
+    inline for (state_info.fields) |field, i| {
+        shared_state_fields[i] = field;
+    }
+
+    const default_value: u8 = 0;
+    shared_state_fields[state_info.fields.len] = Type.StructField{
         .name = shared_secret_field,
         .field_type = u8,
-        .default_value = null,
-        .is_comptime = false,
-        .alignment = @alignOf(u8),
+        .default_value = @ptrCast(?*const anyopaque, &default_value),
+        .is_comptime = true,
+        .alignment = 0,
     };
+
+    return @Type(Type{ .Struct = .{
+        .layout = state_info.layout,
+        .fields = &shared_state_fields,
+        .decls = state_info.decls,
+        .is_tuple = state_info.is_tuple,
+    } });
+}
+
+/// This function will mark a type as event data
+pub fn EventArgument(comptime Argument: type) type {
+    const state_info = blk: {
+        const info = @typeInfo(Argument);
+        if (info != .Struct) {
+            @compileError("event argument must be of type struct");
+        }
+        break :blk info.Struct;
+    };
+
+    var shared_state_fields: [state_info.fields.len + 1]Type.StructField = undefined;
     inline for (state_info.fields) |field, i| {
-        shared_state_fields[i + 1] = field;
+        shared_state_fields[i] = field;
     }
+
+    const default_value: u8 = 0;
+    shared_state_fields[state_info.fields.len] = Type.StructField{
+        .name = event_argument_secret_field,
+        .field_type = u8,
+        .default_value = @ptrCast(?*const anyopaque, &default_value),
+        .is_comptime = true,
+        .alignment = 0,
+    };
+
     return @Type(Type{ .Struct = .{
         .layout = state_info.layout,
         .fields = &shared_state_fields,
@@ -737,20 +806,26 @@ test "SystemMetadata canReturnError results in correct type" {
     }
 }
 
-test "countEvents count events" {
+test "isEventArgument correctly identify event types" {
+    const A = struct {};
+    comptime try testing.expectEqual(false, isEventArgument(A));
+    comptime try testing.expectEqual(true, isEventArgument(EventArgument(A)));
+}
+
+test "countAndVerifyEvents count events" {
     const event_count = countAndVerifyEvents(.{
-        Event("eventZero", .{}),
-        Event("eventOne", .{}),
-        Event("eventTwo", .{}),
+        Event("eventZero", .{}, void),
+        Event("eventOne", .{}, void),
+        Event("eventTwo", .{}, void),
     });
     try testing.expectEqual(3, event_count);
 }
 
 test "GenerateEventEnum generate expected enum" {
     const EventEnum = GenerateEventsEnum(3, .{
-        Event("eventZero", .{}),
-        Event("eventOne", .{}),
-        Event("eventTwo", .{}),
+        Event("eventZero", .{}, void),
+        Event("eventOne", .{}, void),
+        Event("eventTwo", .{}, void),
     });
     try testing.expectEqual(0, @enumToInt(EventEnum.eventZero));
     try testing.expectEqual(1, @enumToInt(EventEnum.eventOne));
