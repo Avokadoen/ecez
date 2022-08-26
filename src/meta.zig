@@ -13,7 +13,7 @@ pub const SystemMetadata = struct {
     pub const Arg = enum {
         component_ptr,
         component_value,
-        event_argument_ptr,
+        // event_argument_ptr, // not supported
         event_argument_value,
         shared_state_ptr,
         shared_state_value,
@@ -84,8 +84,7 @@ pub const SystemMetadata = struct {
                             parsing_state = .not_component_parsing;
                             args[i] = Arg.shared_state_ptr;
                         } else if (@hasField(pointer.child, event_argument_secret_field)) {
-                            parsing_state = .not_component_parsing;
-                            args[i] = Arg.event_argument_ptr;
+                            @compileError("event arguments can't be pointers");
                         } else {
                             component_args_count = i + 1;
                             args[i] = Arg.component_ptr;
@@ -96,7 +95,7 @@ pub const SystemMetadata = struct {
                         if (@hasField(pointer.child, shared_secret_field)) {
                             args[i] = Arg.shared_state_ptr;
                         } else if (@hasField(pointer.child, event_argument_secret_field)) {
-                            args[i] = Arg.event_argument_ptr;
+                            @compileError("event arguments can't be pointers");
                         } else {
                             const err_msg = std.fmt.comptimePrint("system {s} argument {d} is not a shared state or event argument but comes after one", .{
                                 function_name,
@@ -236,7 +235,11 @@ pub fn Event(comptime event_name: []const u8, comptime systems: anytype, comptim
 }
 
 pub fn isEventArgument(comptime T: type) bool {
-    return @hasField(T, event_argument_secret_field);
+    const info = @typeInfo(T);
+    if (info == .Struct) {
+        return @hasField(T, event_argument_secret_field);
+    }
+    return false;
 }
 
 /// count events and verify arguments

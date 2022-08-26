@@ -208,7 +208,7 @@ fn CreateWorld(
                                 switch (metadata.args[j]) {
                                     .component_value => arguments[j] = archetype_system_data.storage[j].items[i],
                                     .component_ptr => arguments[j] = &archetype_system_data.storage[j].items[i],
-                                    .event_argument_ptr, .event_argument_value => @compileError("event arguments are illegal for dispatch systems"),
+                                    .event_argument_value => @compileError("event arguments are illegal for dispatch systems"),
                                     .shared_state_value => arguments[j] = self.getSharedStateWithSharedStateType(Param),
                                     .shared_state_ptr => arguments[j] = self.getSharedStatePtrWithSharedStateType(Param),
                                 }
@@ -216,7 +216,7 @@ fn CreateWorld(
                                 switch (metadata.args[j]) {
                                     .component_value => arguments[j] = Param{},
                                     .component_ptr => arguments[j] = &Param{},
-                                    .event_argument_value, .event_argument_ptr => @compileError("requesting event argument with zero size is not allowed"),
+                                    .event_argument_value => @compileError("event arguments are illegal for dispatch systems"),
                                     .shared_state_value, .shared_state_ptr => @compileError("requesting shared state with zero size is not allowed"),
                                 }
                             }
@@ -270,7 +270,6 @@ fn CreateWorld(
                                     .component_value => arguments[j] = archetype_system_data.storage[j].items[i],
                                     .component_ptr => arguments[j] = &archetype_system_data.storage[j].items[i],
                                     .event_argument_value => arguments[j] = @bitCast(TargetEventArg, event_extra_argument),
-                                    .event_argument_ptr => arguments[j] = @ptrCast(*TargetEventArg, &event_extra_argument),
                                     .shared_state_value => arguments[j] = self.getSharedStateWithSharedStateType(Param),
                                     .shared_state_ptr => arguments[j] = self.getSharedStatePtrWithSharedStateType(Param),
                                 }
@@ -278,8 +277,7 @@ fn CreateWorld(
                                 switch (metadata.args[j]) {
                                     .component_value => arguments[j] = Param{},
                                     .component_ptr => arguments[j] = &Param{},
-                                    .event_argument_ptr => arguments[j] = @bitCast(TargetEventArg, event_extra_argument),
-                                    .event_argument_value => arguments[j] = @ptrCast(*TargetEventArg, &event_extra_argument),
+                                    .event_argument_value => arguments[j] = @bitCast(TargetEventArg, event_extra_argument),
                                     .shared_state_value, .shared_state_ptr => @compileError("requesting shared state with zero size is not allowed"),
                                 }
                             }
