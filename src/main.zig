@@ -16,4 +16,5 @@ test {
     _ = @import("archetype.zig");
     _ = @import("archetype_container.zig");
     _ = @import("query.zig");
+    _ = @import("iterator.zig");
 }
