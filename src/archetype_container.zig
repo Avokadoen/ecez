@@ -278,8 +278,8 @@ pub fn FromArchetypes(comptime submitted_archetypes: []const type) type {
             };
 
             // Intuition is that we will be working on stack memory
-            // running test "getQueryResult fetches the expected data" 100_000 times so no
-            // segmentation fault of no other errors ... so it is maybe fine? Could use allocations
+            // running test "getQueryResult fetches the expected data" 100_000 times with no
+            // segmentation fault or other errors ... so it might be fine? Could use allocations
             // to be sure but UB is fast :^)
             // if we get any weird heisenbugs, then this is probably the root
             var iterate_data: [result_count]meta.LengthComponentStorage(query.include_types) = undefined;
