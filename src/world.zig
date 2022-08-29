@@ -5,14 +5,14 @@ const testing = std.testing;
 
 const ztracy = @import("ztracy");
 
-const query = @import("query.zig");
 const meta = @import("meta.zig");
-
 const archetype_container = @import("archetype_container.zig");
 const Entity = @import("entity_type.zig").Entity;
 const EntityRef = @import("entity_type.zig").EntityRef;
 const Color = @import("misc.zig").Color;
 const SystemMetadata = meta.SystemMetadata;
+const Query = @import("query.zig").Query;
+const iterator = @import("iterator.zig");
 
 const Testing = @import("Testing.zig");
 
@@ -77,17 +77,18 @@ fn CreateWorld(
     comptime events: anytype,
 ) type {
     @setEvalBranchQuota(10_000);
-    const Container = blk: {
+    const archetype_types = blk: {
         const archetypes_info = @typeInfo(@TypeOf(archetypes));
         if (archetypes_info != .Struct) {
             @compileError("submitted_archetypes was not a tuple of types");
         }
-        var archetype_types: [archetypes_info.Struct.fields.len]type = undefined;
+        var types: [archetypes_info.Struct.fields.len]type = undefined;
         for (archetypes_info.Struct.fields) |_, i| {
-            archetype_types[i] = archetypes[i];
+            types[i] = archetypes[i];
         }
-        break :blk archetype_container.FromArchetypes(&archetype_types);
+        break :blk types;
     };
+    const Container = archetype_container.FromArchetypes(&archetype_types);
 
     const SharedStateStorage = meta.SharedStateStorage(shared_state_types);
 
@@ -185,6 +186,20 @@ fn CreateWorld(
             const zone = ztracy.ZoneNC(@src(), "World getComponent", Color.world);
             defer zone.End();
             return self.container.getComponent(entity, Component);
+        }
+
+        /// Perform a query where you can exclude and include types
+        /// This means if you query A and B, but exclude C then entities that does
+        /// contain the C component with be omitted
+        /// Parameters:
+        ///     - query: a compile time constructet query for components
+        ///
+        /// Returns: an iterator over matched data which allow you to loop all components grouped by entity owner
+        pub fn queryStorage(self: *World, comptime query: Query) blk: {
+            const result_count = Container.queryResultCount(query);
+            break :blk iterator.FromTypes(query.include_types, result_count);
+        } {
+            return self.container.getQueryResult(query);
         }
 
         /// Call all systems registered when calling CreateWorld
@@ -833,4 +848,32 @@ test "events can accepts event related data" {
         Testing.Component.A{ .value = 42 },
         try world.getComponent(entity, Testing.Component.A),
     );
+}
+
+test "queryStorage returns expected result" {
+    var world = try WorldStub.init(testing.allocator, .{});
+    defer world.deinit();
+
+    {
+        comptime var i: comptime_int = 0;
+        inline while (i < 10) : (i += 1) {
+            _ = try world.createEntity(Testing.Archetype.A{ .a = .{ .value = i } });
+            _ = try world.createEntity(Testing.Archetype.AB{ .a = .{ .value = i }, .b = .{ .value = i } });
+            _ = try world.createEntity(Testing.Archetype.AC{ .a = .{ .value = i + 10 } });
+            _ = try world.createEntity(Testing.Archetype.ABC{ .a = .{ .value = i }, .b = .{ .value = i } });
+        }
+    }
+
+    comptime var query = Query.init(
+        &[_]type{Testing.Component.A},
+        &[_]type{Testing.Component.B},
+    );
+
+    var i: u32 = 0;
+    var iter = world.queryStorage(query);
+    while (iter.next()) |item| {
+        try testing.expectEqual(Testing.Component.A{ .value = i }, item[0]);
+        i += 1;
+    }
+    try testing.expectEqual(@as(u32, 19), i);
 }

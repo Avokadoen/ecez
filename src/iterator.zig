@@ -9,7 +9,6 @@ pub fn FromTypes(comptime types: []const type, result_count: comptime_int) type 
 
     return struct {
         pub const Item = std.meta.Tuple(types);
-
         const Iterator = @This();
 
         outer_cursor: usize,
@@ -25,6 +24,10 @@ pub fn FromTypes(comptime types: []const type, result_count: comptime_int) type 
         }
 
         pub fn next(self: *Iterator) ?Item {
+            if (self.iterate_data.len == 0) {
+                return null;
+            }
+
             const outer_iter_done = (self.outer_cursor + 1) >= self.iterate_data.len;
             const inner_iter_done = (self.inner_cursor + 1) >= self.iterate_data[self.outer_cursor].len;
 
@@ -44,7 +47,6 @@ pub fn FromTypes(comptime types: []const type, result_count: comptime_int) type 
                     item[i] = storage[i];
                 }
             }
-
             // if current array loop is complete we go to next array
             if (inner_iter_done) {
                 self.outer_cursor += 1;
@@ -62,7 +64,6 @@ pub fn FromTypes(comptime types: []const type, result_count: comptime_int) type 
 test "simple iterating works" {
     const TypeComposition = &[_]type{ Testing.Component.A, Testing.Component.B, Testing.Component.C };
     // create iterator where we found 2 archetypes that match requirement
-    const Iter = FromTypes(TypeComposition, 2);
     const elem_len = 64;
 
     var test_data = [2]meta.LengthComponentStorage(TypeComposition){ .{
@@ -97,6 +98,8 @@ test "simple iterating works" {
         try test_data[1].storage[1].append(Testing.Component.B{ .value = @intCast(u8, elem_len + i) });
     }
 
+    const Iter = FromTypes(TypeComposition, 2);
+
     i = 0;
     var iter = Iter.init(test_data);
     while (iter.next()) |item| {
@@ -105,4 +108,8 @@ test "simple iterating works" {
         try testing.expectEqual(Testing.Component.C{}, item[2]);
         i += 1;
     }
+
+    try testing.expectEqual(iter.next(), null);
+    try testing.expectEqual(iter.next(), null);
+    try testing.expectEqual(iter.next(), null);
 }

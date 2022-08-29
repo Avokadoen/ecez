@@ -5,10 +5,16 @@ const ztracy = @import("ztracy");
 const Color = @import("misc.zig").Color;
 
 const archetype = @import("archetype.zig");
+
 const IArchetype = @import("IArchetype.zig");
 const entity_type = @import("entity_type.zig");
 const Entity = entity_type.Entity;
 const EntityRef = entity_type.EntityRef;
+const iterator = @import("iterator.zig");
+
+const ecez_query = @import("query.zig");
+const QueryBuilder = ecez_query.QueryBuilder;
+const Query = ecez_query.Query;
 
 const meta = @import("meta.zig");
 const Testing = @import("Testing.zig");
@@ -231,6 +237,89 @@ pub fn FromArchetypes(comptime submitted_archetypes: []const type) type {
             }
 
             return components;
+        }
+
+        pub fn getQueryResult(
+            self: *ArcheContainer,
+            comptime query: Query,
+        ) iterator.FromTypes(query.include_types, queryResultCount(query)) {
+            const result_count = comptime queryResultCount(query);
+            const archetype_indices: [result_count]usize = comptime blk: {
+                comptime var indices: [result_count]usize = undefined;
+                comptime var index: usize = 0;
+
+                inline for (submitted_archetypes) |ArcheType, i| {
+                    const info = @typeInfo(ArcheType).Struct;
+                    comptime var matched_fields = 0;
+                    fields_loop: inline for (info.fields) |field| {
+                        // check if current type is listed as a excluded type
+                        inline for (query.exclude_types) |ExcludeType| {
+                            if (ExcludeType == field.field_type) {
+                                matched_fields = 0;
+                                break :fields_loop;
+                            }
+                        }
+
+                        // check if current type is listed as an included type
+                        inline for (query.include_types) |IncludeType| {
+                            if (IncludeType == field.field_type) {
+                                matched_fields += 1;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (matched_fields == query.include_types.len) {
+                        indices[index] = i;
+                        index += 1;
+                    }
+                }
+                break :blk indices;
+            };
+
+            // Intuition is that we will be working on stack memory
+            // running test "getQueryResult fetches the expected data" 100_000 times so no
+            // segmentation fault of no other errors ... so it is maybe fine? Could use allocations
+            // to be sure but UB is fast :^)
+            // if we get any weird heisenbugs, then this is probably the root
+            var iterate_data: [result_count]meta.LengthComponentStorage(query.include_types) = undefined;
+            inline for (archetype_indices) |index, i| {
+                var typed_archetype = self.archetypeTyped(index, Archetypes[index]);
+                iterate_data[i] = typed_archetype.getComponentStorage(query.include_types);
+            }
+
+            const Iterator = iterator.FromTypes(query.include_types, queryResultCount(query));
+            return Iterator.init(iterate_data);
+        }
+
+        pub fn queryResultCount(comptime query: Query) comptime_int {
+            comptime var result_count = 0;
+            inline for (submitted_archetypes) |ArcheType| {
+                const info = @typeInfo(ArcheType).Struct;
+                comptime var matched_fields = 0;
+                fields_loop: inline for (info.fields) |field| {
+                    // check if current type is listed as a excluded type
+                    inline for (query.exclude_types) |ExcludeType| {
+                        if (ExcludeType == field.field_type) {
+                            matched_fields = 0;
+                            break :fields_loop;
+                        }
+                    }
+
+                    // check if current type is listed as an included type
+                    inline for (query.include_types) |IncludeType| {
+                        if (IncludeType == field.field_type) {
+                            matched_fields += 1;
+                            break;
+                        }
+                    }
+                }
+
+                if (matched_fields == query.include_types.len) {
+                    result_count += 1;
+                }
+            }
+            return result_count;
         }
 
         inline fn archetypeTyped(self: ArcheContainer, archetype_index: usize, comptime T: type) *T {
@@ -596,4 +685,43 @@ test "Archetypes getTypeSubsets return expected components containers" {
             try testing.expectEqual(Testing.Component.A{ .value = @intCast(u32, value) }, container.storage[1].items[0]);
         }
     }
+}
+
+test "queryResultCount count correctly" {
+    const Archetypes = FromArchetypes(&Testing.AllArchetypesArr);
+    comptime var query = Query.init(
+        &[_]type{Testing.Component.A},
+        &[_]type{Testing.Component.B},
+    );
+    try testing.expectEqual(2, comptime Archetypes.queryResultCount(query));
+}
+
+test "getQueryResult fetches the expected data" {
+    const Archetypes = FromArchetypes(&Testing.AllArchetypesArr);
+
+    var archetypes = try Archetypes.init(testing.allocator);
+    defer archetypes.deinit();
+
+    {
+        comptime var i: comptime_int = 0;
+        inline while (i < 10) : (i += 1) {
+            _ = try archetypes.createEntity(Testing.Archetype.A{ .a = .{ .value = i } });
+            _ = try archetypes.createEntity(Testing.Archetype.AB{ .a = .{ .value = i }, .b = .{ .value = i } });
+            _ = try archetypes.createEntity(Testing.Archetype.AC{ .a = .{ .value = i + 10 } });
+            _ = try archetypes.createEntity(Testing.Archetype.ABC{ .a = .{ .value = i }, .b = .{ .value = i } });
+        }
+    }
+
+    comptime var query = Query.init(
+        &[_]type{Testing.Component.A},
+        &[_]type{Testing.Component.B},
+    );
+
+    var i: u32 = 0;
+    var iter = archetypes.getQueryResult(query);
+    while (iter.next()) |item| {
+        try testing.expectEqual(Testing.Component.A{ .value = i }, item[0]);
+        i += 1;
+    }
+    try testing.expectEqual(@as(u32, 19), i);
 }
