@@ -34,14 +34,17 @@ Currently a very big downside to this mentality is that *the user has to explici
 ```zig
 // WithArchetypes is planned to be obsolete in the future
 var world = try ecez.WorldBuilder().WithArchetypes(.{
-        Player, // each entry here is a struct of components 
+        // each archetype entry is a struct of components 
+        Player, 
         SlimeEnemy,
         Chest,
-        SteelAxe,
-        IronAxe,
+        AxeWeapon,
+        SwordWeapon,
         // ...
     }).WithSystems(.{
+        // Here AttackSystems is a struct with multiple functions which will be registered
         AttackSystems,
+        // moveSystem is a single function that will be registered 
         moveSystem,
         // ...
     }).init(allocator, .{});
@@ -65,8 +68,3 @@ The code base also utilize TDD to ensure a certain level of robustness, altough 
 Please see the issues for planned features.
 
 Some key features include queries with iterators and implicit (but configurable) multithreading 
-
-
-
-
-
