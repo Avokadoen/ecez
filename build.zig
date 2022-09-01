@@ -5,6 +5,25 @@ const Example = struct {
     name: []const u8,
 };
 
+/// Links a project exe with ecez and optinally ztracy
+pub fn link(b: *std.build.Builder, exe: *std.build.LibExeObjStep, enable_ztracy: bool) void {
+    const ztracy_options = ztracy.BuildOptionsStep.init(b, .{ .enable_ztracy = enable_ztracy });
+    const ztracy_pkg = ztracy.getPkg(&.{ztracy_options.getPkg()});
+
+    const ecez_package = std.build.Pkg{
+        .name = "ecez",
+        .source = .{ .path = thisDir() ++ "/src/main.zig" },
+        .dependencies = &[_]std.build.Pkg{ztracy_pkg},
+    };
+
+    // add ztracy or a stub if disabled
+    exe.addPackage(ztracy_pkg);
+    ztracy.link(exe, ztracy_options);
+
+    exe.addPackage(ecez_package);
+}
+
+/// Builds the project for testing and to run simple examples
 pub fn build(b: *std.build.Builder) void {
     // Standard release options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
@@ -19,7 +38,7 @@ pub fn build(b: *std.build.Builder) void {
     const ztracy_options = ztracy.BuildOptionsStep.init(b, .{ .enable_ztracy = ztracy_enable });
     const ztracy_pkg = ztracy.getPkg(&.{ztracy_options.getPkg()});
 
-    var ecezPackage = std.build.Pkg{
+    const ecez_package = std.build.Pkg{
         .name = "ecez",
         .source = .{ .path = "src/main.zig" },
         .dependencies = &[_]std.build.Pkg{ztracy_pkg},
@@ -53,7 +72,7 @@ pub fn build(b: *std.build.Builder) void {
         exe.addPackage(ztracy_pkg);
         ztracy.link(exe, ztracy_options);
 
-        exe.addPackage(ecezPackage);
+        exe.addPackage(ecez_package);
 
         exe.install();
 
@@ -69,4 +88,8 @@ pub fn build(b: *std.build.Builder) void {
         ztracy.link(example_tests, ztracy_options);
         test_step.dependOn(&example_tests.step);
     }
+}
+
+inline fn thisDir() []const u8 {
+    return comptime std.fs.path.dirname(@src().file) orelse ".";
 }
