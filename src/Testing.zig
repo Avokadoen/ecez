@@ -23,6 +23,12 @@ pub const Archetype = struct {
     };
 };
 
+pub const AllComponentsArr = [_]type{
+    Component.A,
+    Component.B,
+    Component.C,
+};
+
 pub const AllArchetypesArr = [_]type{
     Archetype.A,
     Archetype.AB,

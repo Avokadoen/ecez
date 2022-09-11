@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 
 const ztracy = @import("ztracy");
 const Color = @import("misc.zig").Color;
+const testing = std.testing;
 
 const archetype = @import("archetype.zig");
 
@@ -24,7 +25,6 @@ const Testing = @import("Testing.zig");
 
 pub const Error = IArchetype.Error;
 
-const testing = std.testing;
 pub fn FromArchetypes(comptime submitted_archetypes: []const type) type {
     // const component_count = uniquelyCountComponents(
     //     countAndVerifyAllComponents(submitted_archetypes),

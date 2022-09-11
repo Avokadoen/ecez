@@ -26,12 +26,6 @@ pub fn sortTypes(comptime Ts: []const type) [Ts.len]type {
         original_index: usize,
         hash: u64,
     };
-    const lessThan = struct {
-        fn func(context: void, lhs: TypeSortElem, rhs: TypeSortElem) bool {
-            _ = context;
-            return lhs.hash < rhs.hash;
-        }
-    }.func;
     var sort_target: [Ts.len]TypeSortElem = undefined;
     inline for (Ts) |T, i| {
         sort_target[i] = TypeSortElem{
@@ -39,7 +33,7 @@ pub fn sortTypes(comptime Ts: []const type) [Ts.len]type {
             .hash = hashType(T),
         };
     }
-    comptime std.sort.sort(TypeSortElem, sort_target[0..], {}, lessThan);
+    sort(TypeSortElem, &sort_target);
     var types: [Ts.len]type = undefined;
     for (sort_target) |s, i| {
         types[i] = Ts[s.original_index];
@@ -50,6 +44,16 @@ pub fn sortTypes(comptime Ts: []const type) [Ts.len]type {
 pub fn hashType(comptime T: type) u64 {
     const type_name = @typeName(T);
     return hashfn(type_name[0..]);
+}
+
+pub fn sort(comptime T: type, data: []T) void {
+    const lessThan = struct {
+        fn func(context: void, lhs: T, rhs: T) bool {
+            _ = context;
+            return lhs.hash < rhs.hash;
+        }
+    }.func;
+    comptime std.sort.sort(T, data, {}, lessThan);
 }
 
 test "sortTypes() sorts" {
