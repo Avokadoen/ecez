@@ -92,6 +92,7 @@ pub fn archetypeInterface(self: *OpaqueArchetype) IArchetype {
         rawSetComponent,
         rawRegisterEntity,
         rawSwapRemoveEntity,
+        rawGetStorageData,
         deinit,
     );
 }
@@ -225,7 +226,34 @@ pub fn rawSwapRemoveEntity(self: *OpaqueArchetype, entity: Entity, buffer: [][]u
     }
 }
 
+pub fn rawGetStorageData(self: *OpaqueArchetype, component_hashes: []u64, storage: *IArchetype.StorageData) IArchetype.Error!void {
+    std.debug.assert(component_hashes.len <= storage.outer.len);
+
+    var storage_index: usize = 0;
+    var iter = self.type_info.iterator();
+    while (iter.next()) |info| {
+        const iter_hash = info.key_ptr.*;
+        const iter_size = info.value_ptr.size;
+        for (component_hashes[storage_index..]) |hash, hash_index| {
+            if (iter_hash == hash) {
+                if (iter_size > 0) {
+                    storage.outer[storage_index] = self.component_storage[hash_index + storage_index].items;
+                }
+                storage_index += 1;
+            }
+        }
+    }
+    storage.inner_len = self.entities.count();
+
+    if (storage_index != component_hashes.len) {
+        return IArchetype.Error.ComponentMissing;
+    }
+}
+
 const Testing = @import("Testing.zig");
+const A = Testing.Component.A;
+const B = Testing.Component.B;
+const C = Testing.Component.C;
 const hashType = @import("query.zig").hashType;
 
 test "init() + deinit() is idempotent" {
@@ -242,10 +270,6 @@ test "rawHasComponent identify existing components" {
 }
 
 test "rawGetComponent retrieves correct component" {
-    const A = Testing.Component.A;
-    const B = Testing.Component.B;
-    const C = Testing.Component.C;
-
     const hashes = comptime [_]u64{ hashType(A), hashType(B), hashType(C) };
     const sizes = comptime [_]usize{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
 
@@ -289,8 +313,6 @@ test "rawGetComponent retrieves correct component" {
 }
 
 test "rawGetComponent fails on invalid request" {
-    const C = Testing.Component.C;
-
     const hashes = comptime [_]u64{hashType(C)};
     const sizes = comptime [_]usize{@sizeOf(C)};
 
@@ -308,10 +330,6 @@ test "rawGetComponent fails on invalid request" {
 }
 
 test "rawSwapRemoveEntity removes entity and components" {
-    const A = Testing.Component.A;
-    const B = Testing.Component.B;
-    const C = Testing.Component.C;
-
     const hashes = comptime [_]u64{ hashType(A), hashType(B), hashType(C) };
     const sizes = comptime [_]usize{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
 
@@ -396,5 +414,72 @@ test "rawSwapRemoveEntity removes entity and components" {
             std.mem.asBytes(&c),
             buffer[2],
         );
+    }
+}
+
+test "rawGetStorageData retrieves components view" {
+    const hashes = comptime [_]u64{ hashType(A), hashType(B), hashType(C) };
+    const sizes = comptime [_]usize{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
+    var archetype = try OpaqueArchetype.init(testing.allocator, &hashes, &sizes);
+    defer archetype.deinit();
+
+    {
+        var i: u32 = 0;
+        var buffer: [3][]u8 = undefined;
+        while (i < 100) : (i += 1) {
+            const mock_entity = Entity{ .id = i };
+            var a = A{ .value = i };
+            buffer[0] = std.mem.asBytes(&a);
+            var b = B{ .value = @intCast(u8, i) };
+            buffer[1] = std.mem.asBytes(&b);
+            var c = C{};
+            buffer[2] = std.mem.asBytes(&c);
+
+            try archetype.rawRegisterEntity(mock_entity, &buffer);
+        }
+    }
+
+    var data: [3][]u8 = undefined;
+    var storage = IArchetype.StorageData{
+        .inner_len = undefined,
+        .outer = &data,
+    };
+    {
+        try archetype.rawGetStorageData(&[_]u64{hashType(Testing.Component.A)}, &storage);
+
+        try testing.expectEqual(@as(usize, 100), storage.inner_len);
+        {
+            var i: u32 = 0;
+            while (i < 100) : (i += 1) {
+                const from = i * @sizeOf(Testing.Component.A);
+                const to = from + @sizeOf(Testing.Component.A);
+                const bytes = storage.outer[0][from..to];
+                const a = @ptrCast(*const Testing.Component.A, @alignCast(@alignOf(Testing.Component.A), bytes)).*;
+                try testing.expectEqual(Testing.Component.A{ .value = i }, a);
+            }
+        }
+    }
+
+    try archetype.rawGetStorageData(&[_]u64{ hashType(Testing.Component.A), hashType(Testing.Component.B) }, &storage);
+    try testing.expectEqual(@as(usize, 100), storage.inner_len);
+    {
+        var i: u32 = 0;
+        while (i < 100) : (i += 1) {
+            {
+                const from = i * @sizeOf(Testing.Component.A);
+                const to = from + @sizeOf(Testing.Component.A);
+                const bytes = storage.outer[0][from..to];
+                const a = @ptrCast(*const Testing.Component.A, @alignCast(@alignOf(Testing.Component.A), bytes)).*;
+                try testing.expectEqual(Testing.Component.A{ .value = i }, a);
+            }
+
+            {
+                const from = i * @sizeOf(Testing.Component.B);
+                const to = from + @sizeOf(Testing.Component.B);
+                const bytes = storage.outer[1][from..to];
+                const b = @ptrCast(*const Testing.Component.B, @alignCast(@alignOf(Testing.Component.B), bytes)).*;
+                try testing.expectEqual(Testing.Component.B{ .value = @intCast(u8, i) }, b);
+            }
+        }
     }
 }

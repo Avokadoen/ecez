@@ -20,6 +20,7 @@ const getComponentProto = fn (ptr: *anyopaque, entity: Entity, type_hash: u64) E
 const setComponentProto = fn (ptr: *anyopaque, entity: Entity, type_hash: u64, component: []const u8) Error!void;
 const registerEntityProto = fn (ptr: *anyopaque, entity: Entity, data: []const []const u8) Error!void;
 const swapRemoveEntityProto = fn (ptr: *anyopaque, entity: Entity, buffer: [][]u8) Error!void;
+const getStorageDataProto = fn (ptr: *anyopaque, component_hashes: []u64, storage: *StorageData) Error!void;
 const deinitProto = fn (ptr: *anyopaque) void;
 
 pub const VTable = struct {
@@ -48,6 +49,11 @@ pub const VTable = struct {
         else => *const swapRemoveEntityProto,
     },
 
+    getStorageData: switch (builtin.zig_backend) {
+        .stage1 => getStorageDataProto, // temporary workaround until we replace stage1 with stage2
+        else => *const getStorageDataProto,
+    },
+
     deinit: switch (builtin.zig_backend) {
         .stage1 => deinitProto, // temporary workaround until we replace stage1 with stage2
         else => *const deinitProto,
@@ -61,6 +67,7 @@ pub fn init(
     comptime setComponentFn: fn (ptr: @TypeOf(pointer), entity: Entity, type_hash: u64, component: []const u8) Error!void,
     comptime registerEntityFn: fn (ptr: @TypeOf(pointer), entity: Entity, data: []const []const u8) Error!void,
     comptime swapRemoveEntityFn: fn (ptr: @TypeOf(pointer), entity: Entity, buffer: [][]u8) Error!void,
+    comptime getStorageDataFn: fn (ptr: @TypeOf(pointer), component_hashes: []u64, storage: *StorageData) Error!void,
     comptime deinitFn: fn (ptr: @TypeOf(pointer)) void,
 ) IArchetype {
     const Ptr = @TypeOf(pointer);
@@ -97,6 +104,11 @@ pub fn init(
             return @call(.{ .modifier = .always_inline }, swapRemoveEntityFn, .{ self, entity, buffer });
         }
 
+        fn getStorageDataImpl(ptr: *anyopaque, component_hashes: []u64, storage: *StorageData) Error!void {
+            const self = @ptrCast(Ptr, @alignCast(alignment, ptr));
+            return @call(.{ .modifier = .always_inline }, getStorageDataFn, .{ self, component_hashes, storage });
+        }
+
         fn deinitImpl(ptr: *anyopaque) void {
             const self = @ptrCast(Ptr, @alignCast(alignment, ptr));
             return @call(.{ .modifier = .always_inline }, deinitFn, .{self});
@@ -108,6 +120,7 @@ pub fn init(
             .setComponent = setComponentImpl,
             .registerEntity = registerEntityImpl,
             .swapRemoveEntity = swapRemoveEntityImpl,
+            .getStorageData = getStorageDataImpl,
             .deinit = deinitImpl,
         };
     };
@@ -141,6 +154,14 @@ pub fn registerEntity(self: IArchetype, entity: Entity, data: []const []const u8
 
 pub fn swapRemoveEntity(self: IArchetype, entity: Entity, buffer: [][]u8) Error!void {
     return self.vtable.swapRemoveEntity(self.ptr, entity, buffer);
+}
+
+pub const StorageData = struct {
+    inner_len: usize,
+    outer: [][]u8,
+};
+pub fn getStorageData(self: IArchetype, component_hashes: []u64, storage: *StorageData) Error!void {
+    return self.vtable.getStorageData(self.ptr, component_hashes, storage);
 }
 
 pub fn deinit(self: IArchetype) void {

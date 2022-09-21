@@ -5,12 +5,13 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Test",
-            "type": "lldb",
+            "type": "cppvsdbg",
             "request": "launch",
-            "program": "zig",
-            "args": ["build", "test"],
-            "cwd": "${workspaceFolder}"
+            "name": "Debug Test",
+            "program": "${workspaceFolder}/zig-out/bin/main_tests.exe",
+            "args": ["/c/Program Files/Zig/zig.exe"],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "build",
         },
         {
             "name": "(Windows) Launch GOL Debug",

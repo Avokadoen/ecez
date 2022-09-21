@@ -29,6 +29,13 @@ pub const AllComponentsArr = [_]type{
     Component.C,
 };
 
+pub const AllComponentsTuple = .{
+    Component.A,
+    Component.B,
+    Component.C,
+};
+
+// TODO: remove me
 pub const AllArchetypesArr = [_]type{
     Archetype.A,
     Archetype.AB,
@@ -36,6 +43,7 @@ pub const AllArchetypesArr = [_]type{
     Archetype.ABC,
 };
 
+// TODO: remove me
 pub const AllArchetypesTuple = .{
     Archetype.A,
     Archetype.AB,

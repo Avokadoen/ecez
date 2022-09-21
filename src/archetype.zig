@@ -56,7 +56,6 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
         pub fn deinit(self: *Archetype) void {
             const zone = ztracy.ZoneNC(@src(), "Archetype deinit", Color.archetype);
             defer zone.End();
-
             self.entities.deinit();
             inline for (component_type_arr) |ComponentType, i| {
                 if (@sizeOf(ComponentType) > 0) {
@@ -133,6 +132,7 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
                 rawSetComponent,
                 rawRegisterEntity,
                 rawSwapRemoveEntity,
+                rawGetStorageData,
                 deinit,
             );
         }
@@ -299,7 +299,8 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
         }
 
         pub fn rawRegisterEntity(self: *Archetype, entity: Entity, data: []const []const u8) IArchetype.Error!void {
-            std.debug.assert(data.len == component_type_arr.len);
+            var te: usize = component_type_arr.len;
+            std.debug.assert(data.len <= te);
 
             const zone = ztracy.ZoneNC(@src(), "Archetype rawRegisterEntity", Color.archetype);
             defer zone.End();
@@ -362,6 +363,29 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
                 if (component_index.* > moving_kv.value) {
                     component_index.* -= 1;
                 }
+            }
+        }
+
+        pub fn rawGetStorageData(self: *Archetype, component_hashes: []u64, storage: *IArchetype.StorageData) IArchetype.Error!void {
+            std.debug.assert(component_hashes.len <= storage.outer.len);
+
+            var storage_index: usize = 0;
+            inline for (component_type_arr) |Component, i| {
+                const component_hash = comptime query.hashType(Component);
+                const component_size = @sizeOf(Component);
+                for (component_hashes) |hash| {
+                    if (hash == component_hash) {
+                        if (component_size > 0) {
+                            storage.outer[storage_index] = std.mem.sliceAsBytes(self.component_storage[i].items);
+                        }
+                        storage_index += 1;
+                    }
+                }
+            }
+            storage.inner_len = self.entities.count();
+
+            if (storage_index != component_hashes.len) {
+                return IArchetype.Error.ComponentMissing;
             }
         }
 
@@ -997,5 +1021,65 @@ test "archetype IArchetype rawSwapRemoveEntity" {
             std.mem.asBytes(&c),
             data[2],
         );
+    }
+}
+
+test "archetype IArchetype rawGetStorageData" {
+    var archetype = FromTypesArray(&Testing.AllComponentsArr).init(testing.allocator);
+    defer archetype.deinit();
+
+    {
+        var i: u32 = 0;
+        while (i < 100) : (i += 1) {
+            const mock_entity = Entity{ .id = i };
+            const a = Testing.Component.A{ .value = i };
+            const b = Testing.Component.B{ .value = @intCast(u8, i) };
+            const c = Testing.Component.C{};
+            try archetype.registerEntity(mock_entity, .{ a, b, c });
+        }
+    }
+
+    var data: [3][]u8 = undefined;
+    var storage = IArchetype.StorageData{
+        .inner_len = undefined,
+        .outer = &data,
+    };
+    {
+        try archetype.rawGetStorageData(&[_]u64{query.hashType(Testing.Component.A)}, &storage);
+
+        try testing.expectEqual(@as(usize, 100), storage.inner_len);
+        {
+            var i: u32 = 0;
+            while (i < 100) : (i += 1) {
+                const from = i * @sizeOf(Testing.Component.A);
+                const to = from + @sizeOf(Testing.Component.A);
+                const bytes = storage.outer[0][from..to];
+                const a = @ptrCast(*const Testing.Component.A, @alignCast(@alignOf(Testing.Component.A), bytes)).*;
+                try testing.expectEqual(Testing.Component.A{ .value = i }, a);
+            }
+        }
+    }
+
+    try archetype.rawGetStorageData(&[_]u64{ query.hashType(Testing.Component.A), query.hashType(Testing.Component.B) }, &storage);
+    try testing.expectEqual(@as(usize, 100), storage.inner_len);
+    {
+        var i: u32 = 0;
+        while (i < 100) : (i += 1) {
+            {
+                const from = i * @sizeOf(Testing.Component.A);
+                const to = from + @sizeOf(Testing.Component.A);
+                const bytes = storage.outer[0][from..to];
+                const a = @ptrCast(*const Testing.Component.A, @alignCast(@alignOf(Testing.Component.A), bytes)).*;
+                try testing.expectEqual(Testing.Component.A{ .value = i }, a);
+            }
+
+            {
+                const from = i * @sizeOf(Testing.Component.B);
+                const to = from + @sizeOf(Testing.Component.B);
+                const bytes = storage.outer[1][from..to];
+                const a = @ptrCast(*const Testing.Component.B, @alignCast(@alignOf(Testing.Component.B), bytes)).*;
+                try testing.expectEqual(Testing.Component.B{ .value = @intCast(u8, i) }, a);
+            }
+        }
     }
 }
