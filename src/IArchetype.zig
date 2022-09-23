@@ -152,6 +152,7 @@ pub fn registerEntity(self: IArchetype, entity: Entity, data: []const []const u8
     try self.vtable.registerEntity(self.ptr, entity, data);
 }
 
+// TODO: buffer should be optional to skip moving the data
 pub fn swapRemoveEntity(self: IArchetype, entity: Entity, buffer: [][]u8) Error!void {
     return self.vtable.swapRemoveEntity(self.ptr, entity, buffer);
 }

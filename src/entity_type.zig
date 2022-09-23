@@ -2,9 +2,11 @@ pub const EntityId = usize;
 pub const Entity = struct {
     id: EntityId,
 };
+
 /// used to retrieve a specific entity
-pub const EntityRef = packed struct {
-    type_path_index: u16,
+pub const EntityRef = union(enum) {
+    @"void",
+    type_index: u15,
 };
 
 pub const MapContext = struct {

@@ -299,8 +299,7 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
         }
 
         pub fn rawRegisterEntity(self: *Archetype, entity: Entity, data: []const []const u8) IArchetype.Error!void {
-            var te: usize = component_type_arr.len;
-            std.debug.assert(data.len <= te);
+            std.debug.assert(data.len <= component_type_arr.len);
 
             const zone = ztracy.ZoneNC(@src(), "Archetype rawRegisterEntity", Color.archetype);
             defer zone.End();

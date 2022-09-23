@@ -163,6 +163,12 @@ fn CreateWorld(
             try self.container.setComponent(entity, component);
         }
 
+        pub fn removeComponent(self: *World, entity: Entity, comptime Component: type) !void {
+            const zone = ztracy.ZoneNC(@src(), "World removeComponent", Color.world);
+            defer zone.End();
+            try self.container.removeComponent(entity, Component);
+        }
+
         /// Check if an entity has a given component
         /// Parameters:
         ///     - entity:    the entity to check for type Component
@@ -432,20 +438,19 @@ test "setComponent() component moves entity to correct archetype" {
     defer world.deinit();
 
     const entity1 = try world.createEntity(.{Testing.Component.A{}});
-    // entity is now a void entity (no components)
 
     const a = Testing.Component.A{ .value = 123 };
     try world.setComponent(entity1, a);
-    // entity is now of archetype (A)
 
     const b = Testing.Component.B{ .value = 42 };
     try world.setComponent(entity1, b);
-    // entity is now of archetype (A B)
 
     const stored_a = try world.getComponent(entity1, Testing.Component.A);
     try testing.expectEqual(a, stored_a);
     const stored_b = try world.getComponent(entity1, Testing.Component.B);
     try testing.expectEqual(b, stored_b);
+
+    try testing.expectEqual(@as(usize, 1), world.container.entity_references.items.len);
 }
 
 test "setComponent() update entities component state" {
@@ -453,14 +458,31 @@ test "setComponent() update entities component state" {
     defer world.deinit();
 
     const entity = try world.createEntity(.{ Testing.Component.A{}, Testing.Component.B{} });
-    // entity is now a void entity (no components)
 
     const a = Testing.Component.A{ .value = 123 };
     try world.setComponent(entity, a);
-    // entity is now of archetype (A B)
 
     const stored_a = try world.getComponent(entity, Testing.Component.A);
     try testing.expectEqual(a, stored_a);
+}
+
+// TODO, ALSO TODO: memory leak test by setting and removing a component from one entity and validating entity storages that sum is only 1
+test "removeComponent() removes the component as expected" {
+    var world = try WorldStub.init(testing.allocator, .{});
+    defer world.deinit();
+
+    const entity = try world.createEntity(.{ Testing.Component.B{}, Testing.Component.C{} });
+
+    try world.setComponent(entity, Testing.Component.A{});
+    try testing.expectEqual(true, world.hasComponent(entity, Testing.Component.A));
+
+    try world.removeComponent(entity, Testing.Component.A);
+    try testing.expectEqual(false, world.hasComponent(entity, Testing.Component.A));
+
+    try testing.expectEqual(true, world.hasComponent(entity, Testing.Component.B));
+
+    try world.removeComponent(entity, Testing.Component.B);
+    try testing.expectEqual(false, world.hasComponent(entity, Testing.Component.B));
 }
 
 test "hasComponent() responds as expected" {
