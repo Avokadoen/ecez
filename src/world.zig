@@ -6,7 +6,7 @@ const testing = std.testing;
 const ztracy = @import("ztracy");
 
 const meta = @import("meta.zig");
-const archetype_container2 = @import("archetype_container2.zig");
+const archetype_container = @import("archetype_container.zig");
 const Entity = @import("entity_type.zig").Entity;
 const EntityRef = @import("entity_type.zig").EntityRef;
 const Color = @import("misc.zig").Color;
@@ -94,7 +94,7 @@ fn CreateWorld(
         }
         break :blk types;
     };
-    const Container = archetype_container2.FromComponents(&component_types);
+    const Container = archetype_container.FromComponents(&component_types);
 
     const SharedStateStorage = meta.SharedStateStorage(shared_state_types);
 
