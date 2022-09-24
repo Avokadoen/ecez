@@ -368,22 +368,24 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
         pub fn rawGetStorageData(self: *Archetype, component_hashes: []u64, storage: *IArchetype.StorageData) IArchetype.Error!void {
             std.debug.assert(component_hashes.len <= storage.outer.len);
 
-            var storage_index: usize = 0;
+            var stored_hashes: usize = 0;
             inline for (component_type_arr) |Component, i| {
                 const component_hash = comptime query.hashType(Component);
                 const component_size = @sizeOf(Component);
-                for (component_hashes) |hash| {
+                for (component_hashes) |hash, j| {
                     if (hash == component_hash) {
                         if (component_size > 0) {
-                            storage.outer[storage_index] = std.mem.sliceAsBytes(self.component_storage[i].items);
+                            storage.outer[j] = std.mem.sliceAsBytes(self.component_storage[i].items);
+                        } else {
+                            storage.outer[j] = std.mem.asBytes(&self.component_storage[i]);
                         }
-                        storage_index += 1;
+                        stored_hashes += 1;
                     }
                 }
             }
             storage.inner_len = self.entities.count();
 
-            if (storage_index != component_hashes.len) {
+            if (stored_hashes != component_hashes.len) {
                 return IArchetype.Error.ComponentMissing;
             }
         }

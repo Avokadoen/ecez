@@ -213,7 +213,7 @@ fn CreateWorld(
                 const component_query_types = comptime metadata.componentQueryArgTypes();
                 const param_types = comptime metadata.paramArgTypes();
 
-                var component_hashes: [component_query_types.len]u64 = undefined;
+                comptime var component_hashes: [component_query_types.len]u64 = undefined;
                 inline for (component_query_types) |T, i| {
                     component_hashes[i] = comptime query.hashType(T);
                 }
@@ -224,9 +224,21 @@ fn CreateWorld(
                     .outer = &storage_buffer,
                 };
 
+                comptime var sorted_component_hashes: [component_query_types.len]u64 = undefined;
+                comptime {
+                    std.mem.copy(u64, &sorted_component_hashes, &component_hashes);
+                    const lessThan = struct {
+                        fn func(context: void, lhs: u64, rhs: u64) bool {
+                            _ = context;
+                            return lhs < rhs;
+                        }
+                    }.func;
+                    std.sort.sort(u64, &sorted_component_hashes, {}, lessThan);
+                }
+
                 // TODO: cache result :(
                 // extract data relative to system for each relevant archetype
-                const archetype_interfaces = try self.container.getArchetypesWithComponents(self.allocator, &component_hashes);
+                const archetype_interfaces = try self.container.getArchetypesWithComponents(self.allocator, &sorted_component_hashes);
                 defer self.allocator.free(archetype_interfaces);
                 for (archetype_interfaces) |interface| {
                     try interface.getStorageData(&component_hashes, &storage);
@@ -578,6 +590,33 @@ test "systems can mutate components" {
     const entity = try world.createEntity(.{
         Testing.Component.A{ .value = 1 },
         Testing.Component.B{ .value = 2 },
+    });
+
+    try world.dispatch();
+
+    try testing.expectEqual(
+        Testing.Component.A{ .value = 3 },
+        try world.getComponent(entity, Testing.Component.A),
+    );
+}
+
+test "system parameter order is independent" {
+    const SystemStruct = struct {
+        pub fn mutateStuff(b: Testing.Component.B, c: Testing.Component.C, a: *Testing.Component.A) void {
+            _ = c;
+            a.value += @intCast(u32, b.value);
+        }
+    };
+
+    var world = try WorldStub.WithSystems(.{
+        SystemStruct,
+    }).init(testing.allocator, .{});
+    defer world.deinit();
+
+    const entity = try world.createEntity(.{
+        Testing.Component.A{ .value = 1 },
+        Testing.Component.B{ .value = 2 },
+        Testing.Component.C{},
     });
 
     try world.dispatch();
