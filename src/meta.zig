@@ -514,7 +514,7 @@ pub fn indexOfStructuresContainingTs(
     return indices;
 }
 
-pub fn countTypeMapIndices(comptime type_tuple: anytype, runtime_tuple_type: type) comptime_int {
+pub fn countTypeMapIndices(comptime type_tuple: anytype, comptime runtime_tuple_type: type) comptime_int {
     const type_tuple_info = blk: {
         const info = @typeInfo(@TypeOf(type_tuple));
         if (info != .Struct) {
@@ -547,7 +547,7 @@ pub fn countTypeMapIndices(comptime type_tuple: anytype, runtime_tuple_type: typ
     return counter;
 }
 
-pub fn typeMap(comptime type_tuple: anytype, runtime_tuple_type: type) blk: {
+pub fn typeMap(comptime type_tuple: anytype, comptime runtime_tuple_type: type) blk: {
     const rtr_array_size = countTypeMapIndices(type_tuple, runtime_tuple_type);
     break :blk [rtr_array_size]comptime_int;
 } {

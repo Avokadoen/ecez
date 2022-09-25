@@ -21,25 +21,24 @@ pub fn main() anyerror!void {
         }
     }
     var aa = std.heap.ArenaAllocator.init(gpa.allocator());
+    var tracy_allocator = ecez.tracy_alloc.TracyAllocator(std.heap.ArenaAllocator).init(aa);
     // optionally profile memory usage with tracy
-    const allocator = ecez.tracy_alloc.TracyAllocator(std.heap.ArenaAllocator).init(aa).allocator();
+    const allocator = tracy_allocator.allocator();
 
     // initialize the output buffer on the stack
     const render_target = RenderTarget{
         .output_buffer = undefined,
     };
 
-    var world = try ecez.WorldBuilder().WithArchetypes(.{
-        Cell,
-        Flush,
-        NewLine,
+    var world = try ecez.WorldBuilder().WithComponents(.{
+        GridPos,
+        Health,
+        LinePos,
+        FlushTag,
     }).WithSystems(.{
         // systems are currently order-dependent
         // this will change in the future, but there will also be order forcing semantics
-        Cell.render,
-        NewLine.render,
-        Flush,
-        Cell.tick,
+        System,
     }).WithSharedState(.{
         RenderTarget,
     }).init(allocator, .{render_target});
@@ -52,14 +51,18 @@ pub fn main() anyerror!void {
         const cell_create_zone = ztracy.ZoneNC(@src(), "Create Cells", Color.Light.purple);
         defer cell_create_zone.End();
 
+        // Workaround issue https://github.com/ziglang/zig/issues/3915 by declaring a type for entity,
+        // should be valid to use createEntity(.{ Component1, Component2 }) in most cases ...
+        const Cell = std.meta.Tuple(&[_]type{ GridPos, Health });
+
         var i: usize = 0;
         while (i < cell_count) : (i += 1) {
             _ = try world.createEntity(Cell{
-                .pos = .{
+                GridPos{
                     .x = @intCast(u8, i % grid_dimensions),
                     .y = @intCast(u8, i / grid_dimensions),
                 },
-                .health = .{ .alive = rng.random().float(f32) < spawn_threshold },
+                Health{ .alive = rng.random().float(f32) < spawn_threshold },
             });
         }
     }
@@ -69,14 +72,15 @@ pub fn main() anyerror!void {
         const line_create_zone = ztracy.ZoneNC(@src(), "Create New Lines", Color.Light.green);
         defer line_create_zone.End();
 
+        const Line = std.meta.Tuple(&[_]type{LinePos});
         var i: u8 = 1;
         while (i <= new_lines) : (i += 1) {
-            _ = try world.createEntity(NewLine{ .pos = .{ .nth = i } });
+            _ = try world.createEntity(Line{LinePos{ .nth = i }});
         }
     }
 
     // create flush entity
-    _ = try world.createEntity(Flush{});
+    _ = try world.createEntity(.{FlushTag{}});
 
     var refresh_delay = std.Thread.ResetEvent{};
     while (true) {
@@ -87,27 +91,28 @@ pub fn main() anyerror!void {
     }
 }
 
-// Shared state render target
+// Shared state
 const RenderTarget = struct {
     output_buffer: [cell_count * characters_per_cell + new_lines]u8,
 };
 
-// Cell components
-const GridPos = struct {
+// Components
+const GridPos = packed struct {
     x: u8,
     y: u8,
 };
 const Health = struct {
     alive: bool,
 };
+// new line line component
+const LinePos = struct {
+    nth: u8,
+};
+const FlushTag = struct {};
 
-// The cell archetype
-const Cell = struct {
-    pos: GridPos,
-    health: Health,
-
+const System = struct {
     // systems must work on components (not archetypes)
-    pub fn render(pos: GridPos, health: Health, render_target: *ecez.SharedState(RenderTarget)) void {
+    pub fn renderCell(pos: GridPos, health: Health, render_target: *ecez.SharedState(RenderTarget)) void {
         const zone = ztracy.ZoneNC(@src(), "Render Cell", Color.Light.red);
         defer zone.End();
 
@@ -130,7 +135,24 @@ const Cell = struct {
         }
     }
 
-    pub fn tick(pos: GridPos, health: *Health, render_target: ecez.SharedState(RenderTarget)) void {
+    pub fn renderLine(pos: LinePos, render_target: *ecez.SharedState(RenderTarget)) void {
+        const zone = ztracy.ZoneNC(@src(), "Render newline", Color.Light.turquoise);
+        defer zone.End();
+        const nth = @intCast(usize, pos.nth);
+
+        render_target.output_buffer[nth * grid_dimensions * characters_per_cell + nth - 1] = '\n';
+    }
+
+    pub fn flushBuffer(flush: FlushTag, render_target: ecez.SharedState(RenderTarget)) void {
+        const zone = ztracy.ZoneNC(@src(), "Flush buffer", Color.Light.turquoise);
+        defer zone.End();
+
+        _ = flush;
+        std.debug.print("{s}\n", .{render_target.output_buffer});
+        std.debug.print("-" ** (grid_dimensions * characters_per_cell) ++ "\n", .{});
+    }
+
+    pub fn tickCell(pos: GridPos, health: *Health, render_target: ecez.SharedState(RenderTarget)) void {
         const zone = ztracy.ZoneNC(@src(), "Update Cell", Color.Light.red);
         defer zone.End();
 
@@ -166,36 +188,5 @@ const Cell = struct {
                 break :blk false;
             }
         };
-    }
-};
-
-const FlushTag = struct {};
-const Flush = struct {
-    tag: FlushTag = .{},
-
-    pub fn buffer(flush: FlushTag, render_target: ecez.SharedState(RenderTarget)) void {
-        const zone = ztracy.ZoneNC(@src(), "Flush buffer", Color.Light.turquoise);
-        defer zone.End();
-
-        _ = flush;
-        std.debug.print("{s}\n", .{render_target.output_buffer});
-        std.debug.print("-" ** (grid_dimensions * characters_per_cell) ++ "\n", .{});
-    }
-};
-
-// new line line component
-const LinePos = struct {
-    nth: u8,
-};
-// new line archetype
-const NewLine = struct {
-    pos: LinePos,
-
-    pub fn render(pos: LinePos, render_target: *ecez.SharedState(RenderTarget)) void {
-        const zone = ztracy.ZoneNC(@src(), "Render newline", Color.Light.turquoise);
-        defer zone.End();
-        const nth = @intCast(usize, pos.nth);
-
-        render_target.output_buffer[nth * grid_dimensions * characters_per_cell + nth - 1] = '\n';
     }
 };

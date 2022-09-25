@@ -3,9 +3,9 @@ const testing = std.testing;
 
 const world = @import("world.zig");
 
-// pub const WorldBuilder = world.WorldBuilder;
-// pub const SharedState = world.SharedState;
-// pub const Event = world.Event;
+pub const WorldBuilder = world.WorldBuilder;
+pub const SharedState = world.SharedState;
+pub const Event = world.Event;
 
 pub const Query = @import("query.zig").Query;
 pub const tracy_alloc = @import("tracy_alloc.zig");

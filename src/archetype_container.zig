@@ -142,14 +142,38 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                         try result.append(arche.interface);
                     }
 
-                    for (self.children) |maybe_child, i| {
-                        if (maybe_child) |child| {
-                            if (i == arche_index) {
-                                // record all defined archetypes in the child as well since they also only have suitable archetypes
-                                try child.getIArchetypesWithComponents(null, result, depth + 1);
-                            } else {
-                                // look for matching component in the other children
-                                try child.getIArchetypesWithComponents(some_path, result, depth + 1);
+                    const next_depth = depth + 1;
+
+                    // if any of the steps are less than the depth then it means we are in a
+                    // branch that does not contain any matches
+                    const skip_searching_siblings = blk: {
+                        for (some_path) |step| {
+                            if (step < next_depth) {
+                                break :blk true;
+                            }
+                        }
+                        break :blk false;
+                    };
+
+                    if (skip_searching_siblings) {
+                        for (self.children) |maybe_child, i| {
+                            if (maybe_child) |child| {
+                                if (i == arche_index) {
+                                    // record all defined archetypes in the child as well since they also only have suitable archetypes
+                                    try child.getIArchetypesWithComponents(null, result, next_depth);
+                                }
+                            }
+                        }
+                    } else {
+                        for (self.children) |maybe_child, i| {
+                            if (maybe_child) |child| {
+                                if (i == arche_index) {
+                                    // record all defined archetypes in the child as well since they also only have suitable archetypes
+                                    try child.getIArchetypesWithComponents(null, result, next_depth);
+                                } else {
+                                    // look for matching component in the other children
+                                    try child.getIArchetypesWithComponents(some_path, result, next_depth);
+                                }
                             }
                         }
                     }

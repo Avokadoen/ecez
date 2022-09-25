@@ -246,31 +246,34 @@ fn CreateWorld(
                     while (i < storage.inner_len) : (i += 1) {
                         var arguments: std.meta.Tuple(&param_types) = undefined;
                         inline for (param_types) |Param, j| {
-                            const param_size = @sizeOf(Param);
-                            if (param_size > 0) {
-                                switch (metadata.args[j]) {
-                                    .component_value => {
+                            switch (metadata.args[j]) {
+                                .component_value => {
+                                    // get size of the parameter type
+                                    const param_size = @sizeOf(Param);
+                                    if (param_size > 0) {
                                         const from = i * param_size;
                                         const to = from + param_size;
                                         const bytes = storage.outer[j][from..to];
                                         arguments[j] = @ptrCast(*Param, @alignCast(@alignOf(Param), bytes.ptr)).*;
-                                    },
-                                    .component_ptr => {
+                                    } else {
+                                        arguments[j] = Param{};
+                                    }
+                                },
+                                .component_ptr => {
+                                    // get size of the type the pointer is pointing to
+                                    const param_size = @sizeOf(component_query_types[j]);
+                                    if (param_size > 0) {
                                         const from = i * param_size;
-                                        const bytes = storage.outer[j][from..];
-                                        arguments[j] = @ptrCast(Param, @alignCast(@alignOf(Param), bytes.ptr));
-                                    },
-                                    .event_argument_value => @compileError("event arguments are illegal for dispatch systems"),
-                                    .shared_state_value => arguments[j] = self.getSharedStateWithSharedStateType(Param),
-                                    .shared_state_ptr => arguments[j] = self.getSharedStatePtrWithSharedStateType(Param),
-                                }
-                            } else {
-                                switch (metadata.args[j]) {
-                                    .component_value => arguments[j] = Param{},
-                                    .component_ptr => arguments[j] = &Param{},
-                                    .event_argument_value => @compileError("event arguments are illegal for dispatch systems"),
-                                    .shared_state_value, .shared_state_ptr => @compileError("requesting shared state with zero size is not allowed"),
-                                }
+                                        const to = from + param_size;
+                                        const bytes = storage.outer[j][from..to];
+                                        arguments[j] = @ptrCast(Param, @alignCast(@alignOf(component_query_types[j]), bytes.ptr));
+                                    } else {
+                                        arguments[j] = &component_query_types[j]{};
+                                    }
+                                },
+                                .event_argument_value => @compileError("event arguments are illegal for dispatch systems"),
+                                .shared_state_value => arguments[j] = self.getSharedStateWithSharedStateType(Param),
+                                .shared_state_ptr => arguments[j] = self.getSharedStatePtrWithSharedStateType(Param),
                             }
                         }
                         const system_ptr = @ptrCast(*const systems_info.function_types[system_index], systems_info.functions[system_index]);
@@ -330,31 +333,34 @@ fn CreateWorld(
                     while (i < storage.inner_len) : (i += 1) {
                         var arguments: std.meta.Tuple(&param_types) = undefined;
                         inline for (param_types) |Param, j| {
-                            const param_size = @sizeOf(Param);
-                            if (param_size > 0) {
-                                switch (metadata.args[j]) {
-                                    .component_value => {
+                            switch (metadata.args[j]) {
+                                .component_value => {
+                                    // get size of the parameter type
+                                    const param_size = @sizeOf(Param);
+                                    if (param_size > 0) {
                                         const from = i * param_size;
                                         const to = from + param_size;
                                         const bytes = storage.outer[j][from..to];
                                         arguments[j] = @ptrCast(*Param, @alignCast(@alignOf(Param), bytes.ptr)).*;
-                                    },
-                                    .component_ptr => {
+                                    } else {
+                                        arguments[j] = Param{};
+                                    }
+                                },
+                                .component_ptr => {
+                                    // get size of the type the pointer is pointing to
+                                    const param_size = @sizeOf(component_query_types[j]);
+                                    if (param_size > 0) {
                                         const from = i * param_size;
-                                        const bytes = storage.outer[j][from..];
+                                        const to = from + param_size;
+                                        const bytes = storage.outer[j][from..to];
                                         arguments[j] = @ptrCast(Param, @alignCast(@alignOf(Param), bytes.ptr));
-                                    },
-                                    .event_argument_value => arguments[j] = @bitCast(TargetEventArg, event_extra_argument),
-                                    .shared_state_value => arguments[j] = self.getSharedStateWithSharedStateType(Param),
-                                    .shared_state_ptr => arguments[j] = self.getSharedStatePtrWithSharedStateType(Param),
-                                }
-                            } else {
-                                switch (metadata.args[j]) {
-                                    .component_value => arguments[j] = Param{},
-                                    .component_ptr => arguments[j] = &Param{},
-                                    .event_argument_value => arguments[j] = @bitCast(TargetEventArg, event_extra_argument),
-                                    .shared_state_value, .shared_state_ptr => @compileError("requesting shared state with zero size is not allowed"),
-                                }
+                                    } else {
+                                        arguments[j] = &component_query_types[j]{};
+                                    }
+                                },
+                                .event_argument_value => arguments[j] = @bitCast(TargetEventArg, event_extra_argument),
+                                .shared_state_value => arguments[j] = self.getSharedStateWithSharedStateType(Param),
+                                .shared_state_ptr => arguments[j] = self.getSharedStatePtrWithSharedStateType(Param),
                             }
                         }
 
