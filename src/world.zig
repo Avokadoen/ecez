@@ -7,6 +7,7 @@ const ztracy = @import("ztracy");
 
 const meta = @import("meta.zig");
 const archetype_container = @import("archetype_container.zig");
+const archetype_cache = @import("archetype_cache.zig");
 const Entity = @import("entity_type.zig").Entity;
 const EntityRef = @import("entity_type.zig").EntityRef;
 const Color = @import("misc.zig").Color;
@@ -102,6 +103,8 @@ fn CreateWorld(
     const systems_info = meta.systemInfo(system_count, systems);
     const event_count = meta.countAndVerifyEvents(events);
 
+    const ArchetypeCache = archetype_cache.ArchetypeCache(system_count, &components);
+
     return struct {
         const World = @This();
 
@@ -110,6 +113,9 @@ fn CreateWorld(
         allocator: Allocator,
         container: Container,
         shared_state: SharedStateStorage,
+
+        // the cache used to store archetypes for each system
+        system_cache: ArchetypeCache,
 
         /// intialize the world structure
         /// Parameters:
@@ -134,6 +140,7 @@ fn CreateWorld(
                 .allocator = allocator,
                 .container = container,
                 .shared_state = actual_shared_state,
+                .system_cache = ArchetypeCache.init(),
             };
         }
 
@@ -141,6 +148,7 @@ fn CreateWorld(
             const zone = ztracy.ZoneNC(@src(), "World deinit", Color.world);
             defer zone.End();
 
+            self.system_cache.deinit(self.allocator);
             self.container.deinit();
         }
 
@@ -160,13 +168,24 @@ fn CreateWorld(
         pub fn setComponent(self: *World, entity: Entity, component: anytype) !void {
             const zone = ztracy.ZoneNC(@src(), "World setComponent", Color.world);
             defer zone.End();
-            try self.container.setComponent(entity, component);
+
+            const entity_moved = try self.container.setComponent(entity, component);
+            if (entity_moved) {
+                self.system_cache.setIncoherentBit(@TypeOf(component));
+            }
         }
 
+        /// Reassign a component value owned by entity
+        /// Parameters:
+        ///     - entity:    the entity that should be assigned the component value
+        ///     - component: the new component value
         pub fn removeComponent(self: *World, entity: Entity, comptime Component: type) !void {
             const zone = ztracy.ZoneNC(@src(), "World removeComponent", Color.world);
             defer zone.End();
-            try self.container.removeComponent(entity, Component);
+            const entity_moved = try self.container.removeComponent(entity, Component);
+            if (entity_moved) {
+                self.system_cache.setIncoherentBit(Component);
+            }
         }
 
         /// Check if an entity has a given component
@@ -236,10 +255,18 @@ fn CreateWorld(
                     std.sort.sort(u64, &sorted_component_hashes, {}, lessThan);
                 }
 
-                // TODO: cache result :(
                 // extract data relative to system for each relevant archetype
-                const archetype_interfaces = try self.container.getArchetypesWithComponents(self.allocator, &sorted_component_hashes);
-                defer self.allocator.free(archetype_interfaces);
+                const archetype_interfaces = blk: {
+                    if (self.system_cache.isCoherent(&component_query_types) == false) {
+                        self.system_cache.assignCacheEntry(
+                            self.allocator,
+                            system_index,
+                            try self.container.getArchetypesWithComponents(self.allocator, &sorted_component_hashes),
+                        );
+                    }
+                    break :blk self.system_cache.cache[system_index];
+                };
+
                 for (archetype_interfaces) |interface| {
                     try interface.getStorageData(&component_hashes, &storage);
                     var i: usize = 0;

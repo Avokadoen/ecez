@@ -392,7 +392,13 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             return entity;
         }
 
-        pub inline fn setComponent(self: *ArcheContainer, entity: Entity, component: anytype) IArchetype.Error!void {
+        /// Assign the component value to an entity
+        /// Errors:
+        ///     - EntityMissing: if the entity does not exist
+        ///     - OutOfMemory: if OOM
+        /// Return:
+        ///     True if a new archetype was created for this operation
+        pub inline fn setComponent(self: *ArcheContainer, entity: Entity, component: anytype) IArchetype.Error!bool {
             const zone = ztracy.ZoneNC(@src(), "Container setComponent", Color.arche_container);
             defer zone.End();
 
@@ -402,6 +408,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             if (self.getArchetypeWithEntity(entity)) |arche| {
                 // try to update component in current archetype
                 if (arche.interface.setComponent(entity, component)) |ok| {
+                    // ok we don't need to do anymore
                     _ = ok;
                 } else |err| {
                     switch (err) {
@@ -438,6 +445,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                                 break :blk1 path;
                             };
 
+                            var new_archetype_created: bool = undefined;
                             const new_arche: Node.Arch = blk1: {
                                 var arche_node = blk: {
                                     var current_node: Node = self.root_node;
@@ -469,6 +477,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
                                 const archetype_index = new_path.indices[new_path.len - 1];
                                 if (arche_node.archetypes[archetype_index]) |some| {
+                                    new_archetype_created = false;
                                     break :blk1 some;
                                 } else {
                                     var type_hashes: [len]u64 = undefined;
@@ -494,6 +503,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                                         .interface = i_archetype,
                                     };
 
+                                    new_archetype_created = true;
                                     break :blk1 arche_node.archetypes[archetype_index].?;
                                 }
                             };
@@ -519,6 +529,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                             self.entity_references.items[entity.id] = EntityRef{
                                 .type_index = @intCast(u15, new_arche.path_index),
                             };
+
+                            return new_archetype_created;
                         },
                         error.OutOfMemory => return IArchetype.Error.OutOfMemory,
                         // if this happen, then the container is in an invalid state
@@ -528,11 +540,18 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                     }
                 }
             }
+            return false;
         }
 
-        pub inline fn removeComponent(self: *ArcheContainer, entity: Entity, comptime Component: type) !void {
+        /// Remove the Component type from an entity
+        /// Errors:
+        ///     - EntityMissing: if the entity does not exist
+        ///     - OutOfMemory: if OOM
+        /// Return:
+        ///     True if a new archetype was created for this operation
+        pub inline fn removeComponent(self: *ArcheContainer, entity: Entity, comptime Component: type) !bool {
             if (self.hasComponent(entity, Component) == false) {
-                return;
+                return false;
             }
 
             // we know that archetype exist because hasComponent can only return if it does
@@ -550,7 +569,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             if (old_path.len <= 1) {
                 // update entity reference
                 self.entity_references.items[entity.id] = EntityRef.@"void";
-                return;
+                return false;
             }
 
             var remove_component_index: usize = undefined;
@@ -605,9 +624,11 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 break :blk current_node;
             };
 
+            var new_archetype_created: bool = undefined;
             var new_archetype = blk: {
                 const archetype_index = new_path.indices[new_path.len - 1];
                 if (arche_node.archetypes[archetype_index]) |some| {
+                    new_archetype_created = false;
                     break :blk some;
                 } else {
                     var type_hashes: [len]u64 = undefined;
@@ -633,6 +654,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                         .interface = i_archetype,
                     };
 
+                    new_archetype_created = true;
                     break :blk arche_node.archetypes[archetype_index].?;
                 }
             };
@@ -650,6 +672,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             self.entity_references.items[entity.id] = EntityRef{
                 .type_index = @intCast(u15, new_archetype.path_index),
             };
+
+            return new_archetype_created;
         }
 
         pub inline fn hasComponent(self: ArcheContainer, entity: Entity, comptime Component: type) bool {
@@ -752,11 +776,11 @@ test "ArcheContainer setComponent & getComponent works" {
     });
 
     const a = Testing.Component.A{ .value = 40 };
-    try container.setComponent(entity, a);
+    _ = try container.setComponent(entity, a);
     try testing.expectEqual(a, try container.getComponent(entity, Testing.Component.A));
 
     const b = Testing.Component.B{ .value = 42 };
-    try container.setComponent(entity, b);
+    _ = try container.setComponent(entity, b);
     try testing.expectEqual(b, try container.getComponent(entity, Testing.Component.B));
 }
 
@@ -805,7 +829,7 @@ test "ArcheContainer getArchetypesWithComponents returns matching archetypes" {
         try testing.expectEqual(@as(usize, 0), arch.len);
     }
 
-    try container.setComponent(entity, Testing.Component.A{});
+    _ = try container.setComponent(entity, Testing.Component.A{});
     {
         const arch = try container.getArchetypesWithComponents(testing.allocator, &[_]u64{c_hash});
         defer testing.allocator.free(arch);
@@ -822,7 +846,7 @@ test "ArcheContainer getArchetypesWithComponents returns matching archetypes" {
         try testing.expectEqual(@as(usize, 1), arch.len);
     }
 
-    try container.setComponent(entity, Testing.Component.B{});
+    _ = try container.setComponent(entity, Testing.Component.B{});
     {
         const arch = try container.getArchetypesWithComponents(testing.allocator, &[_]u64{c_hash});
         defer testing.allocator.free(arch);
