@@ -1043,6 +1043,64 @@ test "dispatch cache works" {
     );
 }
 
+test "event cache works" {
+    const SystemStruct = struct {
+        pub fn event1System(a: *Testing.Component.A) void {
+            a.value += 1;
+        }
+
+        pub fn event2System(b: *Testing.Component.B) void {
+            b.value += 1;
+        }
+    };
+
+    var world = try WorldStub.WithEvents(.{
+        Event("onEvent1", .{SystemStruct.event1System}, .{}),
+        Event("onEvent2", .{SystemStruct.event2System}, .{}),
+    }).init(testing.allocator, .{});
+    defer world.deinit();
+
+    const entity1 = try world.createEntity(.{Testing.Component.A{ .value = 0 }});
+
+    try world.triggerEvent(.onEvent1, .{});
+    try testing.expectEqual(Testing.Component.A{ .value = 1 }, try world.getComponent(
+        entity1,
+        Testing.Component.A,
+    ));
+
+    // move entity to archetype A, B
+    try world.setComponent(entity1, Testing.Component.B{ .value = 0 });
+    try world.triggerEvent(.onEvent1, .{});
+    try testing.expectEqual(Testing.Component.A{ .value = 2 }, try world.getComponent(
+        entity1,
+        Testing.Component.A,
+    ));
+
+    try world.triggerEvent(.onEvent2, .{});
+    try testing.expectEqual(Testing.Component.B{ .value = 1 }, try world.getComponent(
+        entity1,
+        Testing.Component.B,
+    ));
+
+    const entity2 = try world.createEntity(.{
+        Testing.Component.A{ .value = 0 },
+        Testing.Component.B{ .value = 0 },
+        Testing.Component.C{},
+    });
+
+    try world.triggerEvent(.onEvent1, .{});
+    try testing.expectEqual(
+        Testing.Component.A{ .value = 1 },
+        try world.getComponent(entity2, Testing.Component.A),
+    );
+
+    try world.triggerEvent(.onEvent2, .{});
+    try testing.expectEqual(
+        Testing.Component.B{ .value = 1 },
+        try world.getComponent(entity2, Testing.Component.B),
+    );
+}
+
 // test "queryStorage returns expected result" {
 //     var world = try WorldStub.init(testing.allocator, .{});
 //     defer world.deinit();
