@@ -27,19 +27,17 @@ zig build run-game-of-life
 As mentioned, the current state of the API is very much Work in Progress (WIP). The framework is to some degree functional and can be played with. Current *implemented* features are
 
 ### Compile time based and type safe API
-Zig's comptime feature is heavily utilized to perform static reflection on the usage of the API to validate what can be validated on and report useful messages to the user (in theory :)). 
-
-Currently a very big downside to this mentality is that *the user has to explicitly state allowed type compositions (or archetypes)*, but this **will** change in the future.
+Zig's comptime feature is utilized to perform static reflection on the usage of the API to validate useage and report useful messages to the user (in theory :)). 
 
 ```zig
-// WithArchetypes is planned to be obsolete in the future
-var world = try ecez.WorldBuilder().WithArchetypes(.{
+var world = try ecez.WorldBuilder().WithComponents(.{
         // each archetype entry is a struct of components 
-        Player, 
-        SlimeEnemy,
+        Health, 
+        Attributes,
         Chest,
-        AxeWeapon,
-        SwordWeapon,
+        Weapon,
+        Blunt,
+        Sharp,
         // ...
     }).WithSystems(.{
         // Here AttackSystems is a struct with multiple functions which will be registered
