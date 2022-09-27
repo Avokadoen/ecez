@@ -984,6 +984,45 @@ test "events can accepts event related data" {
     );
 }
 
+test "dispatch cache works" {
+    const SystemStruct = struct {
+        pub fn aSystem(a: *Testing.Component.A) !void {
+            a.value += 1;
+        }
+    };
+
+    var world = try WorldStub.WithSystems(.{
+        SystemStruct,
+    }).init(testing.allocator, .{});
+    defer world.deinit();
+
+    const entity1 = try world.createEntity(.{Testing.Component.A{ .value = 0 }});
+    try world.dispatch();
+    try testing.expectEqual(Testing.Component.A{ .value = 1 }, try world.getComponent(
+        entity1,
+        Testing.Component.A,
+    ));
+
+    // move entity to archetype A, B
+    try world.setComponent(entity1, Testing.Component.B{});
+    try world.dispatch();
+    try testing.expectEqual(Testing.Component.A{ .value = 2 }, try world.getComponent(
+        entity1,
+        Testing.Component.A,
+    ));
+
+    const entity2 = try world.createEntity(.{
+        Testing.Component.A{ .value = 0 },
+        Testing.Component.B{},
+        Testing.Component.C{},
+    });
+    try world.dispatch();
+    try testing.expectEqual(
+        Testing.Component.A{ .value = 1 },
+        try world.getComponent(entity2, Testing.Component.A),
+    );
+}
+
 // test "queryStorage returns expected result" {
 //     var world = try WorldStub.init(testing.allocator, .{});
 //     defer world.deinit();
