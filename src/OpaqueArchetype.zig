@@ -226,22 +226,24 @@ pub fn rawSwapRemoveEntity(self: *OpaqueArchetype, entity: Entity, buffer: [][]u
     }
 }
 
-pub fn rawGetStorageData(self: *OpaqueArchetype, component_hashes: []u64, storage: *IArchetype.StorageData) IArchetype.Error!void {
+pub fn rawGetStorageData(self: *OpaqueArchetype, component_hashes: []const u64, storage: *IArchetype.StorageData) IArchetype.Error!void {
     std.debug.assert(component_hashes.len <= storage.outer.len);
 
     var stored_hashes: usize = 0;
+    var iter_count: usize = 0;
     var iter = self.type_info.iterator();
     while (iter.next()) |info| {
         const iter_hash = info.key_ptr.*;
         const iter_size = info.value_ptr.size;
-        for (component_hashes[0..]) |hash, hash_index| {
+        for (component_hashes) |hash, hash_index| {
             if (iter_hash == hash) {
                 if (iter_size > 0) {
-                    storage.outer[hash_index] = self.component_storage[hash_index].items;
+                    storage.outer[hash_index] = self.component_storage[iter_count].items;
                 }
                 stored_hashes += 1;
             }
         }
+        iter_count += 1;
     }
     storage.inner_len = self.entities.count();
 

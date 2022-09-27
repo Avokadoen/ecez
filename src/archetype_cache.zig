@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const IArchetype = @import("IArchetype.zig");
+const query = @import("query.zig");
 
 // TODO: reduce system_count by checking which has identitcal arguments
 /// Create a cache which utilize a bitmask to check for incoherence
@@ -24,7 +25,7 @@ pub fn ArchetypeCache(comptime system_count: comptime_int, comptime components: 
 
         pub inline fn init() Self {
             return Self{
-                // set all bits to 1
+                // set all bits to 1 (incoherent)
                 .mask = ~@as(BitMask, 0),
                 // nothing is initialized
                 .initialized_mask = @as(InitializeMask, 0),
@@ -58,7 +59,6 @@ pub fn ArchetypeCache(comptime system_count: comptime_int, comptime components: 
                 }
                 break :blk mask;
             };
-
             return (self.mask & other_mask) == 0;
         }
 
@@ -66,7 +66,19 @@ pub fn ArchetypeCache(comptime system_count: comptime_int, comptime components: 
             self.mask |= (1 << offsetOf(Component));
         }
 
-        pub inline fn reset(self: *Self) void {
+        pub inline fn setIncoherentBitWithTypeHashes(self: *Self, type_hashes: []const u64) void {
+            outer: for (type_hashes) |hash| {
+                inline for (components) |Component, i| {
+                    if (hash == query.hashType(Component)) {
+                        self.mask |= (1 << i);
+                        continue :outer;
+                    }
+                }
+                unreachable;
+            }
+        }
+
+        pub inline fn setAllCoherent(self: *Self) void {
             self.mask = 0;
         }
 
@@ -102,22 +114,22 @@ test "init initialize mask bits to 1" {
 
 test "reset set mask bits to 0" {
     var cache = ArchetypeCache(0, &Testing.AllComponentsArr).init();
-    cache.reset();
+    cache.setAllCoherent();
     try testing.expectEqual(@as(u3, 0b000), cache.mask);
 }
 
-test "set assigns a given bit to the mask" {
+test "setIncoherentBit assigns a given bit to the mask" {
     var cache = ArchetypeCache(0, &Testing.AllComponentsArr).init();
 
-    cache.reset();
+    cache.setAllCoherent();
     cache.setIncoherentBit(Testing.Component.A);
     try testing.expectEqual(@as(u3, 0b001), cache.mask);
 
-    cache.reset();
+    cache.setAllCoherent();
     cache.setIncoherentBit(Testing.Component.B);
     try testing.expectEqual(@as(u3, 0b010), cache.mask);
 
-    cache.reset();
+    cache.setAllCoherent();
     cache.setIncoherentBit(Testing.Component.C);
     try testing.expectEqual(@as(u3, 0b100), cache.mask);
 
@@ -128,9 +140,16 @@ test "set assigns a given bit to the mask" {
     try testing.expectEqual(@as(u3, 0b111), cache.mask);
 }
 
+test "setIncoherentBitWithTypeHashes assigns given bits to the mask" {
+    var cache = ArchetypeCache(0, &Testing.AllComponentsArr).init();
+    cache.setAllCoherent();
+    cache.setIncoherentBitWithTypeHashes(&[_]u64{ query.hashType(Testing.Component.A), query.hashType(Testing.Component.C) });
+    try testing.expectEqual(@as(u3, 0b101), cache.mask);
+}
+
 test "isCoherent returns true when type is coherent" {
     var cache = ArchetypeCache(0, &Testing.AllComponentsArr).init();
-    cache.reset();
+    cache.setAllCoherent();
 
     try testing.expectEqual(true, cache.isCoherent(&Testing.AllComponentsArr));
 
@@ -143,7 +162,7 @@ test "isCoherent returns false when type is incoherent" {
 
     try testing.expectEqual(false, cache.isCoherent(&Testing.AllComponentsArr));
 
-    cache.reset();
+    cache.setAllCoherent();
     cache.setIncoherentBit(Testing.Component.A);
     cache.setIncoherentBit(Testing.Component.C);
     try testing.expectEqual(false, cache.isCoherent(&[_]type{ Testing.Component.A, Testing.Component.C }));

@@ -103,7 +103,7 @@ fn CreateWorld(
     const systems_info = meta.systemInfo(system_count, systems);
     const event_count = meta.countAndVerifyEvents(events);
 
-    const ArchetypeCache = archetype_cache.ArchetypeCache(system_count, &components);
+    const DispatchCache = archetype_cache.ArchetypeCache(system_count, &components);
 
     return struct {
         const World = @This();
@@ -115,7 +115,7 @@ fn CreateWorld(
         shared_state: SharedStateStorage,
 
         // the cache used to store archetypes for each system
-        system_cache: ArchetypeCache,
+        system_cache: DispatchCache,
 
         /// intialize the world structure
         /// Parameters:
@@ -140,7 +140,7 @@ fn CreateWorld(
                 .allocator = allocator,
                 .container = container,
                 .shared_state = actual_shared_state,
-                .system_cache = ArchetypeCache.init(),
+                .system_cache = DispatchCache.init(),
             };
         }
 
@@ -158,7 +158,20 @@ fn CreateWorld(
         pub fn createEntity(self: *World, entity_state: anytype) !Entity {
             const zone = ztracy.ZoneNC(@src(), "World createEntity", Color.world);
             defer zone.End();
-            return self.container.createEntity(entity_state);
+
+            var entity: Entity = undefined;
+            var new_archetype_created: bool = undefined;
+            {
+                var result = try self.container.createEntity(entity_state);
+                entity = result[1];
+                new_archetype_created = result[0];
+            }
+            if (new_archetype_created) {
+                if (self.container.getTypeHashes(entity)) |type_hashes| {
+                    self.system_cache.setIncoherentBitWithTypeHashes(type_hashes);
+                }
+            }
+            return entity;
         }
 
         /// Reassign a component value owned by entity
@@ -169,9 +182,11 @@ fn CreateWorld(
             const zone = ztracy.ZoneNC(@src(), "World setComponent", Color.world);
             defer zone.End();
 
-            const entity_moved = try self.container.setComponent(entity, component);
-            if (entity_moved) {
-                self.system_cache.setIncoherentBit(@TypeOf(component));
+            const new_archetype_created = try self.container.setComponent(entity, component);
+            if (new_archetype_created) {
+                if (self.container.getTypeHashes(entity)) |type_hashes| {
+                    self.system_cache.setIncoherentBitWithTypeHashes(type_hashes);
+                }
             }
         }
 
@@ -182,9 +197,11 @@ fn CreateWorld(
         pub fn removeComponent(self: *World, entity: Entity, comptime Component: type) !void {
             const zone = ztracy.ZoneNC(@src(), "World removeComponent", Color.world);
             defer zone.End();
-            const entity_moved = try self.container.removeComponent(entity, Component);
-            if (entity_moved) {
-                self.system_cache.setIncoherentBit(Component);
+            const new_archetype_created = try self.container.removeComponent(entity, Component);
+            if (new_archetype_created) {
+                if (self.container.getTypeHashes(entity)) |type_hashes| {
+                    self.system_cache.setIncoherentBitWithTypeHashes(type_hashes);
+                }
             }
         }
 
@@ -227,6 +244,9 @@ fn CreateWorld(
         pub fn dispatch(self: *World) !void {
             const zone = ztracy.ZoneNC(@src(), "World dispatch", Color.world);
             defer zone.End();
+
+            // at the end of the function all bits should be coherent
+            defer self.system_cache.setAllCoherent();
 
             inline for (systems_info.metadata) |metadata, system_index| {
                 const component_query_types = comptime metadata.componentQueryArgTypes();
@@ -986,7 +1006,7 @@ test "events can accepts event related data" {
 
 test "dispatch cache works" {
     const SystemStruct = struct {
-        pub fn aSystem(a: *Testing.Component.A) !void {
+        pub fn aSystem(a: *Testing.Component.A) void {
             a.value += 1;
         }
     };
