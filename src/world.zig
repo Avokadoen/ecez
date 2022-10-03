@@ -103,7 +103,33 @@ fn CreateWorld(
     const systems_info = meta.systemInfo(system_count, systems);
     const event_count = meta.countAndVerifyEvents(events);
 
-    const DispatchCache = archetype_cache.ArchetypeCache(system_count, &components);
+    const CacheMask = archetype_cache.ArchetypeCacheMask(&components);
+    const DispatchCacheStorage = archetype_cache.ArchetypeCacheStorage(system_count);
+    const EventCacheStorages = blk: {
+        const Type = std.builtin.Type;
+        // TODO: move to meta
+        var fields: [event_count]Type.StructField = undefined;
+        for (fields) |*field, i| {
+            const event_system_count = events[i].system_count;
+            const EventCacheStorage = archetype_cache.ArchetypeCacheStorage(event_system_count);
+
+            var num_buf: [8]u8 = undefined;
+            field.* = Type.StructField{
+                .name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable,
+                .field_type = EventCacheStorage,
+                .default_value = null,
+                .is_comptime = false,
+                .alignment = @alignOf(EventCacheStorage),
+            };
+        }
+
+        break :blk @Type(Type{ .Struct = .{
+            .layout = .Auto,
+            .fields = &fields,
+            .decls = &[0]Type.Declaration{},
+            .is_tuple = true,
+        } });
+    };
 
     return struct {
         const World = @This();
@@ -114,8 +140,13 @@ fn CreateWorld(
         container: Container,
         shared_state: SharedStateStorage,
 
-        // the cache used to store archetypes for each system
-        system_cache: DispatchCache,
+        // the dispatch cache used to store archetypes for each system
+        dispatch_cache_mask: CacheMask,
+        dispatch_cache_storage: DispatchCacheStorage,
+
+        // the trigger event cache used to store archetypes for each system
+        event_cache_masks: [event_count]CacheMask,
+        event_cache_storages: EventCacheStorages,
 
         /// intialize the world structure
         /// Parameters:
@@ -135,12 +166,26 @@ fn CreateWorld(
                 }
             }
 
+            var event_cache_masks: [event_count]CacheMask = undefined;
+            for (event_cache_masks) |*mask| {
+                mask.* = CacheMask.init();
+            }
+
+            var event_cache_storages: EventCacheStorages = undefined;
+            const event_cache_storages_info = @typeInfo(EventCacheStorages).Struct;
+            inline for (event_cache_storages_info.fields) |field, i| {
+                event_cache_storages[i] = field.field_type.init();
+            }
+
             const container = try Container.init(allocator);
             return World{
                 .allocator = allocator,
                 .container = container,
                 .shared_state = actual_shared_state,
-                .system_cache = DispatchCache.init(),
+                .dispatch_cache_mask = CacheMask.init(),
+                .dispatch_cache_storage = DispatchCacheStorage.init(),
+                .event_cache_masks = event_cache_masks,
+                .event_cache_storages = event_cache_storages,
             };
         }
 
@@ -148,7 +193,13 @@ fn CreateWorld(
             const zone = ztracy.ZoneNC(@src(), "World deinit", Color.world);
             defer zone.End();
 
-            self.system_cache.deinit(self.allocator);
+            self.dispatch_cache_storage.deinit(self.allocator);
+
+            const event_cache_storages_info = @typeInfo(EventCacheStorages).Struct;
+            inline for (event_cache_storages_info.fields) |_, i| {
+                self.event_cache_storages[i].deinit(self.allocator);
+            }
+
             self.container.deinit();
         }
 
@@ -167,9 +218,7 @@ fn CreateWorld(
                 new_archetype_created = result[0];
             }
             if (new_archetype_created) {
-                if (self.container.getTypeHashes(entity)) |type_hashes| {
-                    self.system_cache.setIncoherentBitWithTypeHashes(type_hashes);
-                }
+                self.markAllCacheMasks(entity);
             }
             return entity;
         }
@@ -184,9 +233,7 @@ fn CreateWorld(
 
             const new_archetype_created = try self.container.setComponent(entity, component);
             if (new_archetype_created) {
-                if (self.container.getTypeHashes(entity)) |type_hashes| {
-                    self.system_cache.setIncoherentBitWithTypeHashes(type_hashes);
-                }
+                self.markAllCacheMasks(entity);
             }
         }
 
@@ -199,9 +246,7 @@ fn CreateWorld(
             defer zone.End();
             const new_archetype_created = try self.container.removeComponent(entity, Component);
             if (new_archetype_created) {
-                if (self.container.getTypeHashes(entity)) |type_hashes| {
-                    self.system_cache.setIncoherentBitWithTypeHashes(type_hashes);
-                }
+                self.markAllCacheMasks(entity);
             }
         }
 
@@ -246,7 +291,7 @@ fn CreateWorld(
             defer zone.End();
 
             // at the end of the function all bits should be coherent
-            defer self.system_cache.setAllCoherent();
+            defer self.dispatch_cache_mask.setAllCoherent();
 
             inline for (systems_info.metadata) |metadata, system_index| {
                 const component_query_types = comptime metadata.componentQueryArgTypes();
@@ -277,14 +322,14 @@ fn CreateWorld(
 
                 // extract data relative to system for each relevant archetype
                 const archetype_interfaces = blk: {
-                    if (self.system_cache.isCoherent(&component_query_types) == false) {
-                        self.system_cache.assignCacheEntry(
+                    if (self.dispatch_cache_mask.isCoherent(&component_query_types) == false) {
+                        self.dispatch_cache_storage.assignCacheEntry(
                             self.allocator,
                             system_index,
                             try self.container.getArchetypesWithComponents(self.allocator, &sorted_component_hashes),
                         );
                     }
-                    break :blk self.system_cache.cache[system_index];
+                    break :blk self.dispatch_cache_storage.cache[system_index];
                 };
 
                 for (archetype_interfaces) |interface| {
@@ -340,6 +385,9 @@ fn CreateWorld(
             const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.world);
             defer zone.End();
 
+            var event_cache_mask = &self.event_cache_masks[@enumToInt(event)];
+            // at the end of the function all bits should be coherent
+            defer event_cache_mask.setAllCoherent();
             const e = events[@enumToInt(event)];
 
             // TODO: verify systems and arguments in type initialization
@@ -359,7 +407,7 @@ fn CreateWorld(
                 const component_query_types = comptime metadata.componentQueryArgTypes();
                 const param_types = comptime metadata.paramArgTypes();
 
-                var component_hashes: [component_query_types.len]u64 = undefined;
+                comptime var component_hashes: [component_query_types.len]u64 = undefined;
                 inline for (component_query_types) |T, i| {
                     component_hashes[i] = comptime query.hashType(T);
                 }
@@ -370,10 +418,31 @@ fn CreateWorld(
                     .outer = &storage_buffer,
                 };
 
-                // TODO: cache result :(
+                comptime var sorted_component_hashes: [component_query_types.len]u64 = undefined;
+                comptime {
+                    std.mem.copy(u64, &sorted_component_hashes, &component_hashes);
+                    const lessThan = struct {
+                        fn func(context: void, lhs: u64, rhs: u64) bool {
+                            _ = context;
+                            return lhs < rhs;
+                        }
+                    }.func;
+                    std.sort.sort(u64, &sorted_component_hashes, {}, lessThan);
+                }
+
                 // extract data relative to system for each relevant archetype
-                const archetype_interfaces = try self.container.getArchetypesWithComponents(self.allocator, &component_hashes);
-                defer self.allocator.free(archetype_interfaces);
+                const archetype_interfaces = blk: {
+                    var event_cache_storage = &self.event_cache_storages[@enumToInt(event)];
+                    if (event_cache_mask.isCoherent(&component_query_types) == false) {
+                        event_cache_storage.assignCacheEntry(
+                            self.allocator,
+                            system_index,
+                            try self.container.getArchetypesWithComponents(self.allocator, &sorted_component_hashes),
+                        );
+                    }
+                    break :blk event_cache_storage.cache[system_index];
+                };
+
                 for (archetype_interfaces) |interface| {
                     try interface.getStorageData(&component_hashes, &storage);
                     var i: usize = 0;
@@ -471,6 +540,16 @@ fn CreateWorld(
                 }
             }
             @compileError(@typeName(Shared) ++ " is not a shared state");
+        }
+
+        inline fn markAllCacheMasks(self: *World, entity: Entity) void {
+            if (self.container.getTypeHashes(entity)) |type_hashes| {
+                self.dispatch_cache_mask.setIncoherentBitWithTypeHashes(type_hashes);
+
+                for (self.event_cache_masks) |*mask| {
+                    mask.setIncoherentBitWithTypeHashes(type_hashes);
+                }
+            }
         }
     };
 }
