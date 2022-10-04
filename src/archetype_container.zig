@@ -212,6 +212,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         component_hashes: [len]u64,
         component_sizes: [len]usize,
 
+        empty_bytes: [0]u8,
+
         pub inline fn init(allocator: Allocator) !ArcheContainer {
             var archetype_paths = ArrayList(ArchetypePath).init(allocator);
             try archetype_paths.append(ArchetypePath{ .len = 0, .indices = undefined });
@@ -234,6 +236,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 .root_node = root_node,
                 .component_hashes = component_hashes,
                 .component_sizes = component_sizes,
+                .empty_bytes = .{},
             };
         }
 
@@ -338,7 +341,11 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             // create a component byte data view
             var data: [arche_struct_info.fields.len][]const u8 = undefined;
             inline for (index_path) |path, i| {
-                data[i] = std.mem.asBytes(&initial_state[path.state_index]);
+                if (@sizeOf(@TypeOf(initial_state[path.state_index])) > 0) {
+                    data[i] = std.mem.asBytes(&initial_state[path.state_index]);
+                } else {
+                    data[i] = &self.empty_bytes;
+                }
             }
 
             // create new entity

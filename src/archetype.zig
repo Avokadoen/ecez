@@ -342,11 +342,7 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
 
             // move entity data to buffers
             inline for (component_type_arr) |Component, i| {
-                if (@sizeOf(Component) == 0) {
-                    const component = Component{};
-                    const component_bytes = std.mem.asBytes(&component);
-                    std.mem.copy(u8, buffer[i], component_bytes);
-                } else {
+                if (@sizeOf(Component) > 0) {
                     const component = self.component_storage[i].orderedRemove(moving_kv.value);
                     const component_bytes = std.mem.asBytes(&component);
                     std.mem.copy(u8, buffer[i], component_bytes);
@@ -376,8 +372,6 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
                     if (hash == component_hash) {
                         if (component_size > 0) {
                             storage.outer[j] = std.mem.sliceAsBytes(self.component_storage[i].items);
-                        } else {
-                            storage.outer[j] = std.mem.asBytes(&self.component_storage[i]);
                         }
                         stored_hashes += 1;
                     }
@@ -914,7 +908,7 @@ test "archetype IArchetype rawRegisterEntity()" {
     const b = B{ .b = 1 };
     const c = C{ .c = 3 };
     try archetype.rawRegisterEntity(mock_entity, &[_][]const u8{
-        std.mem.asBytes(&a),
+        &[0]u8{},
         // TODO: implicitly sort bytes like we sort types
         std.mem.asBytes(&c),
         std.mem.asBytes(&b),
@@ -989,13 +983,6 @@ test "archetype IArchetype rawSwapRemoveEntity" {
             std.mem.asBytes(&b),
             data[1],
         );
-
-        const c = Testing.Component.C{};
-        try testing.expectEqualSlices(
-            u8,
-            std.mem.asBytes(&c),
-            data[2],
-        );
     }
 
     {
@@ -1014,13 +1001,6 @@ test "archetype IArchetype rawSwapRemoveEntity" {
             u8,
             std.mem.asBytes(&b),
             data[1],
-        );
-
-        const c = Testing.Component.C{};
-        try testing.expectEqualSlices(
-            u8,
-            std.mem.asBytes(&c),
-            data[2],
         );
     }
 }

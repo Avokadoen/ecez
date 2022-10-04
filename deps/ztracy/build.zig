@@ -30,7 +30,7 @@ pub const BuildOptionsStep = struct {
 pub fn getPkg(dependencies: []const std.build.Pkg) std.build.Pkg {
     return .{
         .name = "ztracy",
-        .source = .{ .path = comptime thisDir() ++ "/src/ztracy.zig" },
+        .source = .{ .path = thisDir() ++ "/src/ztracy.zig" },
         .dependencies = dependencies,
     };
 }
@@ -40,8 +40,8 @@ pub fn link(exe: *std.build.LibExeObjStep, bos: BuildOptionsStep) void {
     if (bos.options.enable_ztracy) {
         const enable_fibers = if (bos.options.enable_fibers) "-DTRACY_FIBERS" else "";
 
-        exe.addIncludeDir(comptime thisDir() ++ "/libs/tracy");
-        exe.addCSourceFile(comptime thisDir() ++ "/libs/tracy/TracyClient.cpp", &.{
+        exe.addIncludePath(thisDir() ++ "/libs/tracy");
+        exe.addCSourceFile(thisDir() ++ "/libs/tracy/TracyClient.cpp", &.{
             "-DTRACY_ENABLE",
             enable_fibers,
             // MinGW doesn't have all the newfangled windows features,
@@ -50,20 +50,18 @@ pub fn link(exe: *std.build.LibExeObjStep, bos: BuildOptionsStep) void {
             "-fno-sanitize=undefined",
         });
 
-        exe.linkSystemLibrary("c");
-        exe.linkSystemLibrary("c++");
+        exe.linkSystemLibraryName("c");
+        exe.linkSystemLibraryName("c++");
 
         if (exe.target.isWindows()) {
-            exe.linkSystemLibrary("Advapi32");
-            exe.linkSystemLibrary("User32");
-            exe.linkSystemLibrary("Ws2_32");
-            exe.linkSystemLibrary("DbgHelp");
+            exe.linkSystemLibraryName("Advapi32");
+            exe.linkSystemLibraryName("User32");
+            exe.linkSystemLibraryName("Ws2_32");
+            exe.linkSystemLibraryName("DbgHelp");
         }
     }
 }
 
-fn thisDir() []const u8 {
-    comptime {
-        return std.fs.path.dirname(@src().file) orelse ".";
-    }
+inline fn thisDir() []const u8 {
+    return comptime std.fs.path.dirname(@src().file) orelse ".";
 }

@@ -169,8 +169,10 @@ pub fn rawRegisterEntity(self: *OpaqueArchetype, entity: Entity, data: []const [
     }
 
     for (data) |component_bytes, i| {
-        try self.component_storage[i].appendSlice(component_bytes);
-        appended_component = i;
+        if (data.len > 0) {
+            try self.component_storage[i].appendSlice(component_bytes);
+            appended_component = i;
+        }
     }
 }
 
@@ -188,11 +190,7 @@ pub fn rawSwapRemoveEntity(self: *OpaqueArchetype, entity: Entity, buffer: [][]u
         var i: usize = 0;
         var iter = self.type_info.iterator();
         while (iter.next()) |info| {
-            if (info.value_ptr.size == 0) {
-                const Empty = struct {};
-                const component = Empty{};
-                std.mem.copy(u8, buffer[i], std.mem.asBytes(&component));
-            } else {
+            if (info.value_ptr.size > 0) {
                 // copy data to buffer
                 const from_bytes = moving_kv.value * info.value_ptr.size;
                 const to_bytes = from_bytes + info.value_ptr.size;
@@ -282,11 +280,10 @@ test "rawGetComponent retrieves correct component" {
     while (i < 100) : (i += 1) {
         const a = A{ .value = @intCast(u32, i) };
         const b = B{ .value = @intCast(u8, i) };
-        const c = C{};
         var data: [3][]const u8 = undefined;
         data[0] = std.mem.asBytes(&a);
         data[1] = std.mem.asBytes(&b);
-        data[2] = std.mem.asBytes(&c);
+        data[2] = &[0]u8{};
         try archetype.rawRegisterEntity(Entity{ .id = @intCast(entity_type.EntityId, i) }, &data);
     }
 
@@ -305,13 +302,6 @@ test "rawGetComponent retrieves correct component" {
         std.mem.asBytes(&b),
         try archetype.rawGetComponent(entity, comptime hashType(B)),
     );
-
-    const c = C{};
-    try testing.expectEqualSlices(
-        u8,
-        std.mem.asBytes(&c),
-        try archetype.rawGetComponent(entity, comptime hashType(C)),
-    );
 }
 
 test "rawGetComponent fails on invalid request" {
@@ -322,9 +312,8 @@ test "rawGetComponent fails on invalid request" {
     defer archetype.deinit();
 
     const entity = Entity{ .id = 0 };
-    const c = C{};
     var data: [1][]const u8 = undefined;
-    data[0] = std.mem.asBytes(&c);
+    data[0] = &[0]u8{};
     try archetype.rawRegisterEntity(entity, &data);
 
     try testing.expectError(IArchetype.Error.ComponentMissing, archetype.rawGetComponent(entity, comptime hashType(Testing.Component.A)));
@@ -347,8 +336,7 @@ test "rawSwapRemoveEntity removes entity and components" {
             buffer[0] = std.mem.asBytes(&a);
             var b = B{ .value = @intCast(u8, i) };
             buffer[1] = std.mem.asBytes(&b);
-            var c = C{};
-            buffer[2] = std.mem.asBytes(&c);
+            buffer[2] = &[0]u8{};
 
             try archetype.rawRegisterEntity(mock_entity, &buffer);
         }
@@ -383,13 +371,6 @@ test "rawSwapRemoveEntity removes entity and components" {
             std.mem.asBytes(&b),
             buffer[1],
         );
-
-        const c = C{};
-        try testing.expectEqualSlices(
-            u8,
-            std.mem.asBytes(&c),
-            buffer[2],
-        );
     }
 
     {
@@ -409,13 +390,6 @@ test "rawSwapRemoveEntity removes entity and components" {
             std.mem.asBytes(&b),
             buffer[1],
         );
-
-        const c = C{};
-        try testing.expectEqualSlices(
-            u8,
-            std.mem.asBytes(&c),
-            buffer[2],
-        );
     }
 }
 
@@ -434,8 +408,7 @@ test "rawGetStorageData retrieves components view" {
             buffer[0] = std.mem.asBytes(&a);
             var b = B{ .value = @intCast(u8, i) };
             buffer[1] = std.mem.asBytes(&b);
-            var c = C{};
-            buffer[2] = std.mem.asBytes(&c);
+            buffer[2] = &[0]u8{};
 
             try archetype.rawRegisterEntity(mock_entity, &buffer);
         }
