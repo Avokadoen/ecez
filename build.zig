@@ -50,15 +50,24 @@ pub fn build(b: *std.build.Builder) void {
     ztracy.link(lib, ztracy_options);
     lib.install();
 
-    // add library tests to the main tests
-    const main_tests = b.addTest("src/main.zig");
-    main_tests.setBuildMode(mode);
-    main_tests.addPackage(ztracy_pkg);
-    ztracy.link(main_tests, ztracy_options);
-    main_tests.linkLibrary(lib);
+    // create a debuggable test executable
+    {
+        const main_tests = b.addTestExe("main_tests", "src/main.zig");
+        main_tests.setBuildMode(mode);
+        main_tests.addPackage(ztracy_pkg);
+        ztracy.link(main_tests, ztracy_options);
+        main_tests.linkLibrary(lib);
+        main_tests.install();
+    }
 
+    // add library tests to the main tests
+    const main_tests_step = b.addTest("src/main.zig");
+    main_tests_step.setBuildMode(mode);
+    main_tests_step.addPackage(ztracy_pkg);
+    ztracy.link(main_tests_step, ztracy_options);
+    main_tests_step.linkLibrary(lib);
     const test_step = b.step("test", "Run all tests");
-    test_step.dependOn(&main_tests.step);
+    test_step.dependOn(&main_tests_step.step);
 
     const target = b.standardTargetOptions(.{});
     inline for ([_]Example{.{

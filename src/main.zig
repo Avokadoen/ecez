@@ -14,7 +14,9 @@ pub const misc = @import("misc.zig");
 test {
     _ = @import("world.zig");
     _ = @import("archetype.zig");
+    _ = @import("archetype_cache.zig");
     _ = @import("archetype_container.zig");
     _ = @import("query.zig");
     _ = @import("iterator.zig");
+    _ = @import("OpaqueArchetype.zig");
 }

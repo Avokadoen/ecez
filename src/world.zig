@@ -7,11 +7,15 @@ const ztracy = @import("ztracy");
 
 const meta = @import("meta.zig");
 const archetype_container = @import("archetype_container.zig");
+const archetype_cache = @import("archetype_cache.zig");
 const Entity = @import("entity_type.zig").Entity;
 const EntityRef = @import("entity_type.zig").EntityRef;
 const Color = @import("misc.zig").Color;
+const IArchetype = @import("IArchetype.zig");
 const SystemMetadata = meta.SystemMetadata;
-const Query = @import("query.zig").Query;
+
+const query = @import("query.zig");
+const Query = query.Query;
 const iterator = @import("iterator.zig");
 
 const Testing = @import("Testing.zig");
@@ -32,63 +36,66 @@ pub fn WorldBuilder() type {
 }
 
 // temporary type state for world
-fn WorldIntermediate(comptime prev_archetypes: anytype, comptime prev_shared_state: anytype, comptime prev_systems: anytype, comptime prev_events: anytype) type {
+fn WorldIntermediate(comptime prev_components: anytype, comptime prev_shared_state: anytype, comptime prev_systems: anytype, comptime prev_events: anytype) type {
     return struct {
         const Self = @This();
 
-        /// define application archetypes
+        /// define application components
         /// Parameters:
-        ///     - archetypes: structures of archetypes that will used by the application
-        pub fn WithArchetypes(comptime archetypes: anytype) type {
-            return WorldIntermediate(archetypes, prev_shared_state, prev_systems, prev_events);
+        ///     - components: structures of components that will used by the application
+        pub fn WithComponents(comptime components: anytype) type {
+            return WorldIntermediate(components, prev_shared_state, prev_systems, prev_events);
         }
 
         /// define application shared state
         /// Parameters:
         ///     - archetypes: structures of archetypes that will used by the application
         pub fn WithSharedState(comptime shared_state: anytype) type {
-            return WorldIntermediate(prev_archetypes, shared_state, prev_systems, prev_events);
+            return WorldIntermediate(prev_components, shared_state, prev_systems, prev_events);
         }
 
         /// define application systems which should run on each dispatch
         /// Parameters:
         ///     - systems: a tuple of each system used by the world each frame
         pub fn WithSystems(comptime systems: anytype) type {
-            return WorldIntermediate(prev_archetypes, prev_shared_state, systems, prev_events);
+            return WorldIntermediate(prev_components, prev_shared_state, systems, prev_events);
         }
 
         /// define application events that can be triggered programmatically
         ///     - events: a tuple of events created using the ecez.Event function
         pub fn WithEvents(comptime events: anytype) type {
-            return WorldIntermediate(prev_archetypes, prev_shared_state, prev_systems, events);
+            return WorldIntermediate(prev_components, prev_shared_state, prev_systems, events);
         }
 
         /// build the world instance **type** which can be initialized
-        pub fn init(allocator: Allocator, shared_state: anytype) !CreateWorld(prev_archetypes, prev_shared_state, prev_systems, prev_events) {
-            return CreateWorld(prev_archetypes, prev_shared_state, prev_systems, prev_events).init(allocator, shared_state);
+        pub fn init(allocator: Allocator, shared_state: anytype) !CreateWorld(prev_components, prev_shared_state, prev_systems, prev_events) {
+            return CreateWorld(prev_components, prev_shared_state, prev_systems, prev_events).init(allocator, shared_state);
         }
     };
 }
 
 fn CreateWorld(
-    comptime archetypes: anytype,
+    comptime components: anytype,
     comptime shared_state_types: anytype,
     comptime systems: anytype,
     comptime events: anytype,
 ) type {
     @setEvalBranchQuota(10_000);
-    const archetype_types = blk: {
-        const archetypes_info = @typeInfo(@TypeOf(archetypes));
-        if (archetypes_info != .Struct) {
-            @compileError("submitted_archetypes was not a tuple of types");
+    const component_types = blk: {
+        const components_info = @typeInfo(@TypeOf(components));
+        if (components_info != .Struct) {
+            @compileError("components was not a tuple of types");
         }
-        var types: [archetypes_info.Struct.fields.len]type = undefined;
-        for (archetypes_info.Struct.fields) |_, i| {
-            types[i] = archetypes[i];
+        var types: [components_info.Struct.fields.len]type = undefined;
+        for (components_info.Struct.fields) |_, i| {
+            types[i] = components[i];
+            if (@typeInfo(types[i]) != .Struct) {
+                @compileError("expected " ++ @typeName(types[i]) ++ " component type to be a struct");
+            }
         }
         break :blk types;
     };
-    const Container = archetype_container.FromArchetypes(&archetype_types);
+    const Container = archetype_container.FromComponents(&component_types);
 
     const SharedStateStorage = meta.SharedStateStorage(shared_state_types);
 
@@ -96,12 +103,50 @@ fn CreateWorld(
     const systems_info = meta.systemInfo(system_count, systems);
     const event_count = meta.countAndVerifyEvents(events);
 
+    const CacheMask = archetype_cache.ArchetypeCacheMask(&components);
+    const DispatchCacheStorage = archetype_cache.ArchetypeCacheStorage(system_count);
+    const EventCacheStorages = blk: {
+        const Type = std.builtin.Type;
+        // TODO: move to meta
+        var fields: [event_count]Type.StructField = undefined;
+        for (fields) |*field, i| {
+            const event_system_count = events[i].system_count;
+            const EventCacheStorage = archetype_cache.ArchetypeCacheStorage(event_system_count);
+
+            var num_buf: [8]u8 = undefined;
+            field.* = Type.StructField{
+                .name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable,
+                .field_type = EventCacheStorage,
+                .default_value = null,
+                .is_comptime = false,
+                .alignment = @alignOf(EventCacheStorage),
+            };
+        }
+
+        break :blk @Type(Type{ .Struct = .{
+            .layout = .Auto,
+            .fields = &fields,
+            .decls = &[0]Type.Declaration{},
+            .is_tuple = true,
+        } });
+    };
+
     return struct {
         const World = @This();
 
         pub const EventsEnum = meta.GenerateEventsEnum(event_count, events);
+
+        allocator: Allocator,
         container: Container,
         shared_state: SharedStateStorage,
+
+        // the dispatch cache used to store archetypes for each system
+        dispatch_cache_mask: CacheMask,
+        dispatch_cache_storage: DispatchCacheStorage,
+
+        // the trigger event cache used to store archetypes for each system
+        event_cache_masks: [event_count]CacheMask,
+        event_cache_storages: EventCacheStorages,
 
         /// intialize the world structure
         /// Parameters:
@@ -121,10 +166,26 @@ fn CreateWorld(
                 }
             }
 
+            var event_cache_masks: [event_count]CacheMask = undefined;
+            for (event_cache_masks) |*mask| {
+                mask.* = CacheMask.init();
+            }
+
+            var event_cache_storages: EventCacheStorages = undefined;
+            const event_cache_storages_info = @typeInfo(EventCacheStorages).Struct;
+            inline for (event_cache_storages_info.fields) |field, i| {
+                event_cache_storages[i] = field.field_type.init();
+            }
+
             const container = try Container.init(allocator);
             return World{
+                .allocator = allocator,
                 .container = container,
                 .shared_state = actual_shared_state,
+                .dispatch_cache_mask = CacheMask.init(),
+                .dispatch_cache_storage = DispatchCacheStorage.init(),
+                .event_cache_masks = event_cache_masks,
+                .event_cache_storages = event_cache_storages,
             };
         }
 
@@ -132,16 +193,34 @@ fn CreateWorld(
             const zone = ztracy.ZoneNC(@src(), "World deinit", Color.world);
             defer zone.End();
 
+            self.dispatch_cache_storage.deinit(self.allocator);
+
+            const event_cache_storages_info = @typeInfo(EventCacheStorages).Struct;
+            inline for (event_cache_storages_info.fields) |_, i| {
+                self.event_cache_storages[i].deinit(self.allocator);
+            }
+
             self.container.deinit();
         }
 
         /// Create an entity and returns the entity handle
         /// Parameters:
-        ///     - archetype_state: the archetype that entity should be assigned and it's initial state
-        pub fn createEntity(self: *World, archetype_state: anytype) !Entity {
+        ///     - entity_state: the components that the new entity should be assigned
+        pub fn createEntity(self: *World, entity_state: anytype) !Entity {
             const zone = ztracy.ZoneNC(@src(), "World createEntity", Color.world);
             defer zone.End();
-            return self.container.createEntity(archetype_state);
+
+            var entity: Entity = undefined;
+            var new_archetype_created: bool = undefined;
+            {
+                var result = try self.container.createEntity(entity_state);
+                entity = result[1];
+                new_archetype_created = result[0];
+            }
+            if (new_archetype_created) {
+                self.markAllCacheMasks(entity);
+            }
+            return entity;
         }
 
         /// Reassign a component value owned by entity
@@ -151,21 +230,24 @@ fn CreateWorld(
         pub fn setComponent(self: *World, entity: Entity, component: anytype) !void {
             const zone = ztracy.ZoneNC(@src(), "World setComponent", Color.world);
             defer zone.End();
-            try self.container.setComponent(entity, component);
+
+            const new_archetype_created = try self.container.setComponent(entity, component);
+            if (new_archetype_created) {
+                self.markAllCacheMasks(entity);
+            }
         }
 
-        /// update the type of an entity
+        /// Reassign a component value owned by entity
         /// Parameters:
-        ///     - entity: the entity to update type of
-        ///     - NewType: the new archetype of *entity*
-        ///     - state: tuple of some components of *NewType*, or struct of type *NewType*
-        ///              if *state* is a subset of *NewType*, then the missing components of *state*
-        ///              must exist in *entity*'s previous type. Void is valid if *NewType* is a subset of
-        ///              *entity* previous type.
-        pub fn setEntityType(self: *World, entity: Entity, comptime NewType: type, state: anytype) !void {
-            const zone = ztracy.ZoneNC(@src(), "World setComponents", Color.world);
+        ///     - entity:    the entity that should be assigned the component value
+        ///     - component: the new component value
+        pub fn removeComponent(self: *World, entity: Entity, comptime Component: type) !void {
+            const zone = ztracy.ZoneNC(@src(), "World removeComponent", Color.world);
             defer zone.End();
-            try self.container.setEntityType(entity, NewType, state);
+            const new_archetype_created = try self.container.removeComponent(entity, Component);
+            if (new_archetype_created) {
+                self.markAllCacheMasks(entity);
+            }
         }
 
         /// Check if an entity has a given component
@@ -188,52 +270,102 @@ fn CreateWorld(
             return self.container.getComponent(entity, Component);
         }
 
-        /// Perform a query where you can exclude and include types
-        /// This means if you query A and B, but exclude C then entities that does
-        /// contain the C component with be omitted
-        /// Parameters:
-        ///     - query: a compile time constructet query for components
-        ///
-        /// Returns: an iterator over matched data which allow you to loop all components grouped by entity owner
-        pub fn queryStorage(self: *World, comptime query: Query) blk: {
-            const result_count = Container.queryResultCount(query);
-            break :blk iterator.FromTypes(query.include_types, result_count);
-        } {
-            return self.container.getQueryResult(query);
-        }
+        // TODO:
+        // /// Perform a query where you can exclude and include types
+        // /// This means if you query A and B, but exclude C then entities that does
+        // /// contain the C component with be omitted
+        // /// Parameters:
+        // ///     - query: a compile time constructet query for components
+        // ///
+        // /// Returns: an iterator over matched data which allow you to loop all components grouped by entity owner
+        // pub fn queryStorage(self: *World, comptime query: Query) blk: {
+        //     const result_count = Container.queryResultCount(query);
+        //     break :blk iterator.FromTypes(query.include_types, result_count);
+        // } {
+        //     return self.container.getQueryResult(query);
+        // }
 
         /// Call all systems registered when calling CreateWorld
         pub fn dispatch(self: *World) !void {
             const zone = ztracy.ZoneNC(@src(), "World dispatch", Color.world);
             defer zone.End();
 
+            // at the end of the function all bits should be coherent
+            defer self.dispatch_cache_mask.setAllCoherent();
+
             inline for (systems_info.metadata) |metadata, system_index| {
                 const component_query_types = comptime metadata.componentQueryArgTypes();
                 const param_types = comptime metadata.paramArgTypes();
 
+                comptime var component_hashes: [component_query_types.len]u64 = undefined;
+                inline for (component_query_types) |T, i| {
+                    component_hashes[i] = comptime query.hashType(T);
+                }
+
+                var storage_buffer: [component_query_types.len][]u8 = undefined;
+                var storage = IArchetype.StorageData{
+                    .inner_len = undefined,
+                    .outer = &storage_buffer,
+                };
+
+                comptime var sorted_component_hashes: [component_query_types.len]u64 = undefined;
+                comptime {
+                    std.mem.copy(u64, &sorted_component_hashes, &component_hashes);
+                    const lessThan = struct {
+                        fn func(context: void, lhs: u64, rhs: u64) bool {
+                            _ = context;
+                            return lhs < rhs;
+                        }
+                    }.func;
+                    std.sort.sort(u64, &sorted_component_hashes, {}, lessThan);
+                }
+
                 // extract data relative to system for each relevant archetype
-                const archetypes_system_data = self.container.getTypeSubsets(&component_query_types);
-                for (archetypes_system_data) |archetype_system_data| {
+                const archetype_interfaces = blk: {
+                    if (self.dispatch_cache_mask.isCoherent(&component_query_types) == false) {
+                        self.dispatch_cache_storage.assignCacheEntry(
+                            self.allocator,
+                            system_index,
+                            try self.container.getArchetypesWithComponents(self.allocator, &sorted_component_hashes),
+                        );
+                    }
+                    break :blk self.dispatch_cache_storage.cache[system_index];
+                };
+
+                for (archetype_interfaces) |interface| {
+                    try interface.getStorageData(&component_hashes, &storage);
                     var i: usize = 0;
-                    while (i < archetype_system_data.len) : (i += 1) {
+                    while (i < storage.inner_len) : (i += 1) {
                         var arguments: std.meta.Tuple(&param_types) = undefined;
                         inline for (param_types) |Param, j| {
-                            // TODO: FIXME: checking size of pointers is not valid ...
-                            if (@sizeOf(Param) > 0) {
-                                switch (metadata.args[j]) {
-                                    .component_value => arguments[j] = archetype_system_data.storage[j].items[i],
-                                    .component_ptr => arguments[j] = &archetype_system_data.storage[j].items[i],
-                                    .event_argument_value => @compileError("event arguments are illegal for dispatch systems"),
-                                    .shared_state_value => arguments[j] = self.getSharedStateWithSharedStateType(Param),
-                                    .shared_state_ptr => arguments[j] = self.getSharedStatePtrWithSharedStateType(Param),
-                                }
-                            } else {
-                                switch (metadata.args[j]) {
-                                    .component_value => arguments[j] = Param{},
-                                    .component_ptr => arguments[j] = &Param{},
-                                    .event_argument_value => @compileError("event arguments are illegal for dispatch systems"),
-                                    .shared_state_value, .shared_state_ptr => @compileError("requesting shared state with zero size is not allowed"),
-                                }
+                            switch (metadata.args[j]) {
+                                .component_value => {
+                                    // get size of the parameter type
+                                    const param_size = @sizeOf(Param);
+                                    if (param_size > 0) {
+                                        const from = i * param_size;
+                                        const to = from + param_size;
+                                        const bytes = storage.outer[j][from..to];
+                                        arguments[j] = @ptrCast(*Param, @alignCast(@alignOf(Param), bytes.ptr)).*;
+                                    } else {
+                                        arguments[j] = Param{};
+                                    }
+                                },
+                                .component_ptr => {
+                                    // get size of the type the pointer is pointing to
+                                    const param_size = @sizeOf(component_query_types[j]);
+                                    if (param_size > 0) {
+                                        const from = i * param_size;
+                                        const to = from + param_size;
+                                        const bytes = storage.outer[j][from..to];
+                                        arguments[j] = @ptrCast(Param, @alignCast(@alignOf(component_query_types[j]), bytes.ptr));
+                                    } else {
+                                        arguments[j] = &component_query_types[j]{};
+                                    }
+                                },
+                                .event_argument_value => @compileError("event arguments are illegal for dispatch systems"),
+                                .shared_state_value => arguments[j] = self.getSharedStateWithSharedStateType(Param),
+                                .shared_state_ptr => arguments[j] = self.getSharedStatePtrWithSharedStateType(Param),
                             }
                         }
                         const system_ptr = @ptrCast(*const systems_info.function_types[system_index], systems_info.functions[system_index]);
@@ -253,6 +385,9 @@ fn CreateWorld(
             const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.world);
             defer zone.End();
 
+            var event_cache_mask = &self.event_cache_masks[@enumToInt(event)];
+            // at the end of the function all bits should be coherent
+            defer event_cache_mask.setAllCoherent();
             const e = events[@enumToInt(event)];
 
             // TODO: verify systems and arguments in type initialization
@@ -272,29 +407,76 @@ fn CreateWorld(
                 const component_query_types = comptime metadata.componentQueryArgTypes();
                 const param_types = comptime metadata.paramArgTypes();
 
+                comptime var component_hashes: [component_query_types.len]u64 = undefined;
+                inline for (component_query_types) |T, i| {
+                    component_hashes[i] = comptime query.hashType(T);
+                }
+
+                var storage_buffer: [component_query_types.len][]u8 = undefined;
+                var storage = IArchetype.StorageData{
+                    .inner_len = undefined,
+                    .outer = &storage_buffer,
+                };
+
+                comptime var sorted_component_hashes: [component_query_types.len]u64 = undefined;
+                comptime {
+                    std.mem.copy(u64, &sorted_component_hashes, &component_hashes);
+                    const lessThan = struct {
+                        fn func(context: void, lhs: u64, rhs: u64) bool {
+                            _ = context;
+                            return lhs < rhs;
+                        }
+                    }.func;
+                    std.sort.sort(u64, &sorted_component_hashes, {}, lessThan);
+                }
+
                 // extract data relative to system for each relevant archetype
-                const archetypes_system_data = self.container.getTypeSubsets(&component_query_types);
-                for (archetypes_system_data) |archetype_system_data| {
+                const archetype_interfaces = blk: {
+                    var event_cache_storage = &self.event_cache_storages[@enumToInt(event)];
+                    if (event_cache_mask.isCoherent(&component_query_types) == false) {
+                        event_cache_storage.assignCacheEntry(
+                            self.allocator,
+                            system_index,
+                            try self.container.getArchetypesWithComponents(self.allocator, &sorted_component_hashes),
+                        );
+                    }
+                    break :blk event_cache_storage.cache[system_index];
+                };
+
+                for (archetype_interfaces) |interface| {
+                    try interface.getStorageData(&component_hashes, &storage);
                     var i: usize = 0;
-                    while (i < archetype_system_data.len) : (i += 1) {
+                    while (i < storage.inner_len) : (i += 1) {
                         var arguments: std.meta.Tuple(&param_types) = undefined;
                         inline for (param_types) |Param, j| {
-                            // TODO: FIXME: checking size of pointers is not valid ...
-                            if (@sizeOf(Param) > 0) {
-                                switch (metadata.args[j]) {
-                                    .component_value => arguments[j] = archetype_system_data.storage[j].items[i],
-                                    .component_ptr => arguments[j] = &archetype_system_data.storage[j].items[i],
-                                    .event_argument_value => arguments[j] = @bitCast(TargetEventArg, event_extra_argument),
-                                    .shared_state_value => arguments[j] = self.getSharedStateWithSharedStateType(Param),
-                                    .shared_state_ptr => arguments[j] = self.getSharedStatePtrWithSharedStateType(Param),
-                                }
-                            } else {
-                                switch (metadata.args[j]) {
-                                    .component_value => arguments[j] = Param{},
-                                    .component_ptr => arguments[j] = &Param{},
-                                    .event_argument_value => arguments[j] = @bitCast(TargetEventArg, event_extra_argument),
-                                    .shared_state_value, .shared_state_ptr => @compileError("requesting shared state with zero size is not allowed"),
-                                }
+                            switch (metadata.args[j]) {
+                                .component_value => {
+                                    // get size of the parameter type
+                                    const param_size = @sizeOf(Param);
+                                    if (param_size > 0) {
+                                        const from = i * param_size;
+                                        const to = from + param_size;
+                                        const bytes = storage.outer[j][from..to];
+                                        arguments[j] = @ptrCast(*Param, @alignCast(@alignOf(Param), bytes.ptr)).*;
+                                    } else {
+                                        arguments[j] = Param{};
+                                    }
+                                },
+                                .component_ptr => {
+                                    // get size of the type the pointer is pointing to
+                                    const param_size = @sizeOf(component_query_types[j]);
+                                    if (param_size > 0) {
+                                        const from = i * param_size;
+                                        const to = from + param_size;
+                                        const bytes = storage.outer[j][from..to];
+                                        arguments[j] = @ptrCast(Param, @alignCast(@alignOf(Param), bytes.ptr));
+                                    } else {
+                                        arguments[j] = &component_query_types[j]{};
+                                    }
+                                },
+                                .event_argument_value => arguments[j] = @bitCast(TargetEventArg, event_extra_argument),
+                                .shared_state_value => arguments[j] = self.getSharedStateWithSharedStateType(Param),
+                                .shared_state_ptr => arguments[j] = self.getSharedStatePtrWithSharedStateType(Param),
                             }
                         }
 
@@ -359,6 +541,16 @@ fn CreateWorld(
             }
             @compileError(@typeName(Shared) ++ " is not a shared state");
         }
+
+        inline fn markAllCacheMasks(self: *World, entity: Entity) void {
+            if (self.container.getTypeHashes(entity)) |type_hashes| {
+                self.dispatch_cache_mask.setIncoherentBitWithTypeHashes(type_hashes);
+
+                for (self.event_cache_masks) |*mask| {
+                    mask.setIncoherentBitWithTypeHashes(type_hashes);
+                }
+            }
+        }
     };
 }
 
@@ -373,63 +565,75 @@ fn failableCallWrapper(func: anytype, args: anytype) !void {
 }
 
 // world without systems
-const WorldStub = WorldBuilder().WithArchetypes(Testing.AllArchetypesTuple);
+const WorldStub = WorldBuilder().WithComponents(Testing.AllComponentsTuple);
 
 test "init() + deinit() is idempotent" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    const entity0 = try world.createEntity(Testing.Archetype.A{});
+    const entity0 = try world.createEntity(.{Testing.Component.A{}});
     try testing.expectEqual(entity0.id, 0);
-    const entity1 = try world.createEntity(Testing.Archetype.A{});
+    const entity1 = try world.createEntity(.{Testing.Component.A{}});
     try testing.expectEqual(entity1.id, 1);
 }
 
-// test "setComponent() component moves entity to correct archetype" {
-//     const A = struct { some_value: u32 };
-//     const B = struct { some_value: u8 };
+test "setComponent() component moves entity to correct archetype" {
+    var world = try WorldStub.init(testing.allocator, .{});
+    defer world.deinit();
 
-//     var world = try WorldStub.init(testing.allocator);
-//     defer world.deinit();
+    const entity1 = try world.createEntity(.{Testing.Component.A{}});
 
-//     const entity1 = try world.createEntity();
-//     // entity is now a void entity (no components)
+    const a = Testing.Component.A{ .value = 123 };
+    try world.setComponent(entity1, a);
 
-//     const a = A{ .some_value = 123 };
-//     try world.setComponent(entity1, a);
-//     // entity is now of archetype (A)
+    const b = Testing.Component.B{ .value = 42 };
+    try world.setComponent(entity1, b);
 
-//     const b = B{ .some_value = 42 };
-//     try world.setComponent(entity1, b);
-//     // entity is now of archetype (A B)
+    const stored_a = try world.getComponent(entity1, Testing.Component.A);
+    try testing.expectEqual(a, stored_a);
+    const stored_b = try world.getComponent(entity1, Testing.Component.B);
+    try testing.expectEqual(b, stored_b);
 
-//     const entity_archetype = try world.archetree.getArchetype(&[_]type{ A, B });
-//     const stored_a = try entity_archetype.getComponent(entity1, A);
-//     try testing.expectEqual(a, stored_a);
-//     const stored_b = try entity_archetype.getComponent(entity1, B);
-//     try testing.expectEqual(b, stored_b);
-// }
+    try testing.expectEqual(@as(usize, 1), world.container.entity_references.items.len);
+}
 
 test "setComponent() update entities component state" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    const entity = try world.createEntity(Testing.Archetype.AB{});
-    // entity is now a void entity (no components)
+    const entity = try world.createEntity(.{ Testing.Component.A{}, Testing.Component.B{} });
 
     const a = Testing.Component.A{ .value = 123 };
     try world.setComponent(entity, a);
-    // entity is now of archetype (A B)
 
     const stored_a = try world.getComponent(entity, Testing.Component.A);
     try testing.expectEqual(a, stored_a);
+}
+
+// TODO, ALSO TODO: memory leak test by setting and removing a component from one entity and validating entity storages that sum is only 1
+test "removeComponent() removes the component as expected" {
+    var world = try WorldStub.init(testing.allocator, .{});
+    defer world.deinit();
+
+    const entity = try world.createEntity(.{ Testing.Component.B{}, Testing.Component.C{} });
+
+    try world.setComponent(entity, Testing.Component.A{});
+    try testing.expectEqual(true, world.hasComponent(entity, Testing.Component.A));
+
+    try world.removeComponent(entity, Testing.Component.A);
+    try testing.expectEqual(false, world.hasComponent(entity, Testing.Component.A));
+
+    try testing.expectEqual(true, world.hasComponent(entity, Testing.Component.B));
+
+    try world.removeComponent(entity, Testing.Component.B);
+    try testing.expectEqual(false, world.hasComponent(entity, Testing.Component.B));
 }
 
 test "hasComponent() responds as expected" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    const entity = try world.createEntity(Testing.Archetype.AC{});
+    const entity = try world.createEntity(.{ Testing.Component.A{}, Testing.Component.C{} });
 
     try testing.expectEqual(true, world.hasComponent(entity, Testing.Component.A));
     try testing.expectEqual(false, world.hasComponent(entity, Testing.Component.B));
@@ -439,15 +643,15 @@ test "getComponent() retrieve component value" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    _ = try world.createEntity(Testing.Archetype.A{ .a = .{ .value = 0 } });
-    _ = try world.createEntity(Testing.Archetype.A{ .a = .{ .value = 1 } });
-    _ = try world.createEntity(Testing.Archetype.A{ .a = .{ .value = 2 } });
+    _ = try world.createEntity(.{Testing.Component.A{ .value = 0 }});
+    _ = try world.createEntity(.{Testing.Component.A{ .value = 1 }});
+    _ = try world.createEntity(.{Testing.Component.A{ .value = 2 }});
 
     const a = Testing.Component.A{ .value = 123 };
-    const entity = try world.createEntity(Testing.Archetype.A{ .a = a });
+    const entity = try world.createEntity(.{a});
 
-    _ = try world.createEntity(Testing.Archetype.A{ .a = .{ .value = 3 } });
-    _ = try world.createEntity(Testing.Archetype.A{ .a = .{ .value = 4 } });
+    _ = try world.createEntity(.{Testing.Component.A{ .value = 3 }});
+    _ = try world.createEntity(.{Testing.Component.A{ .value = 4 }});
 
     try testing.expectEqual(a, try world.getComponent(entity, Testing.Component.A));
 }
@@ -495,8 +699,9 @@ test "systems can fail" {
     }).init(testing.allocator, .{});
     defer world.deinit();
 
-    _ = try world.createEntity(Testing.Archetype.AB{
-        .a = .{ .value = 42 },
+    _ = try world.createEntity(.{
+        Testing.Component.A{ .value = 42 },
+        Testing.Component.B{},
     });
 
     try testing.expectError(error.SomethingWentVeryWrong, world.dispatch());
@@ -514,9 +719,36 @@ test "systems can mutate components" {
     }).init(testing.allocator, .{});
     defer world.deinit();
 
-    const entity = try world.createEntity(Testing.Archetype.AB{
-        .a = .{ .value = 1 },
-        .b = .{ .value = 2 },
+    const entity = try world.createEntity(.{
+        Testing.Component.A{ .value = 1 },
+        Testing.Component.B{ .value = 2 },
+    });
+
+    try world.dispatch();
+
+    try testing.expectEqual(
+        Testing.Component.A{ .value = 3 },
+        try world.getComponent(entity, Testing.Component.A),
+    );
+}
+
+test "system parameter order is independent" {
+    const SystemStruct = struct {
+        pub fn mutateStuff(b: Testing.Component.B, c: Testing.Component.C, a: *Testing.Component.A) void {
+            _ = c;
+            a.value += @intCast(u32, b.value);
+        }
+    };
+
+    var world = try WorldStub.WithSystems(.{
+        SystemStruct,
+    }).init(testing.allocator, .{});
+    defer world.deinit();
+
+    const entity = try world.createEntity(.{
+        Testing.Component.A{ .value = 1 },
+        Testing.Component.B{ .value = 2 },
+        Testing.Component.C{},
     });
 
     try world.dispatch();
@@ -556,7 +788,7 @@ test "systems can access shared state" {
     });
     defer world.deinit();
 
-    _ = try world.createEntity(Testing.Archetype.AB{});
+    _ = try world.createEntity(.{ Testing.Component.A{}, Testing.Component.B{} });
 
     try testing.expectError(error.EightIsGreat, world.dispatch());
 }
@@ -587,7 +819,7 @@ test "systems can mutate shared state" {
     });
     defer world.deinit();
 
-    _ = try world.createEntity(Testing.Archetype.AB{});
+    _ = try world.createEntity(.{ Testing.Component.A{}, Testing.Component.B{} });
     try world.dispatch();
 
     try testing.expectEqual(@as(u8, 2), world.shared_state[0].value);
@@ -651,7 +883,7 @@ test "systems can have many shared state" {
     });
     defer world.deinit();
 
-    _ = try world.createEntity(Testing.Archetype.A{});
+    _ = try world.createEntity(.{Testing.Component.A{}});
 
     try world.dispatch();
 }
@@ -684,9 +916,9 @@ test "systems can be registered through struct or individual function(s)" {
     }).init(testing.allocator, .{});
     defer world.deinit();
 
-    const entity = try world.createEntity(Testing.Archetype.A{
-        .a = .{ .value = 0 },
-    });
+    const entity = try world.createEntity(.{Testing.Component.A{
+        .value = 0,
+    }});
 
     try world.dispatch();
 
@@ -721,13 +953,14 @@ test "events call systems" {
     var world = try World.init(testing.allocator, .{});
     defer world.deinit();
 
-    const entity1 = try world.createEntity(Testing.Archetype.AB{
-        .a = .{ .value = 0 },
-        .b = .{ .value = 0 },
-    });
-    const entity2 = try world.createEntity(Testing.Archetype.A{
-        .a = .{ .value = 2 },
-    });
+    const entity1 = try world.createEntity(.{ Testing.Component.A{
+        .value = 0,
+    }, Testing.Component.B{
+        .value = 0,
+    } });
+    const entity2 = try world.createEntity(.{Testing.Component.A{
+        .value = 2,
+    }});
 
     try world.triggerEvent(.onFoo, .{});
 
@@ -772,7 +1005,7 @@ test "events call propagate error" {
     var world = try World.init(testing.allocator, .{});
     defer world.deinit();
 
-    _ = try world.createEntity(Testing.Archetype.A{});
+    _ = try world.createEntity(.{Testing.Component.A{}});
 
     try testing.expectError(error.Spooky, world.triggerEvent(.onFoo, .{}));
 }
@@ -797,7 +1030,7 @@ test "events can access shared state" {
 
     defer world.deinit();
 
-    _ = try world.createEntity(Testing.Archetype.A{});
+    _ = try world.createEntity(.{Testing.Component.A{}});
 
     try testing.expectError(error.Ok, world.triggerEvent(.onFoo, .{}));
 }
@@ -820,7 +1053,7 @@ test "events can mutate shared state" {
 
     defer world.deinit();
 
-    _ = try world.createEntity(Testing.Archetype.A{});
+    _ = try world.createEntity(.{Testing.Component.A{}});
 
     try world.triggerEvent(.onFoo, .{});
     try testing.expectEqual(@as(u8, 2), world.shared_state[0].value);
@@ -841,7 +1074,7 @@ test "events can accepts event related data" {
 
     defer world.deinit();
 
-    const entity = try world.createEntity(Testing.Archetype.A{ .a = .{ .value = 0 } });
+    const entity = try world.createEntity(.{Testing.Component.A{ .value = 0 }});
 
     try world.triggerEvent(.onFoo, MouseInput{ .x = 40, .y = 2 });
     try testing.expectEqual(
@@ -850,30 +1083,127 @@ test "events can accepts event related data" {
     );
 }
 
-test "queryStorage returns expected result" {
-    var world = try WorldStub.init(testing.allocator, .{});
+test "dispatch cache works" {
+    const SystemStruct = struct {
+        pub fn aSystem(a: *Testing.Component.A) void {
+            a.value += 1;
+        }
+    };
+
+    var world = try WorldStub.WithSystems(.{
+        SystemStruct,
+    }).init(testing.allocator, .{});
     defer world.deinit();
 
-    {
-        comptime var i: comptime_int = 0;
-        inline while (i < 10) : (i += 1) {
-            _ = try world.createEntity(Testing.Archetype.A{ .a = .{ .value = i } });
-            _ = try world.createEntity(Testing.Archetype.AB{ .a = .{ .value = i }, .b = .{ .value = i } });
-            _ = try world.createEntity(Testing.Archetype.AC{ .a = .{ .value = i + 10 } });
-            _ = try world.createEntity(Testing.Archetype.ABC{ .a = .{ .value = i }, .b = .{ .value = i } });
-        }
-    }
+    const entity1 = try world.createEntity(.{Testing.Component.A{ .value = 0 }});
+    try world.dispatch();
+    try testing.expectEqual(Testing.Component.A{ .value = 1 }, try world.getComponent(
+        entity1,
+        Testing.Component.A,
+    ));
 
-    comptime var query = Query.init(
-        &[_]type{Testing.Component.A},
-        &[_]type{Testing.Component.B},
+    // move entity to archetype A, B
+    try world.setComponent(entity1, Testing.Component.B{});
+    try world.dispatch();
+    try testing.expectEqual(Testing.Component.A{ .value = 2 }, try world.getComponent(
+        entity1,
+        Testing.Component.A,
+    ));
+
+    const entity2 = try world.createEntity(.{
+        Testing.Component.A{ .value = 0 },
+        Testing.Component.B{},
+        Testing.Component.C{},
+    });
+    try world.dispatch();
+    try testing.expectEqual(
+        Testing.Component.A{ .value = 1 },
+        try world.getComponent(entity2, Testing.Component.A),
+    );
+}
+
+test "event cache works" {
+    const SystemStruct = struct {
+        pub fn event1System(a: *Testing.Component.A) void {
+            a.value += 1;
+        }
+
+        pub fn event2System(b: *Testing.Component.B) void {
+            b.value += 1;
+        }
+    };
+
+    var world = try WorldStub.WithEvents(.{
+        Event("onEvent1", .{SystemStruct.event1System}, .{}),
+        Event("onEvent2", .{SystemStruct.event2System}, .{}),
+    }).init(testing.allocator, .{});
+    defer world.deinit();
+
+    const entity1 = try world.createEntity(.{Testing.Component.A{ .value = 0 }});
+
+    try world.triggerEvent(.onEvent1, .{});
+    try testing.expectEqual(Testing.Component.A{ .value = 1 }, try world.getComponent(
+        entity1,
+        Testing.Component.A,
+    ));
+
+    // move entity to archetype A, B
+    try world.setComponent(entity1, Testing.Component.B{ .value = 0 });
+    try world.triggerEvent(.onEvent1, .{});
+    try testing.expectEqual(Testing.Component.A{ .value = 2 }, try world.getComponent(
+        entity1,
+        Testing.Component.A,
+    ));
+
+    try world.triggerEvent(.onEvent2, .{});
+    try testing.expectEqual(Testing.Component.B{ .value = 1 }, try world.getComponent(
+        entity1,
+        Testing.Component.B,
+    ));
+
+    const entity2 = try world.createEntity(.{
+        Testing.Component.A{ .value = 0 },
+        Testing.Component.B{ .value = 0 },
+        Testing.Component.C{},
+    });
+
+    try world.triggerEvent(.onEvent1, .{});
+    try testing.expectEqual(
+        Testing.Component.A{ .value = 1 },
+        try world.getComponent(entity2, Testing.Component.A),
     );
 
-    var i: u32 = 0;
-    var iter = world.queryStorage(query);
-    while (iter.next()) |item| {
-        try testing.expectEqual(Testing.Component.A{ .value = i }, item[0]);
-        i += 1;
-    }
-    try testing.expectEqual(@as(u32, 19), i);
+    try world.triggerEvent(.onEvent2, .{});
+    try testing.expectEqual(
+        Testing.Component.B{ .value = 1 },
+        try world.getComponent(entity2, Testing.Component.B),
+    );
 }
+
+// test "queryStorage returns expected result" {
+//     var world = try WorldStub.init(testing.allocator, .{});
+//     defer world.deinit();
+
+//     {
+//         comptime var i: comptime_int = 0;
+//         inline while (i < 10) : (i += 1) {
+//             _ = try world.createEntity(Testing.Archetype.A{ .a = .{ .value = i } });
+//             _ = try world.createEntity(Testing.Archetype.AB{ .a = .{ .value = i }, .b = .{ .value = i } });
+//             _ = try world.createEntity(Testing.Archetype.AC{ .a = .{ .value = i + 10 } });
+//             _ = try world.createEntity(Testing.Archetype.ABC{ .a = .{ .value = i }, .b = .{ .value = i } });
+//         }
+//     }
+
+//     comptime var query = Query.init(
+//         &[_]type{Testing.Component.A},
+//         &[_]type{Testing.Component.B},
+//     );
+
+//     var i: u32 = 0;
+//     var iter = world.queryStorage(query);
+//     while (iter.next()) |item| {
+//         try testing.expectEqual(Testing.Component.A{ .value = i }, item[0]);
+//         i += 1;
+//     }
+//     try testing.expectEqual(@as(u32, 19), i);
+// }

@@ -1,30 +1,18 @@
 const std = @import("std");
-const testing = std.testing;
+const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 
 const IArchetype = @import("IArchetype.zig");
+const Color = @import("misc.zig").Color;
+
 const meta = @import("meta.zig");
+const query = @import("query.zig");
+const entity_type = @import("entity_type.zig");
+
+const Entity = entity_type.Entity;
+const EntityMap = entity_type.Map;
 
 const ztracy = @import("ztracy");
-
-const Color = @import("misc.zig").Color;
-const query = @import("query.zig");
-
-const entity_type = @import("entity_type.zig");
-const Entity = entity_type.Entity;
-const EntityContext = struct {
-    pub fn hash(self: EntityContext, e: Entity) u32 {
-        _ = self;
-        // id is already unique
-        return @intCast(u32, e.id);
-    }
-    pub fn eql(self: EntityContext, e1: Entity, e2: Entity, index: usize) bool {
-        _ = self;
-        _ = index;
-        return e1.id == e2.id;
-    }
-};
-const EntityMap = std.ArrayHashMap(Entity, usize, EntityContext, false);
 
 pub fn FromTypesTuple(comptime component_types: anytype) type {
     const component_count = comptime countAndVerifyComponentTypes(component_types);
@@ -68,7 +56,6 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
         pub fn deinit(self: *Archetype) void {
             const zone = ztracy.ZoneNC(@src(), "Archetype deinit", Color.archetype);
             defer zone.End();
-
             self.entities.deinit();
             inline for (component_type_arr) |ComponentType, i| {
                 if (@sizeOf(ComponentType) > 0) {
@@ -138,7 +125,16 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
 
         /// get the archetype dynamic dispatch interface
         pub fn archetypeInterface(self: *Archetype) IArchetype {
-            return IArchetype.init(self, rawHasComponent, rawGetComponent, rawSetComponent);
+            return IArchetype.init(
+                self,
+                rawHasComponent,
+                rawGetComponent,
+                rawSetComponent,
+                rawRegisterEntity,
+                rawSwapRemoveEntity,
+                rawGetStorageData,
+                deinit,
+            );
         }
 
         pub inline fn componentIndex(self: Archetype, comptime T: type) ?usize {
@@ -284,18 +280,108 @@ pub fn FromTypesArray(comptime component_types: []const type) type {
 
             inline for (component_type_arr) |Component, i| {
                 if (query.hashType(Component) == type_hash) {
+                    std.debug.assert(@sizeOf(Component) == component.len);
+
                     if (@sizeOf(Component) == 0) {
                         return;
                     }
+
                     self.component_storage[i].items[entity_index] = @ptrCast(*const Component, @alignCast(
                         @alignOf(Component),
                         component.ptr,
                     )).*;
+
                     return;
                 }
             }
-            // we return in begining of function for the case that would reach this point
+            // we return error in begining of function for the case that would reach this point
             unreachable;
+        }
+
+        pub fn rawRegisterEntity(self: *Archetype, entity: Entity, data: []const []const u8) IArchetype.Error!void {
+            std.debug.assert(data.len <= component_type_arr.len);
+
+            const zone = ztracy.ZoneNC(@src(), "Archetype rawRegisterEntity", Color.archetype);
+            defer zone.End();
+
+            const value = self.entities.count();
+            try self.entities.put(entity, value);
+            errdefer _ = self.entities.swapRemove(entity);
+
+            var appended_component: usize = 0;
+            errdefer {
+                inline for (component_type_arr) |Component, i| {
+                    if (i < appended_component) {
+                        if (@sizeOf(Component) > 0) {
+                            _ = self.component_storage[i].pop();
+                        }
+                    }
+                }
+            }
+
+            inline for (component_type_arr) |Component, i| {
+                const component_size = comptime @sizeOf(Component);
+                if (component_size == 0) {
+                    continue;
+                }
+                const array = @ptrCast(*const [component_size]u8, data[i].ptr);
+                const component = std.mem.bytesAsValue(Component, array);
+                try self.component_storage[i].append(component.*);
+                appended_component = i;
+            }
+        }
+
+        pub fn rawSwapRemoveEntity(self: *Archetype, entity: Entity, buffer: [][]u8) IArchetype.Error!void {
+            std.debug.assert(buffer.len == component_type_arr.len);
+
+            const zone = ztracy.ZoneNC(@src(), "Archetype rawSwapRemoveEntity", Color.archetype);
+            defer zone.End();
+
+            // remove entity from
+            const moving_kv = self.entities.fetchSwapRemove(entity) orelse return IArchetype.Error.EntityMissing;
+
+            // move entity data to buffers
+            inline for (component_type_arr) |Component, i| {
+                if (@sizeOf(Component) > 0) {
+                    const component = self.component_storage[i].orderedRemove(moving_kv.value);
+                    const component_bytes = std.mem.asBytes(&component);
+                    std.mem.copy(u8, buffer[i], component_bytes);
+                }
+            }
+
+            // remove entity and update entity values for all entities with component data to the right of removed entity
+            // TODO: faster way of doing this?
+            // https://devlog.hexops.com/2022/zig-hashmaps-explained/
+            for (self.entities.values()) |*component_index| {
+                // if the entity was located after removed entity, we shift it left
+                // to occupy vacant memory
+                if (component_index.* > moving_kv.value) {
+                    component_index.* -= 1;
+                }
+            }
+        }
+
+        pub fn rawGetStorageData(self: *Archetype, component_hashes: []u64, storage: *IArchetype.StorageData) IArchetype.Error!void {
+            std.debug.assert(component_hashes.len <= storage.outer.len);
+
+            var stored_hashes: usize = 0;
+            inline for (component_type_arr) |Component, i| {
+                const component_hash = comptime query.hashType(Component);
+                const component_size = @sizeOf(Component);
+                for (component_hashes) |hash, j| {
+                    if (hash == component_hash) {
+                        if (component_size > 0) {
+                            storage.outer[j] = std.mem.sliceAsBytes(self.component_storage[i].items);
+                        }
+                        stored_hashes += 1;
+                    }
+                }
+            }
+            storage.inner_len = self.entities.count();
+
+            if (stored_hashes != component_hashes.len) {
+                return IArchetype.Error.ComponentMissing;
+            }
         }
 
         /// Retrieve the component slices relative to the requested types
@@ -490,6 +576,9 @@ fn ArcheComponentStruct(comptime types: []const type) type {
     return @Type(RtrTypeInfo);
 }
 
+const testing = std.testing;
+const Testing = @import("Testing.zig");
+
 test "init() produce expected arche type" {
     const A = struct {};
     const B = struct { b: u32 };
@@ -614,7 +703,7 @@ test "setComponent() overwrite original component value" {
     try testing.expectEqual(c, try archetype.getComponent(mock_entity, C));
 }
 
-test "hasComponent() return expected result" {
+test "rawHasComponent() return expected result" {
     const A = struct {};
     const B = struct {};
     const C = struct {};
@@ -804,4 +893,174 @@ test "archetype IArchetype rawSetComponent" {
 
     try testing.expectEqual(a, try archetype.getComponent(mock_entity, A));
     try testing.expectEqual(b, try archetype.getComponent(mock_entity, B));
+}
+
+test "archetype IArchetype rawRegisterEntity()" {
+    const A = struct {};
+    const B = struct { b: usize };
+    const C = struct { c: u7 };
+
+    var archetype = FromTypesTuple(.{ A, B, C }).init(testing.allocator);
+    defer archetype.deinit();
+
+    const mock_entity = Entity{ .id = 0 };
+    const a = A{};
+    const b = B{ .b = 1 };
+    const c = C{ .c = 3 };
+    try archetype.rawRegisterEntity(mock_entity, &[_][]const u8{
+        &[0]u8{},
+        // TODO: implicitly sort bytes like we sort types
+        std.mem.asBytes(&c),
+        std.mem.asBytes(&b),
+    });
+
+    // currently query.sortTypes sort A B C to A C B
+    try testing.expectEqual(a, archetype.component_storage[0]);
+    try testing.expectEqual(@as(usize, 1), archetype.component_storage[1].items.len);
+    try testing.expectEqual(c, archetype.component_storage[1].items[0]);
+    try testing.expectEqual(@as(usize, 1), archetype.component_storage[2].items.len);
+    try testing.expectEqual(b, archetype.component_storage[2].items[0]);
+}
+
+test "archetype IArchetype deinit() is idempotent" {
+    const A = struct {};
+    const B = struct { b: usize };
+    const C = struct { c: u7 };
+
+    var archetype = FromTypesTuple(.{ A, B, C }).init(testing.allocator);
+
+    const mock_entity = Entity{ .id = 0 };
+    const a = A{};
+    const b = B{ .b = 1 };
+    const c = C{ .c = 3 };
+    try archetype.registerEntity(mock_entity, .{ a, b, c });
+
+    archetype.archetypeInterface().deinit();
+}
+
+test "archetype IArchetype rawSwapRemoveEntity" {
+    var archetype = FromTypesArray(&Testing.AllComponentsArr).init(testing.allocator);
+    defer archetype.deinit();
+
+    {
+        var i: u32 = 0;
+        while (i < 100) : (i += 1) {
+            const mock_entity = Entity{ .id = i };
+            const a = Testing.Component.A{ .value = i };
+            const b = Testing.Component.B{ .value = @intCast(u8, i) };
+            const c = Testing.Component.C{};
+            try archetype.registerEntity(mock_entity, .{ a, b, c });
+        }
+    }
+
+    var buf_0: [@sizeOf(Testing.Component.A)]u8 = undefined;
+    var buf_1: [@sizeOf(Testing.Component.B)]u8 = undefined;
+    var buf_2: [@sizeOf(Testing.Component.C)]u8 = undefined;
+    var data: [3][]u8 = undefined;
+    data[0] = &buf_0;
+    data[1] = &buf_1;
+    data[2] = &buf_2;
+
+    {
+        const mock_entity1 = Entity{ .id = 50 };
+        try archetype.rawSwapRemoveEntity(mock_entity1, &data);
+
+        try testing.expectError(IArchetype.Error.EntityMissing, archetype.rawGetComponent(
+            mock_entity1,
+            comptime query.hashType(Testing.Component.A),
+        ));
+
+        const a = Testing.Component.A{ .value = 50 };
+        try testing.expectEqualSlices(
+            u8,
+            std.mem.asBytes(&a),
+            data[0],
+        );
+
+        const b = Testing.Component.B{ .value = 50 };
+        try testing.expectEqualSlices(
+            u8,
+            std.mem.asBytes(&b),
+            data[1],
+        );
+    }
+
+    {
+        const mock_entity2 = Entity{ .id = 51 };
+        try archetype.rawSwapRemoveEntity(mock_entity2, &data);
+
+        const a = Testing.Component.A{ .value = 51 };
+        try testing.expectEqualSlices(
+            u8,
+            std.mem.asBytes(&a),
+            data[0],
+        );
+
+        const b = Testing.Component.B{ .value = 51 };
+        try testing.expectEqualSlices(
+            u8,
+            std.mem.asBytes(&b),
+            data[1],
+        );
+    }
+}
+
+test "archetype IArchetype rawGetStorageData" {
+    var archetype = FromTypesArray(&Testing.AllComponentsArr).init(testing.allocator);
+    defer archetype.deinit();
+
+    {
+        var i: u32 = 0;
+        while (i < 100) : (i += 1) {
+            const mock_entity = Entity{ .id = i };
+            const a = Testing.Component.A{ .value = i };
+            const b = Testing.Component.B{ .value = @intCast(u8, i) };
+            const c = Testing.Component.C{};
+            try archetype.registerEntity(mock_entity, .{ a, b, c });
+        }
+    }
+
+    var data: [3][]u8 = undefined;
+    var storage = IArchetype.StorageData{
+        .inner_len = undefined,
+        .outer = &data,
+    };
+    {
+        try archetype.rawGetStorageData(&[_]u64{query.hashType(Testing.Component.A)}, &storage);
+
+        try testing.expectEqual(@as(usize, 100), storage.inner_len);
+        {
+            var i: u32 = 0;
+            while (i < 100) : (i += 1) {
+                const from = i * @sizeOf(Testing.Component.A);
+                const to = from + @sizeOf(Testing.Component.A);
+                const bytes = storage.outer[0][from..to];
+                const a = @ptrCast(*const Testing.Component.A, @alignCast(@alignOf(Testing.Component.A), bytes)).*;
+                try testing.expectEqual(Testing.Component.A{ .value = i }, a);
+            }
+        }
+    }
+
+    try archetype.rawGetStorageData(&[_]u64{ query.hashType(Testing.Component.A), query.hashType(Testing.Component.B) }, &storage);
+    try testing.expectEqual(@as(usize, 100), storage.inner_len);
+    {
+        var i: u32 = 0;
+        while (i < 100) : (i += 1) {
+            {
+                const from = i * @sizeOf(Testing.Component.A);
+                const to = from + @sizeOf(Testing.Component.A);
+                const bytes = storage.outer[0][from..to];
+                const a = @ptrCast(*const Testing.Component.A, @alignCast(@alignOf(Testing.Component.A), bytes)).*;
+                try testing.expectEqual(Testing.Component.A{ .value = i }, a);
+            }
+
+            {
+                const from = i * @sizeOf(Testing.Component.B);
+                const to = from + @sizeOf(Testing.Component.B);
+                const bytes = storage.outer[1][from..to];
+                const a = @ptrCast(*const Testing.Component.B, @alignCast(@alignOf(Testing.Component.B), bytes)).*;
+                try testing.expectEqual(Testing.Component.B{ .value = @intCast(u8, i) }, a);
+            }
+        }
+    }
 }
