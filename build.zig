@@ -1,5 +1,6 @@
 const std = @import("std");
 const ztracy = @import("deps/ztracy/build.zig");
+const zjobs = @import("deps/zjobs/build.zig");
 
 const Example = struct {
     name: []const u8,
@@ -18,6 +19,8 @@ pub fn link(b: *std.build.Builder, exe: *std.build.LibExeObjStep, enable_ztracy:
 
     // add ztracy or a stub if disabled
     exe.addPackage(ztracy_pkg);
+    exe.addPackage(zjobs.pkg);
+
     ztracy.link(exe, ztracy_options);
 
     exe.addPackage(ecez_package);
@@ -46,6 +49,7 @@ pub fn build(b: *std.build.Builder) void {
 
     const lib = b.addStaticLibrary("ecez", "src/main.zig");
     lib.setBuildMode(mode);
+    lib.addPackage(zjobs.pkg);
     lib.addPackage(ztracy_pkg);
     ztracy.link(lib, ztracy_options);
     lib.install();
@@ -63,6 +67,7 @@ pub fn build(b: *std.build.Builder) void {
     // add library tests to the main tests
     const main_tests_step = b.addTest("src/main.zig");
     main_tests_step.setBuildMode(mode);
+    main_tests_step.addPackage(zjobs.pkg);
     main_tests_step.addPackage(ztracy_pkg);
     ztracy.link(main_tests_step, ztracy_options);
     main_tests_step.linkLibrary(lib);
@@ -78,6 +83,7 @@ pub fn build(b: *std.build.Builder) void {
         exe.setTarget(target);
         exe.setBuildMode(mode);
 
+        exe.addPackage(zjobs.pkg);
         exe.addPackage(ztracy_pkg);
         ztracy.link(exe, ztracy_options);
 
