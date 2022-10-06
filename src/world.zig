@@ -11,7 +11,7 @@ const archetype_cache = @import("archetype_cache.zig");
 const Entity = @import("entity_type.zig").Entity;
 const EntityRef = @import("entity_type.zig").EntityRef;
 const Color = @import("misc.zig").Color;
-const IArchetype = @import("IArchetype.zig");
+const OpaqueArchetype = @import("OpaqueArchetype.zig");
 const SystemMetadata = meta.SystemMetadata;
 
 const query = @import("query.zig");
@@ -303,7 +303,7 @@ fn CreateWorld(
                 }
 
                 var storage_buffer: [component_query_types.len][]u8 = undefined;
-                var storage = IArchetype.StorageData{
+                var storage = OpaqueArchetype.StorageData{
                     .inner_len = undefined,
                     .outer = &storage_buffer,
                 };
@@ -321,7 +321,7 @@ fn CreateWorld(
                 }
 
                 // extract data relative to system for each relevant archetype
-                const archetype_interfaces = blk: {
+                const opaque_archetypes = blk: {
                     if (self.dispatch_cache_mask.isCoherent(&component_query_types) == false) {
                         self.dispatch_cache_storage.assignCacheEntry(
                             self.allocator,
@@ -332,8 +332,8 @@ fn CreateWorld(
                     break :blk self.dispatch_cache_storage.cache[system_index];
                 };
 
-                for (archetype_interfaces) |interface| {
-                    try interface.getStorageData(&component_hashes, &storage);
+                for (opaque_archetypes) |*opaque_archetype| {
+                    try opaque_archetype.rawGetStorageData(&component_hashes, &storage);
                     var i: usize = 0;
                     while (i < storage.inner_len) : (i += 1) {
                         var arguments: std.meta.Tuple(&param_types) = undefined;
@@ -413,7 +413,7 @@ fn CreateWorld(
                 }
 
                 var storage_buffer: [component_query_types.len][]u8 = undefined;
-                var storage = IArchetype.StorageData{
+                var storage = OpaqueArchetype.StorageData{
                     .inner_len = undefined,
                     .outer = &storage_buffer,
                 };
@@ -431,7 +431,7 @@ fn CreateWorld(
                 }
 
                 // extract data relative to system for each relevant archetype
-                const archetype_interfaces = blk: {
+                const opaque_archetypes = blk: {
                     var event_cache_storage = &self.event_cache_storages[@enumToInt(event)];
                     if (event_cache_mask.isCoherent(&component_query_types) == false) {
                         event_cache_storage.assignCacheEntry(
@@ -443,8 +443,8 @@ fn CreateWorld(
                     break :blk event_cache_storage.cache[system_index];
                 };
 
-                for (archetype_interfaces) |interface| {
-                    try interface.getStorageData(&component_hashes, &storage);
+                for (opaque_archetypes) |*opaque_archetype| {
+                    try opaque_archetype.rawGetStorageData(&component_hashes, &storage);
                     var i: usize = 0;
                     while (i < storage.inner_len) : (i += 1) {
                         var arguments: std.meta.Tuple(&param_types) = undefined;

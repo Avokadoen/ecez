@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const IArchetype = @import("IArchetype.zig");
 const query = @import("query.zig");
+const OpaqueArchetype = @import("OpaqueArchetype.zig");
 
 // TODO: reduce system_count by checking which has identitcal arguments
 /// Create a cache which utilize a bitmask to check for incoherence
@@ -83,7 +83,7 @@ pub fn ArchetypeCacheStorage(comptime storage_count: comptime_int) type {
         const Self = @This();
 
         initialized_mask: InitializeMask,
-        cache: [storage_count][]IArchetype,
+        cache: [storage_count][]OpaqueArchetype,
 
         pub fn init() Self {
             return Self{
@@ -103,7 +103,7 @@ pub fn ArchetypeCacheStorage(comptime storage_count: comptime_int) type {
             }
         }
 
-        pub inline fn assignCacheEntry(self: *Self, allocator: Allocator, comptime system_index: comptime_int, archetypes: []IArchetype) void {
+        pub inline fn assignCacheEntry(self: *Self, allocator: Allocator, comptime system_index: comptime_int, archetypes: []OpaqueArchetype) void {
             if ((self.initialized_mask & (1 << system_index)) != 0) {
                 allocator.free(self.cache[system_index]);
             }

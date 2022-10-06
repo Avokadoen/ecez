@@ -7,10 +7,8 @@ const testing = std.testing;
 const ztracy = @import("ztracy");
 const Color = @import("misc.zig").Color;
 
-const archetype = @import("archetype.zig");
 const OpaqueArchetype = @import("OpaqueArchetype.zig");
 
-const IArchetype = @import("IArchetype.zig");
 const entity_type = @import("entity_type.zig");
 const Entity = entity_type.Entity;
 const EntityRef = entity_type.EntityRef;
@@ -24,7 +22,8 @@ const hashType = ecez_query.hashType;
 const meta = @import("meta.zig");
 const Testing = @import("Testing.zig");
 
-pub const Error = IArchetype.Error;
+const ecez_error = @import("error.zig");
+const StorageError = ecez_error.StorageError;
 
 pub fn FromComponents(comptime submitted_components: []const type) type {
     const len = submitted_components.len;
@@ -78,8 +77,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
         pub const Arch = struct {
             path_index: usize,
-            struct_bytes: []u8,
-            interface: IArchetype,
+            archetype: OpaqueArchetype,
         };
 
         archetypes: []?Arch,
@@ -87,7 +85,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         // index to current node's path
         path_index: usize,
 
-        pub fn init(allocator: Allocator, count: usize, path_index: usize) !Self {
+        pub fn init(allocator: Allocator, count: usize, path_index: usize) error{OutOfMemory}!Self {
             std.debug.assert(len >= count);
 
             var archetypes = try allocator.alloc(?Arch, count);
@@ -105,25 +103,26 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             };
         }
 
-        pub fn deinit(self: Self, allocator: Allocator) void {
+        pub fn deinit(self: *Self, allocator: Allocator) void {
             for (self.children) |maybe_child| {
-                if (maybe_child) |child| {
+                var m_child: ?Self = maybe_child;
+                if (m_child) |*child| {
                     child.deinit(allocator);
                 }
             }
             allocator.free(self.children);
 
-            for (self.archetypes) |arche| {
-                if (arche) |some| {
-                    some.interface.deinit();
-                    allocator.free(some.struct_bytes);
+            for (self.archetypes) |maybe_arche| {
+                var m_arche: ?Arch = maybe_arche;
+                if (m_arche) |*some| {
+                    some.archetype.deinit();
                 }
             }
             allocator.free(self.archetypes);
         }
 
         /// retrieve all archetype interfaces that are at the path destination and all children of the destination
-        pub inline fn getIArchetypesWithComponents(self: Self, path: ?[]u16, result: *ArrayList(IArchetype), depth: usize) Allocator.Error!void {
+        pub inline fn getIArchetypesWithComponents(self: Self, path: ?[]u16, result: *ArrayList(OpaqueArchetype), depth: usize) error{OutOfMemory}!void {
             // if we have not found nodes with our requirements
             if (path) |some_path| {
                 std.debug.assert(some_path.len > 0);
@@ -139,7 +138,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                     const arche_index = some_path[0] - depth;
                     // store the initial archetype meeting our requirement
                     if (self.archetypes[arche_index]) |arche| {
-                        try result.append(arche.interface);
+                        try result.append(arche.archetype);
                     }
 
                     const next_depth = depth + 1;
@@ -182,7 +181,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 // all archetypes should be fitting our requirement
                 for (self.archetypes) |maybe_arche| {
                     if (maybe_arche) |arche| {
-                        try result.append(arche.interface);
+                        try result.append(arche.archetype);
                     }
                 }
 
@@ -214,7 +213,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
         empty_bytes: [0]u8,
 
-        pub inline fn init(allocator: Allocator) !ArcheContainer {
+        pub inline fn init(allocator: Allocator) error{OutOfMemory}!ArcheContainer {
             var archetype_paths = ArrayList(ArchetypePath).init(allocator);
             try archetype_paths.append(ArchetypePath{ .len = 0, .indices = undefined });
             errdefer archetype_paths.deinit();
@@ -240,7 +239,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             };
         }
 
-        pub inline fn deinit(self: ArcheContainer) void {
+        pub inline fn deinit(self: *ArcheContainer) void {
             self.archetype_paths.deinit();
             self.entity_references.deinit();
             self.root_node.deinit(self.allocator);
@@ -251,7 +250,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         ///     - inital_state: the initial state of the entity, this must be a registered archetype
         ///
         /// Returns: A bool indicating if a new archetype have been made, and the entity
-        pub inline fn createEntity(self: *ArcheContainer, initial_state: anytype) !std.meta.Tuple(&[_]type{ bool, Entity }) {
+        pub inline fn createEntity(self: *ArcheContainer, initial_state: anytype) StorageError!std.meta.Tuple(&[_]type{ bool, Entity }) {
             const zone = ztracy.ZoneNC(@src(), "Container createEntity", Color.arche_container);
             defer zone.End();
 
@@ -307,12 +306,12 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
             // TODO: errdefer deinit allocations!
             // get the node that will store the new entity
-            var entity_node = blk: {
-                var current_node = self.root_node;
+            var entity_node: *Node = blk: {
+                var current_node = &self.root_node;
                 for (index_path[0 .. index_path.len - 1]) |path, depth| {
                     const index = path.component_index - depth;
                     // see if our new node exist
-                    if (current_node.children[index]) |child| {
+                    if (current_node.children[index]) |*child| {
                         // set target child node as current node
                         current_node = child;
                     } else {
@@ -322,7 +321,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                             current_node.children.len - 1,
                             self.archetype_paths.items.len,
                         );
-                        current_node = current_node.children[index].?;
+                        current_node = &(current_node.children[index].?);
 
                         // register new node path
                         var archetype_path = ArchetypePath{
@@ -355,14 +354,14 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             // get the index of the archetype in the node
             const archetype_index = index_path[index_path.len - 1].component_index - (index_path.len - 1);
             const path_index = blk1: {
-                if (entity_node.archetypes[archetype_index]) |arche| {
-                    try arche.interface.registerEntity(entity, &data);
+                if (entity_node.archetypes[archetype_index]) |*arche| {
+                    try arche.archetype.rawRegisterEntity(entity, &data);
                     new_archetype = false;
                     break :blk1 arche.path_index;
                 } else {
-                    // register path
-                    const arche_path_index = blk2: {
-                        const index = self.archetype_paths.items.len;
+                    // register archetype path
+                    const arche_path_index = self.archetype_paths.items.len;
+                    {
                         var archetype_path = ArchetypePath{
                             .len = index_path.len,
                             .indices = undefined,
@@ -371,24 +370,26 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                             archetype_path.indices[i] = sub_path.component_index - @intCast(u15, i);
                         }
                         try self.archetype_paths.append(archetype_path);
-                        break :blk2 index;
-                    };
-
-                    comptime var components_arr: [index_path.len]type = undefined;
-                    inline for (index_path) |path, i| {
-                        components_arr[i] = @TypeOf(initial_state[path.state_index]);
                     }
-                    const Archetype = archetype.FromTypesArray(&components_arr);
-                    var archetype_byte_location = try self.allocator.create(Archetype);
-                    archetype_byte_location.* = Archetype.init(self.allocator);
+                    errdefer _ = self.archetype_paths.pop();
 
-                    const i_archetype = archetype_byte_location.archetypeInterface();
-                    try i_archetype.registerEntity(entity, &data);
+                    comptime var type_hashes: [index_path.len]u64 = undefined;
+                    comptime var type_sizes: [index_path.len]usize = undefined;
+                    inline for (index_path) |path, i| {
+                        const Component = @TypeOf(initial_state[path.state_index]);
+                        type_hashes[i] = comptime ecez_query.hashType(Component);
+                        type_sizes[i] = @sizeOf(Component);
+                    }
+
+                    // create new opaque archetype
                     entity_node.archetypes[archetype_index] = Node.Arch{
                         .path_index = arche_path_index,
-                        .struct_bytes = std.mem.asBytes(archetype_byte_location),
-                        .interface = i_archetype,
+                        .archetype = OpaqueArchetype.init(self.allocator, &type_hashes, &type_sizes) catch {
+                            return error.OutOfMemory;
+                        },
                     };
+                    // register entity in the new archetype
+                    try entity_node.archetypes[archetype_index].?.archetype.rawRegisterEntity(entity, &data);
 
                     new_archetype = true;
                     break :blk1 arche_path_index;
@@ -410,7 +411,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         ///     - OutOfMemory: if OOM
         /// Return:
         ///     True if a new archetype was created for this operation
-        pub inline fn setComponent(self: *ArcheContainer, entity: Entity, component: anytype) IArchetype.Error!bool {
+        pub inline fn setComponent(self: *ArcheContainer, entity: Entity, component: anytype) StorageError!bool {
             const zone = ztracy.ZoneNC(@src(), "Container setComponent", Color.arche_container);
             defer zone.End();
 
@@ -419,7 +420,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             // get the archetype of the entity
             if (self.getArchetypeWithEntity(entity)) |arche| {
                 // try to update component in current archetype
-                if (arche.interface.setComponent(entity, component)) |ok| {
+                if (arche.archetype.setComponent(entity, component)) |ok| {
                     // ok we don't need to do anymore
                     _ = ok;
                 } else |err| {
@@ -458,11 +459,11 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                             };
 
                             var new_archetype_created: bool = undefined;
-                            const new_arche: Node.Arch = blk1: {
+                            const new_arche: *Node.Arch = blk1: {
                                 var arche_node = blk: {
-                                    var current_node: Node = self.root_node;
+                                    var current_node: *Node = &self.root_node;
                                     for (new_path.indices[0 .. new_path.len - 1]) |step, depth| {
-                                        if (current_node.children[step]) |some| {
+                                        if (current_node.children[step]) |*some| {
                                             current_node = some;
                                         } else {
                                             // create new node and set it as current node
@@ -471,7 +472,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                                                 current_node.children.len - 1,
                                                 self.archetype_paths.items.len,
                                             );
-                                            current_node = current_node.children[step].?;
+                                            current_node = &current_node.children[step].?;
 
                                             // register new node path
                                             var archetype_path = ArchetypePath{
@@ -488,7 +489,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                                 };
 
                                 const archetype_index = new_path.indices[new_path.len - 1];
-                                if (arche_node.archetypes[archetype_index]) |some| {
+                                if (arche_node.archetypes[archetype_index]) |*some| {
                                     new_archetype_created = false;
                                     break :blk1 some;
                                 } else {
@@ -501,22 +502,18 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
                                     // register archetype path
                                     try self.archetype_paths.append(new_path);
+                                    errdefer _ = self.archetype_paths.pop();
 
                                     // create new opaque archetype
-                                    var archetype_address = try self.allocator.create(OpaqueArchetype);
-                                    archetype_address.* = OpaqueArchetype.init(self.allocator, type_hashes[0..new_path.len], type_sizes[0..new_path.len]) catch {
-                                        return IArchetype.Error.OutOfMemory;
-                                    };
-
-                                    const i_archetype = archetype_address.archetypeInterface();
                                     arche_node.archetypes[archetype_index] = Node.Arch{
                                         .path_index = self.archetype_paths.items.len - 1,
-                                        .struct_bytes = std.mem.asBytes(archetype_address),
-                                        .interface = i_archetype,
+                                        .archetype = OpaqueArchetype.init(self.allocator, type_hashes[0..new_path.len], type_sizes[0..new_path.len]) catch {
+                                            return error.OutOfMemory;
+                                        },
                                     };
 
                                     new_archetype_created = true;
-                                    break :blk1 arche_node.archetypes[archetype_index].?;
+                                    break :blk1 &(arche_node.archetypes[archetype_index].?);
                                 }
                             };
 
@@ -527,7 +524,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                             }
 
                             // remove the entity and it's components from the old archetype
-                            try arche.interface.swapRemoveEntity(entity, data[0..old_path.len]);
+                            try arche.archetype.rawSwapRemoveEntity(entity, data[0..old_path.len]);
 
                             // insert the new component at it's correct location
                             var rhd = data[new_component_index..new_path.len];
@@ -535,7 +532,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                             data[new_component_index] = &std.mem.toBytes(component);
 
                             // register the entity in the new archetype
-                            try new_arche.interface.registerEntity(entity, data[0..new_path.len]);
+                            try new_arche.archetype.rawRegisterEntity(entity, data[0..new_path.len]);
 
                             // update entity reference
                             self.entity_references.items[entity.id] = EntityRef{
@@ -544,7 +541,6 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
                             return new_archetype_created;
                         },
-                        error.OutOfMemory => return IArchetype.Error.OutOfMemory,
                         // if this happen, then the container is in an invalid state
                         error.EntityMissing => {
                             unreachable;
@@ -561,7 +557,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         ///     - OutOfMemory: if OOM
         /// Return:
         ///     True if a new archetype was created for this operation
-        pub inline fn removeComponent(self: *ArcheContainer, entity: Entity, comptime Component: type) !bool {
+        pub inline fn removeComponent(self: *ArcheContainer, entity: Entity, comptime Component: type) error{ EntityMissing, OutOfMemory }!bool {
             if (self.hasComponent(entity, Component) == false) {
                 return false;
             }
@@ -576,7 +572,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 data[i] = &buf;
             }
             // remove the entity and it's components from the old archetype
-            try old_arche.interface.swapRemoveEntity(entity, data[0..old_path.len]);
+            try old_arche.archetype.rawSwapRemoveEntity(entity, data[0..old_path.len]);
 
             if (old_path.len <= 1) {
                 // update entity reference
@@ -637,9 +633,9 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             };
 
             var new_archetype_created: bool = undefined;
-            var new_archetype = blk: {
+            var new_archetype: *Node.Arch = blk: {
                 const archetype_index = new_path.indices[new_path.len - 1];
-                if (arche_node.archetypes[archetype_index]) |some| {
+                if (arche_node.archetypes[archetype_index]) |*some| {
                     new_archetype_created = false;
                     break :blk some;
                 } else {
@@ -654,20 +650,15 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                     try self.archetype_paths.append(new_path);
 
                     // create new opaque archetype
-                    var archetype_address = try self.allocator.create(OpaqueArchetype);
-                    archetype_address.* = OpaqueArchetype.init(self.allocator, type_hashes[0..new_path.len], type_sizes[0..new_path.len]) catch {
-                        return IArchetype.Error.OutOfMemory;
-                    };
-
-                    const i_archetype = archetype_address.archetypeInterface();
                     arche_node.archetypes[archetype_index] = Node.Arch{
                         .path_index = self.archetype_paths.items.len - 1,
-                        .struct_bytes = std.mem.asBytes(archetype_address),
-                        .interface = i_archetype,
+                        .archetype = OpaqueArchetype.init(self.allocator, type_hashes[0..new_path.len], type_sizes[0..new_path.len]) catch {
+                            return error.OutOfMemory;
+                        },
                     };
 
                     new_archetype_created = true;
-                    break :blk arche_node.archetypes[archetype_index].?;
+                    break :blk &arche_node.archetypes[archetype_index].?;
                 }
             };
 
@@ -678,7 +669,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             }
 
             // register the entity in the new archetype
-            try new_archetype.interface.registerEntity(entity, data[0..new_path.len]);
+            try new_archetype.archetype.rawRegisterEntity(entity, data[0..new_path.len]);
 
             // update entity reference
             self.entity_references.items[entity.id] = EntityRef{
@@ -708,13 +699,13 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             // verify that component exist in storage
             _ = comptime componentIndex(Component);
             // get the archetype of the entity
-            const arche = self.getArchetypeWithEntity(entity) orelse return false;
-            return arche.interface.hasComponent(Component);
+            const node = self.getArchetypeWithEntity(entity) orelse return false;
+            return node.archetype.hasComponent(Component);
         }
 
         /// Query archetypes containing all components listed in component_hashes
         /// caller own the returned memory
-        pub inline fn getArchetypesWithComponents(self: ArcheContainer, allocator: Allocator, component_hashes: []const u64) Allocator.Error![]IArchetype {
+        pub inline fn getArchetypesWithComponents(self: ArcheContainer, allocator: Allocator, component_hashes: []const u64) error{OutOfMemory}![]OpaqueArchetype {
             var path: [len]u16 = undefined;
             for (component_hashes) |requested_hash, i| {
                 path[i] = blk: {
@@ -726,17 +717,17 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                     unreachable; // should be compile type guards before we reach this point ...
                 };
             }
-            var resulting_archetypes = ArrayList(IArchetype).init(allocator);
+            var resulting_archetypes = ArrayList(OpaqueArchetype).init(allocator);
             try self.root_node.getIArchetypesWithComponents(path[0..component_hashes.len], &resulting_archetypes, 0);
 
             return resulting_archetypes.toOwnedSlice();
         }
 
-        pub inline fn getComponent(self: ArcheContainer, entity: Entity, comptime Component: type) IArchetype.Error!Component {
+        pub inline fn getComponent(self: ArcheContainer, entity: Entity, comptime Component: type) ecez_error.ArchetypeError!Component {
             const zone = ztracy.ZoneNC(@src(), "Container getComponent", Color.arche_container);
             defer zone.End();
-            const arche = self.getArchetypeWithEntity(entity) orelse return IArchetype.Error.ComponentMissing;
-            return arche.interface.getComponent(entity, Component);
+            const node = self.getArchetypeWithEntity(entity) orelse return error.ComponentMissing;
+            return node.archetype.getComponent(entity, Component);
         }
 
         inline fn getArchetypeWithEntity(self: ArcheContainer, entity: Entity) ?*Node.Arch {
@@ -776,7 +767,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 const TestContainer = FromComponents(&Testing.AllComponentsArr);
 
 test "ArcheContainer init + deinit is idempotent" {
-    const container = try TestContainer.init(testing.allocator);
+    var container = try TestContainer.init(testing.allocator);
     container.deinit();
 }
 

@@ -7,7 +7,6 @@ const ztracy = @import("ztracy");
 
 const entity_type = @import("entity_type.zig");
 
-const IArchetype = @import("IArchetype.zig");
 const Color = @import("misc.zig").Color;
 const Entity = entity_type.Entity;
 const EntityMap = entity_type.Map;
@@ -30,6 +29,9 @@ const TypeContext = struct {
 };
 const TypeMap = std.ArrayHashMap(u64, TypeInfo, TypeContext, false);
 
+const ecez_error = @import("error.zig");
+const ArchetypeError = ecez_error.ArchetypeError;
+
 const OpaqueArchetype = @This();
 
 allocator: Allocator,
@@ -39,7 +41,7 @@ entities: EntityMap,
 type_info: TypeMap,
 component_storage: []ArrayList(u8),
 
-pub fn init(allocator: Allocator, type_hashes: []const u64, type_sizes: []const usize) !OpaqueArchetype {
+pub fn init(allocator: Allocator, type_hashes: []const u64, type_sizes: []const usize) error{OutOfMemory}!OpaqueArchetype {
     std.debug.assert(type_hashes.len == type_sizes.len);
 
     const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype init", Color.opaque_archetype);
@@ -83,22 +85,34 @@ pub fn deinit(self: *OpaqueArchetype) void {
     self.allocator.free(self.component_storage);
 }
 
-/// get the archetype dynamic dispatch interface
-pub fn archetypeInterface(self: *OpaqueArchetype) IArchetype {
-    return IArchetype.init(
-        self,
-        rawHasComponent,
-        rawGetComponent,
-        rawSetComponent,
-        rawRegisterEntity,
-        rawSwapRemoveEntity,
-        rawGetStorageData,
-        deinit,
-    );
+pub fn hasComponent(self: OpaqueArchetype, comptime T: type) bool {
+    return self.rawHasComponent(comptime hashType(T));
+}
+
+pub fn getComponent(self: OpaqueArchetype, entity: Entity, comptime T: type) ecez_error.ArchetypeError!T {
+    if (@sizeOf(T) == 0) {
+        if (self.hasComponent(T)) {
+            return T{};
+        } else {
+            return error.ComponentMissing;
+        }
+    }
+
+    const bytes = try self.rawGetComponent(entity, comptime hashType(T));
+    return @ptrCast(*const T, @alignCast(@alignOf(T), bytes.ptr)).*;
+}
+
+pub fn setComponent(self: *OpaqueArchetype, entity: Entity, component: anytype) ArchetypeError!void {
+    const T = @TypeOf(component);
+    if (@sizeOf(T) == 0) {
+        return; // TODO: check if we have component?
+    }
+    const bytes = std.mem.asBytes(&component);
+    try self.rawSetComponent(entity, comptime hashType(T), bytes);
 }
 
 /// Implementation of IArchetype hasComponent
-pub fn rawHasComponent(self: *OpaqueArchetype, type_hash: u64) bool {
+pub fn rawHasComponent(self: OpaqueArchetype, type_hash: u64) bool {
     const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype rawHasComponent", Color.opaque_archetype);
     defer zone.End();
 
@@ -109,16 +123,16 @@ pub fn rawHasComponent(self: *OpaqueArchetype, type_hash: u64) bool {
 }
 
 /// Retrieve a component value as bytes from a given entity
-pub fn rawGetComponent(self: *OpaqueArchetype, entity: Entity, type_hash: u64) IArchetype.Error![]const u8 {
+pub fn rawGetComponent(self: OpaqueArchetype, entity: Entity, type_hash: u64) ArchetypeError![]const u8 {
     const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype rawGetComponent", Color.opaque_archetype);
     defer zone.End();
 
     const component_info = self.type_info.get(type_hash) orelse {
-        return IArchetype.Error.ComponentMissing; // Component type not part of archetype
+        return ArchetypeError.ComponentMissing; // Component type not part of archetype
     };
 
     const entity_index = self.entities.get(entity) orelse {
-        return IArchetype.Error.EntityMissing; // Entity not part of archetype
+        return ArchetypeError.EntityMissing; // Entity not part of archetype
     };
 
     const bytes_from = entity_index * component_info.size;
@@ -127,17 +141,17 @@ pub fn rawGetComponent(self: *OpaqueArchetype, entity: Entity, type_hash: u64) I
     return self.component_storage[component_info.storage_index].items[bytes_from..bytes_to];
 }
 
-pub fn rawSetComponent(self: *OpaqueArchetype, entity: Entity, type_hash: u64, component: []const u8) IArchetype.Error!void {
+pub fn rawSetComponent(self: *OpaqueArchetype, entity: Entity, type_hash: u64, component: []const u8) ArchetypeError!void {
     const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype rawSetComponent", Color.opaque_archetype);
     defer zone.End();
 
     const component_info = self.type_info.get(type_hash) orelse {
-        return IArchetype.Error.ComponentMissing; // Component type not part of archetype
+        return ArchetypeError.ComponentMissing; // Component type not part of archetype
     };
     std.debug.assert(component_info.size == component.len);
 
     const entity_index = self.entities.get(entity) orelse {
-        return IArchetype.Error.EntityMissing; // Entity not part of archetype
+        return ArchetypeError.EntityMissing; // Entity not part of archetype
     };
 
     const bytes_from = entity_index * component_info.size;
@@ -145,7 +159,7 @@ pub fn rawSetComponent(self: *OpaqueArchetype, entity: Entity, type_hash: u64, c
     std.mem.copy(u8, self.component_storage[component_info.storage_index].items[bytes_from..], component);
 }
 
-pub fn rawRegisterEntity(self: *OpaqueArchetype, entity: Entity, data: []const []const u8) IArchetype.Error!void {
+pub fn rawRegisterEntity(self: *OpaqueArchetype, entity: Entity, data: []const []const u8) error{OutOfMemory}!void {
     std.debug.assert(data.len == self.component_storage.len);
 
     const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype rawRegisterEntity", Color.opaque_archetype);
@@ -170,20 +184,21 @@ pub fn rawRegisterEntity(self: *OpaqueArchetype, entity: Entity, data: []const [
 
     for (data) |component_bytes, i| {
         if (data.len > 0) {
+            // TODO: proper errdefer
             try self.component_storage[i].appendSlice(component_bytes);
             appended_component = i;
         }
     }
 }
 
-pub fn rawSwapRemoveEntity(self: *OpaqueArchetype, entity: Entity, buffer: [][]u8) IArchetype.Error!void {
+pub fn rawSwapRemoveEntity(self: *OpaqueArchetype, entity: Entity, buffer: [][]u8) error{EntityMissing}!void {
     std.debug.assert(buffer.len == self.component_storage.len);
 
     const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype rawSwapRemoveEntity", Color.opaque_archetype);
     defer zone.End();
 
     // remove entity from
-    const moving_kv = self.entities.fetchSwapRemove(entity) orelse return IArchetype.Error.EntityMissing;
+    const moving_kv = self.entities.fetchSwapRemove(entity) orelse return error.EntityMissing;
 
     // move entity data to buffers
     {
@@ -224,7 +239,11 @@ pub fn rawSwapRemoveEntity(self: *OpaqueArchetype, entity: Entity, buffer: [][]u
     }
 }
 
-pub fn rawGetStorageData(self: *OpaqueArchetype, component_hashes: []const u64, storage: *IArchetype.StorageData) IArchetype.Error!void {
+pub const StorageData = struct {
+    inner_len: usize,
+    outer: [][]u8,
+};
+pub fn rawGetStorageData(self: *OpaqueArchetype, component_hashes: []const u64, storage: *StorageData) ArchetypeError!void {
     std.debug.assert(component_hashes.len <= storage.outer.len);
 
     var stored_hashes: usize = 0;
@@ -246,7 +265,7 @@ pub fn rawGetStorageData(self: *OpaqueArchetype, component_hashes: []const u64, 
     storage.inner_len = self.entities.count();
 
     if (stored_hashes != component_hashes.len) {
-        return IArchetype.Error.ComponentMissing;
+        return ArchetypeError.ComponentMissing;
     }
 }
 
@@ -259,6 +278,48 @@ const hashType = @import("query.zig").hashType;
 test "init() + deinit() is idempotent" {
     var archetype = try OpaqueArchetype.init(testing.allocator, &[_]u64{ 0, 1, 2 }, &[_]usize{ 0, 1, 2 });
     archetype.deinit();
+}
+
+test "hasComponent returns expected values" {
+    var archetype = try OpaqueArchetype.init(
+        testing.allocator,
+        &[_]u64{hashType(A)},
+        &[_]usize{@sizeOf(A)},
+    );
+    defer archetype.deinit();
+    try testing.expectEqual(true, archetype.hasComponent(Testing.Component.A));
+    try testing.expectEqual(false, archetype.hasComponent(Testing.Component.B));
+}
+
+test "getComponent returns expected values" {
+    const hashes = comptime [_]u64{ hashType(A), hashType(B), hashType(C) };
+    const sizes = comptime [_]usize{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
+
+    var archetype = try OpaqueArchetype.init(testing.allocator, &hashes, &sizes);
+    defer archetype.deinit();
+
+    var i: usize = 0;
+    while (i < 100) : (i += 1) {
+        const a = A{ .value = @intCast(u32, i) };
+        const b = B{ .value = @intCast(u8, i) };
+        var data: [3][]const u8 = undefined;
+        data[0] = std.mem.asBytes(&a);
+        data[1] = std.mem.asBytes(&b);
+        data[2] = &[0]u8{};
+        try archetype.rawRegisterEntity(Entity{ .id = @intCast(entity_type.EntityId, i) }, &data);
+    }
+
+    const entity = Entity{ .id = 50 };
+
+    try testing.expectEqual(
+        A{ .value = @intCast(u32, 50) },
+        try archetype.getComponent(entity, A),
+    );
+
+    try testing.expectEqual(
+        B{ .value = @intCast(u8, 50) },
+        try archetype.getComponent(entity, B),
+    );
 }
 
 test "rawHasComponent identify existing components" {
@@ -316,8 +377,8 @@ test "rawGetComponent fails on invalid request" {
     data[0] = &[0]u8{};
     try archetype.rawRegisterEntity(entity, &data);
 
-    try testing.expectError(IArchetype.Error.ComponentMissing, archetype.rawGetComponent(entity, comptime hashType(Testing.Component.A)));
-    try testing.expectError(IArchetype.Error.EntityMissing, archetype.rawGetComponent(Entity{ .id = 1 }, comptime hashType(C)));
+    try testing.expectError(ArchetypeError.ComponentMissing, archetype.rawGetComponent(entity, comptime hashType(Testing.Component.A)));
+    try testing.expectError(ArchetypeError.EntityMissing, archetype.rawGetComponent(Entity{ .id = 1 }, comptime hashType(C)));
 }
 
 test "rawSwapRemoveEntity removes entity and components" {
@@ -353,7 +414,7 @@ test "rawSwapRemoveEntity removes entity and components" {
         const mock_entity1 = Entity{ .id = 50 };
         try archetype.rawSwapRemoveEntity(mock_entity1, &buffer);
 
-        try testing.expectError(IArchetype.Error.EntityMissing, archetype.rawGetComponent(
+        try testing.expectError(ArchetypeError.EntityMissing, archetype.rawGetComponent(
             mock_entity1,
             comptime hashType(A),
         ));
@@ -415,7 +476,7 @@ test "rawGetStorageData retrieves components view" {
     }
 
     var data: [3][]u8 = undefined;
-    var storage = IArchetype.StorageData{
+    var storage = StorageData{
         .inner_len = undefined,
         .outer = &data,
     };
