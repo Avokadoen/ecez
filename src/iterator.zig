@@ -4,7 +4,7 @@ const testing = std.testing;
 const meta = @import("meta.zig");
 const Testing = @import("Testing.zig");
 
-pub fn FromTypes(comptime types: []const type, result_count: comptime_int) type {
+pub fn FromTypes(comptime types: []const type, comptime result_count: comptime_int) type {
     const ComponentStorage = meta.LengthComponentStorage(types);
 
     return struct {

@@ -44,7 +44,7 @@ pub fn build(b: *std.build.Builder) void {
     const ecez_package = std.build.Pkg{
         .name = "ecez",
         .source = .{ .path = "src/main.zig" },
-        .dependencies = &[_]std.build.Pkg{ztracy_pkg},
+        .dependencies = &[_]std.build.Pkg{ ztracy_pkg, zjobs.pkg },
     };
 
     const lib = b.addStaticLibrary("ecez", "src/main.zig");
@@ -58,6 +58,7 @@ pub fn build(b: *std.build.Builder) void {
     {
         const main_tests = b.addTestExe("main_tests", "src/main.zig");
         main_tests.setBuildMode(mode);
+        main_tests.addPackage(zjobs.pkg);
         main_tests.addPackage(ztracy_pkg);
         ztracy.link(main_tests, ztracy_options);
         main_tests.linkLibrary(lib);

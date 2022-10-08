@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const builtin = @import("builtin");
+
 const assert = std.debug.assert;
 
 const panic = std.debug.panic;
@@ -59,14 +61,27 @@ pub const JobId = enum(u32) {
             return .{ .index = _index, .cycle = _cycle };
         }
 
-        inline fn id(_fields: *const Fields) JobId {
+        // TODO: seems like a bug in stage one gives align 1 so we overwrite this temporarly
+        // see: https://github.com/Avokadoen/ecez/issues/32
+        inline fn id(_fields: Fields) JobId {
             comptime assert(@sizeOf(Fields) == @sizeOf(JobId));
-            return @ptrCast(*const JobId, _fields).*;
+            return @intToEnum(JobId, @bitCast(u32, _fields));
         }
     };
 };
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+// ECEZ TODO: because of a bug in stage one we need this patch for now
+// see: https://github.com/Avokadoen/ecez/issues/32 for when ecez will be able to remove this
+pub const JobQueueConfig = struct {
+    // zig fmt: off
+    max_jobs      : u16 = 256,
+    max_job_size  : u16 =  64,
+    max_threads   : u8  =   8,
+    idle_sleep_ns : u32 =  10,
+    // zig fmt: on
+};
 
 /// Returns a struct that executes jobs on a pool of threads, which may be
 /// configured as follows:
@@ -85,14 +100,7 @@ pub const JobId = enum(u32) {
 ///   has not been tested for correctness in case background threads cannot be
 ///   spawned.
 pub fn JobQueue(
-    comptime config: struct {
-        // zig fmt: off
-        max_jobs      : u16 = 256,
-        max_job_size  : u16 =  64,
-        max_threads   : u8  =   8,
-        idle_sleep_ns : u32 =  10,
-        // zig fmt: on
-    },
+    comptime config: JobQueueConfig,
 ) type {
     compileAssert(
         config.max_jobs >= min_jobs,
@@ -120,7 +128,8 @@ pub fn JobQueue(
         pub const max_job_size = config.max_job_size;
 
         const Data = [max_job_size]u8;
-        const Main = *const fn (*Data) void;
+        // ECEZ TODO: https://github.com/Avokadoen/ecez/issues/32 for when ecez will be able to remove this
+        const Main = if (builtin.zig_backend == .stage1) fn (*Data) void else *const fn (*Data) void;
 
         // zig fmt: off
         data     : Data align(cache_line_size) = undefined,
@@ -155,7 +164,13 @@ pub fn JobQueue(
             std.mem.set(u8, &self.data, 0);
             std.mem.copy(u8, &self.data, std.mem.asBytes(job));
 
-            const exec: *const fn (*Job) void = &@field(Job, "exec");
+            const exec = blk: {
+                if (builtin.zig_backend == .stage1) {
+                    break :blk @as(fn (*Job) void, @field(Job, "exec"));
+                } else {
+                    break :blk @as(*const fn (*Job) void, &@field(Job, "exec"));
+                } 
+            };
             const id = jobId(@truncate(u16, index), new_cycle);
 
             self.exec = @ptrCast(Main, exec);
@@ -187,7 +202,8 @@ pub fn JobQueue(
         }
 
         fn jobId(index: u16, cycle: u16) JobId {
-            return JobId.Fields.init(index, cycle).id();
+            const fields = JobId.Fields.init(index, cycle);
+            return fields.id();
         }
     };
 
@@ -458,8 +474,12 @@ pub fn JobQueue(
             self.lock("schedule");
             defer self.unlock("schedule");
 
-            if (!self.isInitialized()) return Error.Uninitialized;
-            if (self.isStopping()) return Error.Stopped;
+            if (!self.isInitialized()) {
+                return Error.Uninitialized;
+            }
+            if (self.isStopping()) {
+                return Error.Stopped;
+            }
 
             const index = self.dequeueFreeIndex();
             const slot: *Slot = &self._slots[index];
@@ -1092,7 +1112,6 @@ test "JobQueue throughput" {
                     "ran on thread id {} and took {}ms",
                     .{ self.thread, self.ms() },
                 );
-
             }
         }
     };
