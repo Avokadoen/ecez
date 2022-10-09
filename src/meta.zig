@@ -42,6 +42,8 @@ pub const SystemMetadata = struct {
                     if (@typeInfo(err.payload) != .Void) {
                         @compileError("system " ++ function_name ++ " return type has to be void or !void, was " ++ @typeName(return_type));
                     }
+                    // TODO: remove this error: https://github.com/Avokadoen/ecez/issues/57
+                    @compileError("systems " ++ function_name ++ "return error which is currently not supported, please see https://github.com/Avokadoen/ecez/issues/57");
                 },
                 .Void => {}, // continue
                 else => @compileError("system " ++ function_name ++ " return type has to be void or !void, was " ++ @typeName(return_type)),
@@ -687,22 +689,23 @@ test "SystemMetadata errorSet return null with non-failable functions" {
     try testing.expectEqual(@as(?type, null), metadata.errorSet());
 }
 
-test "SystemMetadata errorSet return error set with failable functions" {
-    const A = struct { b: bool };
-    const TestErrorSet = error{ ErrorOne, ErrorTwo };
-    const testFn = struct {
-        pub fn func(a: A) TestErrorSet!void {
-            if (a.b) {
-                return TestErrorSet.ErrorOne;
-            }
-            return TestErrorSet.ErrorTwo;
-        }
-    }.func;
-    const FuncType = @TypeOf(testFn);
-    const metadata = SystemMetadata.init(FuncType, @typeInfo(FuncType).Fn);
+// TODO: https://github.com/Avokadoen/ecez/issues/57
+// test "SystemMetadata errorSet return error set with failable functions" {
+//     const A = struct { b: bool };
+//     const TestErrorSet = error{ ErrorOne, ErrorTwo };
+//     const testFn = struct {
+//         pub fn func(a: A) TestErrorSet!void {
+//             if (a.b) {
+//                 return TestErrorSet.ErrorOne;
+//             }
+//             return TestErrorSet.ErrorTwo;
+//         }
+//     }.func;
+//     const FuncType = @TypeOf(testFn);
+//     const metadata = SystemMetadata.init(FuncType, @typeInfo(FuncType).Fn);
 
-    try testing.expectEqual(TestErrorSet, metadata.errorSet().?);
-}
+//     try testing.expectEqual(TestErrorSet, metadata.errorSet().?);
+// }
 
 test "SystemMetadata componentQueryArgTypes results in queryable types" {
     const A = struct {};
@@ -784,30 +787,31 @@ test "SystemMetadata paramArgTypes results in pointer types" {
     }
 }
 
-test "SystemMetadata canReturnError results in correct type" {
-    const A = struct {};
-    const TestFunctions = struct {
-        pub fn func1(a: A) void {
-            _ = a;
-        }
-        pub fn func2(a: A) !void {
-            _ = a;
-            return error.NotFound;
-        }
-    };
+// TODO: https://github.com/Avokadoen/ecez/issues/57
+// test "SystemMetadata canReturnError results in correct type" {
+//     const A = struct {};
+//     const TestFunctions = struct {
+//         pub fn func1(a: A) void {
+//             _ = a;
+//         }
+//         pub fn func2(a: A) !void {
+//             _ = a;
+//             return error.NotFound;
+//         }
+//     };
 
-    {
-        const FuncType = @TypeOf(TestFunctions.func1);
-        const metadata = SystemMetadata.init(FuncType, @typeInfo(FuncType).Fn);
-        try testing.expectEqual(false, metadata.canReturnError());
-    }
+//     {
+//         const FuncType = @TypeOf(TestFunctions.func1);
+//         const metadata = SystemMetadata.init(FuncType, @typeInfo(FuncType).Fn);
+//         try testing.expectEqual(false, metadata.canReturnError());
+//     }
 
-    {
-        const FuncType = @TypeOf(TestFunctions.func2);
-        const metadata = SystemMetadata.init(FuncType, @typeInfo(FuncType).Fn);
-        try testing.expectEqual(true, metadata.canReturnError());
-    }
-}
+//     {
+//         const FuncType = @TypeOf(TestFunctions.func2);
+//         const metadata = SystemMetadata.init(FuncType, @typeInfo(FuncType).Fn);
+//         try testing.expectEqual(true, metadata.canReturnError());
+//     }
+// }
 
 test "isEventArgument correctly identify event types" {
     const A = struct {};
@@ -857,9 +861,8 @@ test "systemInfo generate accurate system information" {
         pub fn hello(a: *A) void {
             a.a += 1;
         }
-        pub fn world(b: A) !void {
+        pub fn world(b: A) void {
             _ = b;
-            return error.BadStuff;
         }
     };
     const info = systemInfo(3, .{ testFn, TestSystems });
