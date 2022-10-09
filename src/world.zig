@@ -324,23 +324,8 @@ fn CreateWorld(
             return self.container.getComponent(entity, Component);
         }
 
-        // TODO:
-        // /// Perform a query where you can exclude and include types
-        // /// This means if you query A and B, but exclude C then entities that does
-        // /// contain the C component with be omitted
-        // /// Parameters:
-        // ///     - query: a compile time constructet query for components
-        // ///
-        // /// Returns: an iterator over matched data which allow you to loop all components grouped by entity owner
-        // pub fn queryStorage(self: *World, comptime query: Query) blk: {
-        //     const result_count = Container.queryResultCount(query);
-        //     break :blk iterator.FromTypes(query.include_types, result_count);
-        // } {
-        //     return self.container.getQueryResult(query);
-        // }
-
         /// Call all systems registered when calling CreateWorld
-        pub fn dispatch(self: *World) !void {
+        pub fn dispatch(self: *World) error{OutOfMemory}!void {
             const zone = ztracy.ZoneNC(@src(), "World dispatch", Color.world);
             defer zone.End();
 
@@ -425,7 +410,7 @@ fn CreateWorld(
             }
         }
 
-        pub fn triggerEvent(self: *World, comptime event: EventsEnum, event_extra_argument: anytype) !void {
+        pub fn triggerEvent(self: *World, comptime event: EventsEnum, event_extra_argument: anytype) error{OutOfMemory}!void {
             const tracy_zone_name = std.fmt.comptimePrint("World trigger {any}", .{event});
             const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.world);
             defer zone.End();
@@ -647,13 +632,7 @@ fn CreateWorld(
                                 }
                             }
                             const system_ptr = @ptrCast(FuncType, func);
-                            // call either a failable system, or a normal void system
-                            if (comptime metadata.canReturnError()) {
-                                // TODO: try instead of catch
-                                failableCallWrapper(system_ptr.*, arguments) catch unreachable;
-                            } else {
-                                callWrapper(system_ptr.*, arguments);
-                            }
+                            callWrapper(system_ptr.*, arguments);
                         }
                     }
                 }
@@ -720,12 +699,12 @@ fn CreateWorld(
                                 }
                             }
 
-                            const system_ptr = @ptrCast(FuncType, func);
-                            // call either a failable system, or a normal void system
                             if (comptime metadata.canReturnError()) {
-                                // TODO: try
-                                failableCallWrapper(system_ptr.*, arguments) catch unreachable;
+                                // TODO: remove this error: https://github.com/Avokadoen/ecez/issues/57
+                                //failableCallWrapper(system_ptr.*, arguments);
+                                @compileError("system that can fail are currently unsupported");
                             } else {
+                                const system_ptr = @ptrCast(FuncType, func);
                                 callWrapper(system_ptr.*, arguments);
                             }
                         }
@@ -856,38 +835,6 @@ test "getSharedState retrieve state" {
 //     });
 //     defer world.deinit();
 
-//     world.setSharedState(Testing.Component.A{ .value = 4 });
-//     world.setSharedState(Testing.Component.B{ .value = 2 });
-
-//     try testing.expectEqual(@as(u32, 4), world.getSharedState(Testing.Component.A).value);
-//     try testing.expectEqual(@as(u8, 2), world.getSharedState(Testing.Component.B).value);
-// }
-
-// test "systems can fail" {
-//     const SystemStruct = struct {
-//         pub fn aSystem(a: Testing.Component.A) !void {
-//             try testing.expectEqual(Testing.Component.A{ .value = 42 }, a);
-//         }
-
-//         pub fn bSystem(b: Testing.Component.B) !void {
-//             _ = b;
-//             return error.SomethingWentVeryWrong;
-//         }
-//     };
-
-//     var world = try WorldStub.WithSystems(.{
-//         SystemStruct,
-//     }).init(testing.allocator, .{});
-//     defer world.deinit();
-
-//     _ = try world.createEntity(.{
-//         Testing.Component.A{ .value = 42 },
-//         Testing.Component.B{},
-//     });
-
-//     try testing.expectError(error.SomethingWentVeryWrong, world.dispatch());
-// }
-
 test "systems can mutate components" {
     const SystemStruct = struct {
         pub fn mutateStuff(a: *Testing.Component.A, b: Testing.Component.B) void {
@@ -971,12 +918,12 @@ test "systems can mutate shared state" {
         value: u8,
     };
     const SystemStruct = struct {
-        pub fn func(a: Testing.Component.A, shared: *SharedState(A)) !void {
+        pub fn func(a: Testing.Component.A, shared: *SharedState(A)) void {
             _ = a;
             shared.value += 1;
         }
 
-        pub fn bSystem(a: Testing.Component.A, b: Testing.Component.B, shared: *SharedState(A)) !void {
+        pub fn bSystem(a: Testing.Component.A, b: Testing.Component.B, shared: *SharedState(A)) void {
             _ = a;
             _ = b;
             shared.value += 1;
@@ -999,68 +946,69 @@ test "systems can mutate shared state" {
     try testing.expectEqual(@as(u8, 2), world.shared_state[0].value);
 }
 
-test "systems can have many shared state" {
-    const A = struct {
-        value: u8,
-    };
-    const B = struct {
-        value: u8,
-    };
-    const C = struct {
-        value: u8,
-    };
+// TODO: https://github.com/Avokadoen/ecez/issues/57
+// test "systems can have many shared state" {
+//     const A = struct {
+//         value: u8,
+//     };
+//     const B = struct {
+//         value: u8,
+//     };
+//     const C = struct {
+//         value: u8,
+//     };
 
-    const SystemStruct = struct {
-        pub fn system1(a: Testing.Component.A, shared: SharedState(A)) !void {
-            _ = a;
-            try testing.expectEqual(@as(u8, 0), shared.value);
-        }
+//     const SystemStruct = struct {
+//         pub fn system1(a: Testing.Component.A, shared: SharedState(A)) !void {
+//             _ = a;
+//             try testing.expectEqual(@as(u8, 0), shared.value);
+//         }
 
-        pub fn system2(a: Testing.Component.A, shared: SharedState(B)) !void {
-            _ = a;
-            try testing.expectEqual(@as(u8, 1), shared.value);
-        }
+//         pub fn system2(a: Testing.Component.A, shared: SharedState(B)) !void {
+//             _ = a;
+//             try testing.expectEqual(@as(u8, 1), shared.value);
+//         }
 
-        pub fn system3(a: Testing.Component.A, shared: SharedState(C)) !void {
-            _ = a;
-            try testing.expectEqual(@as(u8, 2), shared.value);
-        }
+//         pub fn system3(a: Testing.Component.A, shared: SharedState(C)) !void {
+//             _ = a;
+//             try testing.expectEqual(@as(u8, 2), shared.value);
+//         }
 
-        pub fn system4(a: Testing.Component.A, shared_a: SharedState(A), shared_b: SharedState(B)) !void {
-            _ = a;
-            try testing.expectEqual(@as(u8, 0), shared_a.value);
-            try testing.expectEqual(@as(u8, 1), shared_b.value);
-        }
+//         pub fn system4(a: Testing.Component.A, shared_a: SharedState(A), shared_b: SharedState(B)) !void {
+//             _ = a;
+//             try testing.expectEqual(@as(u8, 0), shared_a.value);
+//             try testing.expectEqual(@as(u8, 1), shared_b.value);
+//         }
 
-        pub fn system5(a: Testing.Component.A, shared_b: SharedState(B), shared_a: SharedState(A)) !void {
-            _ = a;
-            try testing.expectEqual(@as(u8, 0), shared_a.value);
-            try testing.expectEqual(@as(u8, 1), shared_b.value);
-        }
+//         pub fn system5(a: Testing.Component.A, shared_b: SharedState(B), shared_a: SharedState(A)) !void {
+//             _ = a;
+//             try testing.expectEqual(@as(u8, 0), shared_a.value);
+//             try testing.expectEqual(@as(u8, 1), shared_b.value);
+//         }
 
-        pub fn system6(a: Testing.Component.A, shared_c: SharedState(C), shared_b: SharedState(B), shared_a: SharedState(A)) !void {
-            _ = a;
-            try testing.expectEqual(@as(u8, 0), shared_a.value);
-            try testing.expectEqual(@as(u8, 1), shared_b.value);
-            try testing.expectEqual(@as(u8, 2), shared_c.value);
-        }
-    };
+//         pub fn system6(a: Testing.Component.A, shared_c: SharedState(C), shared_b: SharedState(B), shared_a: SharedState(A)) !void {
+//             _ = a;
+//             try testing.expectEqual(@as(u8, 0), shared_a.value);
+//             try testing.expectEqual(@as(u8, 1), shared_b.value);
+//             try testing.expectEqual(@as(u8, 2), shared_c.value);
+//         }
+//     };
 
-    var world = try WorldStub.WithSystems(.{
-        SystemStruct,
-    }).WithSharedState(.{
-        A, B, C,
-    }).init(testing.allocator, .{
-        A{ .value = 0 },
-        B{ .value = 1 },
-        C{ .value = 2 },
-    });
-    defer world.deinit();
+//     var world = try WorldStub.WithSystems(.{
+//         SystemStruct,
+//     }).WithSharedState(.{
+//         A, B, C,
+//     }).init(testing.allocator, .{
+//         A{ .value = 0 },
+//         B{ .value = 1 },
+//         C{ .value = 2 },
+//     });
+//     defer world.deinit();
 
-    _ = try world.createEntity(.{Testing.Component.A{}});
+//     _ = try world.createEntity(.{Testing.Component.A{}});
 
-    try world.dispatch();
-}
+//     try world.dispatch();
+// }
 
 test "systems can be registered through struct or individual function(s)" {
     const SystemStruct1 = struct {
@@ -1170,7 +1118,7 @@ test "events can access shared state" {
     const A = Testing.Component.A;
     // define a system type
     const SystemType = struct {
-        pub fn systemOne(a: *A, shared: SharedState(A)) !void {
+        pub fn systemOne(a: *A, shared: SharedState(A)) void {
             a.* = @bitCast(A, shared);
         }
     };
@@ -1355,31 +1303,3 @@ test "event cache works" {
         try world.getComponent(entity2, Testing.Component.B),
     );
 }
-
-// test "queryStorage returns expected result" {
-//     var world = try WorldStub.init(testing.allocator, .{});
-//     defer world.deinit();
-
-//     {
-//         comptime var i: comptime_int = 0;
-//         inline while (i < 10) : (i += 1) {
-//             _ = try world.createEntity(Testing.Archetype.A{ .a = .{ .value = i } });
-//             _ = try world.createEntity(Testing.Archetype.AB{ .a = .{ .value = i }, .b = .{ .value = i } });
-//             _ = try world.createEntity(Testing.Archetype.AC{ .a = .{ .value = i + 10 } });
-//             _ = try world.createEntity(Testing.Archetype.ABC{ .a = .{ .value = i }, .b = .{ .value = i } });
-//         }
-//     }
-
-//     comptime var query = Query.init(
-//         &[_]type{Testing.Component.A},
-//         &[_]type{Testing.Component.B},
-//     );
-
-//     var i: u32 = 0;
-//     var iter = world.queryStorage(query);
-//     while (iter.next()) |item| {
-//         try testing.expectEqual(Testing.Component.A{ .value = i }, item[0]);
-//         i += 1;
-//     }
-//     try testing.expectEqual(@as(u32, 19), i);
-// }
