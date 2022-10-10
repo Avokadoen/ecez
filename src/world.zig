@@ -32,6 +32,7 @@ pub const Event = meta.Event;
 /// Mark system arguments as shared state
 pub const SharedState = meta.SharedState;
 pub const EventArgument = meta.EventArgument;
+pub const DependOn = meta.DependOn;
 
 /// Create a ecs instance by gradually defining application types, systems and events.
 pub fn WorldBuilder() type {
@@ -70,7 +71,11 @@ fn WorldIntermediate(comptime prev_components: anytype, comptime prev_shared_sta
             return WorldIntermediate(prev_components, prev_shared_state, prev_systems, events);
         }
 
-        /// build the world instance **type** which can be initialized
+        pub fn Build() type {
+            return CreateWorld(prev_components, prev_shared_state, prev_systems, prev_events);
+        }
+
+        /// build the world instance which can be initialized
         pub fn init(allocator: Allocator, shared_state: anytype) !CreateWorld(prev_components, prev_shared_state, prev_systems, prev_events) {
             return CreateWorld(prev_components, prev_shared_state, prev_systems, prev_events).init(allocator, shared_state);
         }
@@ -103,7 +108,7 @@ fn CreateWorld(
     const SharedStateStorage = meta.SharedStateStorage(shared_state_types);
 
     const system_count = meta.countAndVerifySystems(systems);
-    const systems_info = meta.systemInfo(system_count, systems);
+    const systems_info = meta.createSystemInfo(system_count, systems);
     const event_count = meta.countAndVerifyEvents(events);
 
     const CacheMask = archetype_cache.ArchetypeCacheMask(&components);
@@ -1126,9 +1131,7 @@ test "events can access shared state" {
     const shared_a = A{ .value = 42 };
     var world = try WorldStub.WithEvents(.{
         Event("onFoo", .{SystemType}, .{}),
-    }).WithSharedState(.{
-        A,
-    }).init(testing.allocator, .{shared_a});
+    }).WithSharedState(.{A}).init(testing.allocator, .{shared_a});
 
     defer world.deinit();
 
@@ -1302,4 +1305,111 @@ test "event cache works" {
         Testing.Component.B{ .value = 1 },
         try world.getComponent(entity2, Testing.Component.B),
     );
+}
+
+test "DependOn makes a system race free" {
+    const SystemStruct = struct {
+        pub fn addStuff1(a: *Testing.Component.A, b: Testing.Component.B) void {
+            std.time.sleep(std.time.ns_per_ms);
+            a.value += @intCast(u32, b.value);
+        }
+
+        pub fn multiplyStuff1(a: *Testing.Component.A, b: Testing.Component.B) void {
+            a.value *= @intCast(u32, b.value);
+        }
+
+        pub fn addStuff2(a: *Testing.Component.A, b: Testing.Component.B) void {
+            std.time.sleep(std.time.ns_per_ms);
+            a.value += @intCast(u32, b.value);
+        }
+
+        pub fn multiplyStuff2(a: *Testing.Component.A, b: Testing.Component.B) void {
+            a.value *= @intCast(u32, b.value);
+        }
+    };
+
+    const World = WorldStub.WithSystems(.{
+        SystemStruct.addStuff1,
+        DependOn(SystemStruct.multiplyStuff1, .{SystemStruct.addStuff1}),
+        DependOn(SystemStruct.addStuff2, .{SystemStruct.multiplyStuff1}),
+        DependOn(SystemStruct.multiplyStuff2, .{SystemStruct.addStuff2}),
+    }).Build();
+
+    var world = try World.init(testing.allocator, .{});
+    defer world.deinit();
+
+    const entity_count = 10;
+    var entities: [entity_count]Entity = undefined;
+
+    for (entities) |*entity| {
+        entity.* = try world.createEntity(.{
+            Testing.Component.A{ .value = 3 },
+            Testing.Component.B{ .value = 2 },
+        });
+    }
+
+    try world.dispatch();
+    try world.dispatch();
+
+    world.waitDispatch();
+
+    for (entities) |entity| {
+        // (((3  + 2) * 2) + 2) * 2 =  24
+        // (((24 + 2) * 2) + 2) * 2 = 108
+        try testing.expectEqual(
+            Testing.Component.A{ .value = 108 },
+            try world.getComponent(entity, Testing.Component.A),
+        );
+    }
+}
+
+test "DependOn can have multiple dependencies" {
+    const SystemStruct = struct {
+        pub fn addStuff1(a: *Testing.Component.A, b: Testing.Component.B) void {
+            std.time.sleep(std.time.ns_per_ms);
+            a.value += @intCast(u32, b.value);
+        }
+
+        pub fn addStuff2(a: *Testing.Component.A, b: Testing.Component.B) void {
+            std.time.sleep(std.time.ns_per_ms);
+            a.value += @intCast(u32, b.value);
+        }
+
+        pub fn multiplyStuff(a: *Testing.Component.A, b: Testing.Component.B) void {
+            a.value *= @intCast(u32, b.value);
+        }
+    };
+
+    const World = WorldStub.WithSystems(.{
+        SystemStruct.addStuff1,
+        SystemStruct.addStuff2,
+        DependOn(SystemStruct.multiplyStuff, .{ SystemStruct.addStuff1, SystemStruct.addStuff2 }),
+    }).Build();
+
+    var world = try World.init(testing.allocator, .{});
+    defer world.deinit();
+
+    const entity_count = 10;
+    var entities: [entity_count]Entity = undefined;
+
+    for (entities) |*entity| {
+        entity.* = try world.createEntity(.{
+            Testing.Component.A{ .value = 3 },
+            Testing.Component.B{ .value = 2 },
+        });
+    }
+
+    try world.dispatch();
+    try world.dispatch();
+
+    world.waitDispatch();
+
+    for (entities) |entity| {
+        // (3  + 2 + 2) * 2 = 14
+        // (14 + 2 + 2) * 2 = 36
+        try testing.expectEqual(
+            Testing.Component.A{ .value = 36 },
+            try world.getComponent(entity, Testing.Component.A),
+        );
+    }
 }
