@@ -500,15 +500,13 @@ pub fn JobQueue(
 
             var id = JobId.none;
             var i: usize = 0;
-            const in: []const JobId = prereqs;
-            while (i < in.len) {
-                var job = CombinePrereqsJob{ .jobs = self };
+            while (i < prereqs.len) {
+                var job = CombinePrereqsJob.init(self);
 
                 // copy prereqs to job
                 var o: usize = 0;
-                const out: []JobId = &job.prereqs;
-                while (i < in.len and o < out.len) {
-                    out[o] = in[i];
+                while (i < prereqs.len and o < job.prereqs.len) {
+                    job.prereqs[o] = prereqs[i];
                     i += 1;
                     o += 1;
                 }
@@ -597,8 +595,15 @@ pub fn JobQueue(
             const prereq_size = @sizeOf(JobId);
             const max_prereqs = (max_job_size - jobs_size) / prereq_size;
 
-            jobs: *Self = .{},
-            prereqs: [max_prereqs]JobId = [_]JobId{JobId.none} ** max_prereqs,
+            jobs: *Self,
+            prereqs: [max_prereqs]JobId,
+
+            fn init(self: *Self) CombinePrereqsJob {
+                return CombinePrereqsJob{
+                    .jobs = self,
+                    .prereqs = [_]JobId{JobId.none} ** max_prereqs,
+                };
+            }
 
             fn exec(job: *@This()) void {
                 for (job.prereqs) |prereq| {

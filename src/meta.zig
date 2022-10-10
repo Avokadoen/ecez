@@ -440,7 +440,7 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                         const dependency_func = dependency_functions[depend_on_index];
 
                                         const previous_system_info_index: usize = indexOfFunctionInSystems(dependency_func, j, systems) orelse {
-                                            @compileError("did not find all depend_on_systems, dependencies must be added before system that depend on them");
+                                            @compileError("did not find '" ++ @typeName(@TypeOf(dependency_func)) ++ "' in systems tuple, dependencies must be added before system that depend on them");
                                         };
                                         systems_info.depend_on_index_pool[systems_info.depend_on_indices_used] = previous_system_info_index;
                                         systems_info.depend_on_indices_used += 1;
@@ -503,7 +503,8 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
     return systems_info;
 }
 
-/// perform compile-time reflection on systems to extrapolate different information about registered systems
+/// Look for the index of a given function in a tuple of functions and structs of functions
+/// Returns: index of function, null if function is not in systems
 pub fn indexOfFunctionInSystems(comptime function: anytype, comptime stop_at: usize, comptime systems: anytype) ?usize {
     const SystemsType = @TypeOf(systems);
     const systems_type_info = @typeInfo(SystemsType);
@@ -514,7 +515,7 @@ pub fn indexOfFunctionInSystems(comptime function: anytype, comptime stop_at: us
         inline for (fields_info) |field_info, j| {
             switch (@typeInfo(field_info.field_type)) {
                 .Fn => {
-                    if (systems[j] == function) {
+                    if (@TypeOf(systems[j]) == @TypeOf(function) and systems[j] == function) {
                         return i;
                     }
                     i += 1;
@@ -536,7 +537,7 @@ pub fn indexOfFunctionInSystems(comptime function: anytype, comptime stop_at: us
                                     const decl_info = @typeInfo(DeclType);
                                     switch (decl_info) {
                                         .Fn => {
-                                            if (function == inner_func) {
+                                            if (@TypeOf(systems[j]) == @TypeOf(function) and function == inner_func) {
                                                 return i;
                                             }
                                             i += 1;
