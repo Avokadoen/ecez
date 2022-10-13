@@ -27,7 +27,7 @@ zig build run-game-of-life
 As mentioned, the current state of the API is very much Work in Progress (WIP). The framework is to some degree functional and can be played with. Current *implemented* features are
 
 ### Compile time based and type safe API
-Zig's comptime feature is utilized to perform static reflection on the usage of the API to validate useage and report useful messages to the user (in theory :)). 
+Zig's comptime feature is utilized to perform static reflection on the usage of the API to validate usage and report useful messages to the user (in theory :)). 
 
 ```zig
 var world = try ecez.WorldBuilder().WithComponents(.{

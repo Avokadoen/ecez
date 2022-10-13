@@ -7,7 +7,13 @@ const testing = std.testing;
 pub const secret_field = "magic_secret_sauce";
 pub const shared_secret_field = "shared_magic_secret_sauce";
 pub const event_argument_secret_field = "event_magic_secret_sauce";
+pub const system_depend_on_secret_field = "system_depend_on_secret_sauce";
 pub const event_magic = 0xaa_bb_cc;
+
+const DependOnRange = struct {
+    to: u32,
+    from: u32,
+};
 
 pub const SystemMetadata = struct {
     pub const Arg = enum {
@@ -19,12 +25,18 @@ pub const SystemMetadata = struct {
         shared_state_value,
     };
 
+    depend_on_indices_range: ?DependOnRange,
+
     fn_info: FnInfo,
     component_args_count: usize,
     args: []const Arg,
 
     /// initalize metadata for a system using a supplied function type info
-    pub fn init(comptime function_type: type, comptime fn_info: FnInfo) SystemMetadata {
+    pub fn init(
+        comptime depend_on_indices_range: ?DependOnRange,
+        comptime function_type: type,
+        comptime fn_info: FnInfo,
+    ) SystemMetadata {
         // TODO: include function name in error messages
         //       blocked by issue https://github.com/ziglang/zig/issues/8270
         // used in error messages
@@ -146,6 +158,7 @@ pub const SystemMetadata = struct {
             }
         }
         return SystemMetadata{
+            .depend_on_indices_range = depend_on_indices_range,
             .fn_info = fn_info,
             .component_args_count = component_args_count,
             .args = args[0..],
@@ -231,7 +244,7 @@ pub fn Event(comptime event_name: []const u8, comptime systems: anytype, comptim
         pub const s = systems;
         pub const magic_secret_sauce = event_magic;
         pub const system_count = countAndVerifySystems(systems);
-        pub const systems_info = systemInfo(system_count, systems);
+        pub const systems_info = createSystemInfo(system_count, systems);
         pub const EventArgument = EventArgumentType;
     };
 }
@@ -329,16 +342,23 @@ pub fn countAndVerifySystems(comptime systems: anytype) comptime_int {
             .Type => {
                 switch (@typeInfo(systems[i])) {
                     .Struct => |stru| {
-                        inline for (stru.decls) |decl| {
-                            const DeclType = @TypeOf(@field(systems[i], decl.name));
-                            switch (@typeInfo(DeclType)) {
-                                .Fn => systems_count += 1,
-                                else => {
-                                    const err_msg = std.fmt.comptimePrint("CreateWorld expected type of functions, got member {s}", .{
-                                        @typeName(DeclType),
-                                    });
-                                    @compileError(err_msg);
-                                },
+                        // check if struct is a DependOn generated struct
+                        if (std.mem.eql(u8, stru.decls[0].name, system_depend_on_secret_field)) {
+                            // should be one inner system at this point
+                            systems_count += 1;
+                        } else {
+                            // it's not a DependOn struct, check each member of the struct to find functions
+                            inline for (stru.decls) |decl| {
+                                const DeclType = @TypeOf(@field(systems[i], decl.name));
+                                switch (@typeInfo(DeclType)) {
+                                    .Fn => systems_count += 1,
+                                    else => {
+                                        const err_msg = std.fmt.comptimePrint("CreateWorld expected type of functions, got member {s}", .{
+                                            @typeName(DeclType),
+                                        });
+                                        @compileError(err_msg);
+                                    },
+                                }
                             }
                         }
                     },
@@ -365,32 +385,41 @@ fn SystemInfo(comptime system_count: comptime_int) type {
     return struct {
         const Self = @This();
 
+        // TODO: make size configurable
+        depend_on_indices_used: usize,
+        depend_on_index_pool: [system_count * 2]u32,
         metadata: [system_count]SystemMetadata,
         function_types: [system_count]type,
         functions: [system_count]*const anyopaque,
+    };
+}
 
-        pub fn undef() Self {
-            return Self{
-                .metadata = undefined,
-                .function_types = undefined,
-                .functions = undefined,
-            };
-        }
+/// Specifiy a dependency where a system depends on one or more systems
+/// Parameters:
+///     - system: the system that you are registering
+///     - depend_on_systems: a TUPLE of one or more functions that the system depend on
+pub fn DependOn(comptime system: anytype, comptime depend_on_systems: anytype) type {
+    return struct {
+        const system_depend_on_secret_sauce = secret_field;
+        const _system = system;
+        const _depend_on_systems = depend_on_systems;
     };
 }
 
 /// perform compile-time reflection on systems to extrapolate different information about registered systems
-pub fn systemInfo(comptime system_count: comptime_int, comptime systems: anytype) SystemInfo(system_count) {
+pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: anytype) SystemInfo(system_count) {
     const SystemsType = @TypeOf(systems);
     const systems_type_info = @typeInfo(SystemsType);
     const fields_info = systems_type_info.Struct.fields;
-    var systems_info = SystemInfo(system_count).undef();
+    var systems_info: SystemInfo(system_count) = undefined;
+
+    systems_info.depend_on_indices_used = 0;
     {
         comptime var i: usize = 0;
         inline for (fields_info) |field_info, j| {
             switch (@typeInfo(field_info.field_type)) {
                 .Fn => |func| {
-                    systems_info.metadata[i] = SystemMetadata.init(field_info.field_type, func);
+                    systems_info.metadata[i] = SystemMetadata.init(null, field_info.field_type, func);
                     systems_info.function_types[i] = field_info.field_type;
                     systems_info.functions[i] = field_info.default_value.?;
                     i += 1;
@@ -398,25 +427,64 @@ pub fn systemInfo(comptime system_count: comptime_int, comptime systems: anytype
                 .Type => {
                     switch (@typeInfo(systems[j])) {
                         .Struct => |stru| {
-                            inline for (stru.decls) |decl| {
-                                const function = @field(systems[j], decl.name);
-                                const DeclType = @TypeOf(function);
-                                const decl_info = @typeInfo(DeclType);
-                                switch (decl_info) {
-                                    .Fn => |func| {
-                                        // const err_msg = std.fmt.comptimePrint("{d}", .{func.args.len});
-                                        // @compileError(err_msg);
-                                        systems_info.metadata[i] = SystemMetadata.init(DeclType, func);
-                                        systems_info.function_types[i] = DeclType;
-                                        systems_info.functions[i] = &function;
-                                        i += 1;
-                                    },
-                                    else => {
-                                        const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct and/or type with functions, got {s}", .{
-                                            @typeName(DeclType),
-                                        });
-                                        @compileError(err_msg);
-                                    },
+                            // check if struct is a DependOn generated struct
+                            if (std.mem.eql(u8, stru.decls[0].name, system_depend_on_secret_field)) {
+                                const system_depend_on_count = countAndVerifySystems(@field(systems[j], "_depend_on_systems"));
+                                const dependency_functions = @field(systems[j], "_depend_on_systems");
+
+                                const depend_on_range = blk: {
+                                    const from = systems_info.depend_on_indices_used;
+
+                                    comptime var depend_on_index = 0;
+                                    inline while (depend_on_index < system_depend_on_count) : (depend_on_index += 1) {
+                                        const dependency_func = dependency_functions[depend_on_index];
+
+                                        const previous_system_info_index: usize = indexOfFunctionInSystems(dependency_func, j, systems) orelse {
+                                            @compileError("did not find '" ++ @typeName(@TypeOf(dependency_func)) ++ "' in systems tuple, dependencies must be added before system that depend on them");
+                                        };
+                                        systems_info.depend_on_index_pool[systems_info.depend_on_indices_used] = previous_system_info_index;
+                                        systems_info.depend_on_indices_used += 1;
+                                    }
+                                    const to = systems_info.depend_on_indices_used;
+
+                                    break :blk DependOnRange{ .from = from, .to = to };
+                                };
+
+                                const dep_on_function = @field(systems[j], "_system");
+                                const DepSystemDeclType = @TypeOf(dep_on_function);
+                                const dep_system_decl_info = @typeInfo(DepSystemDeclType);
+                                if (dep_system_decl_info == .Struct) {
+                                    @compileError("Struct of system is not yet supported for DependOn");
+                                }
+                                if (dep_system_decl_info != .Fn and dep_system_decl_info != .Struct) {
+                                    // TODO: remove if above so this is not so confusing
+                                    @compileError("DependOn must be a function or struct");
+                                }
+                                systems_info.metadata[i] = SystemMetadata.init(depend_on_range, DepSystemDeclType, dep_system_decl_info.Fn);
+                                systems_info.function_types[i] = DepSystemDeclType;
+                                systems_info.functions[i] = &dep_on_function;
+                                i += 1;
+                            } else {
+                                inline for (stru.decls) |decl| {
+                                    const function = @field(systems[j], decl.name);
+                                    const DeclType = @TypeOf(function);
+                                    const decl_info = @typeInfo(DeclType);
+                                    switch (decl_info) {
+                                        .Fn => |func| {
+                                            // const err_msg = std.fmt.comptimePrint("{d}", .{func.args.len});
+                                            // @compileError(err_msg);
+                                            systems_info.metadata[i] = SystemMetadata.init(null, DeclType, func);
+                                            systems_info.function_types[i] = DeclType;
+                                            systems_info.functions[i] = &function;
+                                            i += 1;
+                                        },
+                                        else => {
+                                            const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct and/or type with functions, got {s}", .{
+                                                @typeName(DeclType),
+                                            });
+                                            @compileError(err_msg);
+                                        },
+                                    }
                                 }
                             }
                         },
@@ -433,6 +501,74 @@ pub fn systemInfo(comptime system_count: comptime_int, comptime systems: anytype
         }
     }
     return systems_info;
+}
+
+/// Look for the index of a given function in a tuple of functions and structs of functions
+/// Returns: index of function, null if function is not in systems
+pub fn indexOfFunctionInSystems(comptime function: anytype, comptime stop_at: usize, comptime systems: anytype) ?usize {
+    const SystemsType = @TypeOf(systems);
+    const systems_type_info = @typeInfo(SystemsType);
+    const fields_info = systems_type_info.Struct.fields;
+
+    {
+        comptime var i: usize = 0;
+        inline for (fields_info) |field_info, j| {
+            switch (@typeInfo(field_info.field_type)) {
+                .Fn => {
+                    if (@TypeOf(systems[j]) == @TypeOf(function) and systems[j] == function) {
+                        return i;
+                    }
+                    i += 1;
+                },
+                .Type => {
+                    switch (@typeInfo(systems[j])) {
+                        .Struct => |stru| {
+                            // check if struct is a DependOn generated struct
+                            if (std.mem.eql(u8, stru.decls[0].name, system_depend_on_secret_field)) {
+                                const dep_on_function = @field(systems[j], "_system");
+                                if (function == dep_on_function) {
+                                    return i;
+                                }
+                                i += 1;
+                            } else {
+                                inline for (stru.decls) |decl| {
+                                    const inner_func = @field(systems[j], decl.name);
+                                    const DeclType = @TypeOf(function);
+                                    const decl_info = @typeInfo(DeclType);
+                                    switch (decl_info) {
+                                        .Fn => {
+                                            if (@TypeOf(systems[j]) == @TypeOf(function) and function == inner_func) {
+                                                return i;
+                                            }
+                                            i += 1;
+                                        },
+                                        else => {
+                                            const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct and/or type with functions, got {s}", .{
+                                                @typeName(DeclType),
+                                            });
+                                            @compileError(err_msg);
+                                        },
+                                    }
+                                }
+                            }
+                        },
+                        else => {
+                            const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct and/or type with functions, got {s}", .{
+                                @typeName(field_info.field_type),
+                            });
+                            @compileError(err_msg);
+                        },
+                    }
+                },
+                else => unreachable,
+            }
+
+            if (i >= stop_at) {
+                return null;
+            }
+        }
+    }
+    return null;
 }
 
 /// Generate an archetype's SOA component storage
@@ -684,7 +820,7 @@ test "SystemMetadata errorSet return null with non-failable functions" {
         }
     }.func;
     const FuncType = @TypeOf(testFn);
-    const metadata = SystemMetadata.init(FuncType, @typeInfo(FuncType).Fn);
+    const metadata = SystemMetadata.init(null, FuncType, @typeInfo(FuncType).Fn);
 
     try testing.expectEqual(@as(?type, null), metadata.errorSet());
 }
@@ -729,9 +865,9 @@ test "SystemMetadata componentQueryArgTypes results in queryable types" {
     const Func2Type = @TypeOf(TestSystems.func2);
     const Func3Type = @TypeOf(TestSystems.func3);
     const metadatas = comptime [3]SystemMetadata{
-        SystemMetadata.init(Func1Type, @typeInfo(Func1Type).Fn),
-        SystemMetadata.init(Func2Type, @typeInfo(Func2Type).Fn),
-        SystemMetadata.init(Func3Type, @typeInfo(Func3Type).Fn),
+        SystemMetadata.init(null, Func1Type, @typeInfo(Func1Type).Fn),
+        SystemMetadata.init(null, Func2Type, @typeInfo(Func2Type).Fn),
+        SystemMetadata.init(null, Func3Type, @typeInfo(Func3Type).Fn),
     };
 
     inline for (metadatas) |metadata| {
@@ -765,9 +901,9 @@ test "SystemMetadata paramArgTypes results in pointer types" {
     const Func2Type = @TypeOf(TestSystems.func2);
     const Func3Type = @TypeOf(TestSystems.func3);
     const metadatas = comptime [_]SystemMetadata{
-        SystemMetadata.init(Func1Type, @typeInfo(Func1Type).Fn),
-        SystemMetadata.init(Func2Type, @typeInfo(Func2Type).Fn),
-        SystemMetadata.init(Func3Type, @typeInfo(Func3Type).Fn),
+        SystemMetadata.init(null, Func1Type, @typeInfo(Func1Type).Fn),
+        SystemMetadata.init(null, Func2Type, @typeInfo(Func2Type).Fn),
+        SystemMetadata.init(null, Func3Type, @typeInfo(Func3Type).Fn),
     };
 
     {
@@ -849,7 +985,7 @@ test "systemCount count systems" {
     try testing.expectEqual(3, count);
 }
 
-test "systemInfo generate accurate system information" {
+test "createSystemInfo generate accurate system information" {
     const A = struct { a: u32 };
     const testFn = struct {
         pub fn func(a: *A) void {
@@ -865,7 +1001,7 @@ test "systemInfo generate accurate system information" {
             _ = b;
         }
     };
-    const info = systemInfo(3, .{ testFn, TestSystems });
+    const info = createSystemInfo(3, .{ testFn, TestSystems });
 
     try testing.expectEqual(3, info.functions.len);
     try testing.expectEqual(3, info.metadata.len);

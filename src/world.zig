@@ -5,7 +5,7 @@ const testing = std.testing;
 
 const ztracy = @import("ztracy");
 const zjobs = @import("zjobs");
-const Jobs = zjobs.JobQueue(.{});
+const JobQueue = zjobs.JobQueue(.{});
 const JobId = zjobs.JobId;
 
 const meta = @import("meta.zig");
@@ -32,6 +32,7 @@ pub const Event = meta.Event;
 /// Mark system arguments as shared state
 pub const SharedState = meta.SharedState;
 pub const EventArgument = meta.EventArgument;
+pub const DependOn = meta.DependOn;
 
 /// Create a ecs instance by gradually defining application types, systems and events.
 pub fn WorldBuilder() type {
@@ -70,7 +71,11 @@ fn WorldIntermediate(comptime prev_components: anytype, comptime prev_shared_sta
             return WorldIntermediate(prev_components, prev_shared_state, prev_systems, events);
         }
 
-        /// build the world instance **type** which can be initialized
+        pub fn Build() type {
+            return CreateWorld(prev_components, prev_shared_state, prev_systems, prev_events);
+        }
+
+        /// build the world instance which can be initialized
         pub fn init(allocator: Allocator, shared_state: anytype) !CreateWorld(prev_components, prev_shared_state, prev_systems, prev_events) {
             return CreateWorld(prev_components, prev_shared_state, prev_systems, prev_events).init(allocator, shared_state);
         }
@@ -103,7 +108,7 @@ fn CreateWorld(
     const SharedStateStorage = meta.SharedStateStorage(shared_state_types);
 
     const system_count = meta.countAndVerifySystems(systems);
-    const systems_info = meta.systemInfo(system_count, systems);
+    const systems_info = meta.createSystemInfo(system_count, systems);
     const event_count = meta.countAndVerifyEvents(events);
 
     const CacheMask = archetype_cache.ArchetypeCacheMask(&components);
@@ -174,7 +179,7 @@ fn CreateWorld(
         event_cache_masks: [event_count]CacheMask,
         event_cache_storages: EventCacheStorages,
 
-        execution_jobs: Jobs,
+        execution_job_queue: JobQueue,
         system_jobs_in_flight: [system_count]JobId,
         event_jobs_in_flight: EventJobsInFlight,
 
@@ -214,8 +219,8 @@ fn CreateWorld(
             const container = try Container.init(allocator);
             errdefer container.deinit();
 
-            var execution_jobs = Jobs.init();
-            errdefer execution_jobs.deinit();
+            var execution_job_queue = JobQueue.init();
+            errdefer execution_job_queue.deinit();
 
             const system_jobs_in_flight = [_]JobId{JobId.none} ** system_count;
 
@@ -235,7 +240,7 @@ fn CreateWorld(
                 .dispatch_cache_storage = DispatchCacheStorage.init(),
                 .event_cache_masks = event_cache_masks,
                 .event_cache_storages = event_cache_storages,
-                .execution_jobs = execution_jobs,
+                .execution_job_queue = execution_job_queue,
                 .system_jobs_in_flight = system_jobs_in_flight,
                 .event_jobs_in_flight = event_jobs_in_flight,
             };
@@ -245,7 +250,7 @@ fn CreateWorld(
             const zone = ztracy.ZoneNC(@src(), "World deinit", Color.world);
             defer zone.End();
 
-            self.execution_jobs.deinit();
+            self.execution_job_queue.deinit();
 
             self.dispatch_cache_storage.deinit(self.allocator);
 
@@ -330,8 +335,8 @@ fn CreateWorld(
             defer zone.End();
 
             // prime job execution for dispatch
-            if (self.execution_jobs.isStarted() == false) {
-                self.execution_jobs.start();
+            if (self.execution_job_queue.isStarted() == false) {
+                self.execution_job_queue.start();
             }
 
             // at the end of the function all bits should be coherent
@@ -391,14 +396,31 @@ fn CreateWorld(
 
                 // TODO: should dispatch be synchronous? (move wait until the end of the dispatch function)
                 // wait for previous dispatch to finish
-                self.execution_jobs.wait(self.system_jobs_in_flight[system_index]);
+                self.execution_job_queue.wait(self.system_jobs_in_flight[system_index]);
 
-                self.system_jobs_in_flight[system_index] = self.execution_jobs.schedule(zjobs.JobId.none, system_job) catch |err| {
-                    switch (err) {
-                        error.Uninitialized => unreachable, // schedule can fail on "Uninitialized" which does not happen since you must init world
-                        error.Stopped => return,
+                const dependency_job_indices = comptime getMetadataIndexRange(metadata);
+
+                if (dependency_job_indices) |indices| {
+                    var jobs: [indices.len]JobId = undefined;
+                    for (indices) |index, i| {
+                        jobs[i] = self.system_jobs_in_flight[index];
                     }
-                };
+
+                    const combinded_job = self.execution_job_queue.combine(&jobs) catch JobId.none;
+                    self.system_jobs_in_flight[system_index] = self.execution_job_queue.schedule(combinded_job, system_job) catch |err| {
+                        switch (err) {
+                            error.Uninitialized => unreachable, // schedule can fail on "Uninitialized" which does not happen since you must init world
+                            error.Stopped => return,
+                        }
+                    };
+                } else {
+                    self.system_jobs_in_flight[system_index] = self.execution_job_queue.schedule(JobId.none, system_job) catch |err| {
+                        switch (err) {
+                            error.Uninitialized => unreachable, // schedule can fail on "Uninitialized" which does not happen since you must init world
+                            error.Stopped => return,
+                        }
+                    };
+                }
             }
         }
 
@@ -406,7 +428,7 @@ fn CreateWorld(
         /// should only be called from the dispatch thread
         pub fn waitDispatch(self: *World) void {
             for (self.system_jobs_in_flight) |job_in_flight| {
-                self.execution_jobs.wait(job_in_flight);
+                self.execution_job_queue.wait(job_in_flight);
             }
         }
 
@@ -416,8 +438,8 @@ fn CreateWorld(
             defer zone.End();
 
             // prime job execution for dispatch
-            if (self.execution_jobs.isStarted() == false) {
-                self.execution_jobs.start();
+            if (self.execution_job_queue.isStarted() == false) {
+                self.execution_job_queue.start();
             }
 
             var event_cache_mask = &self.event_cache_masks[@enumToInt(event)];
@@ -495,9 +517,9 @@ fn CreateWorld(
 
                 // TODO: should triggerEvent be synchronous? (move wait until the end of the dispatch function)
                 // wait for previous dispatch to finish
-                self.execution_jobs.wait(event_jobs_in_flight[system_index]);
+                self.execution_job_queue.wait(event_jobs_in_flight[system_index]);
 
-                event_jobs_in_flight[system_index] = self.execution_jobs.schedule(zjobs.JobId.none, system_job) catch |err| {
+                event_jobs_in_flight[system_index] = self.execution_job_queue.schedule(zjobs.JobId.none, system_job) catch |err| {
                     switch (err) {
                         error.Uninitialized => unreachable, // schedule can fail on "Uninitialized" which does not happen since you must init world
                         error.Stopped => return,
@@ -510,7 +532,7 @@ fn CreateWorld(
         /// should only be called from the triggerEvent thread
         pub fn waitEvent(self: *World, comptime event: EventsEnum) void {
             for (self.event_jobs_in_flight[@enumToInt(event)]) |job_in_flight| {
-                self.execution_jobs.wait(job_in_flight);
+                self.execution_job_queue.wait(job_in_flight);
             }
         }
 
@@ -711,6 +733,13 @@ fn CreateWorld(
                     }
                 }
             };
+        }
+
+        inline fn getMetadataIndexRange(comptime metadata: SystemMetadata) ?[]const u32 {
+            if (metadata.depend_on_indices_range) |range| {
+                return systems_info.depend_on_index_pool[range.from..range.to];
+            }
+            return null;
         }
     };
 }
@@ -1126,9 +1155,7 @@ test "events can access shared state" {
     const shared_a = A{ .value = 42 };
     var world = try WorldStub.WithEvents(.{
         Event("onFoo", .{SystemType}, .{}),
-    }).WithSharedState(.{
-        A,
-    }).init(testing.allocator, .{shared_a});
+    }).WithSharedState(.{A}).init(testing.allocator, .{shared_a});
 
     defer world.deinit();
 
@@ -1302,4 +1329,114 @@ test "event cache works" {
         Testing.Component.B{ .value = 1 },
         try world.getComponent(entity2, Testing.Component.B),
     );
+}
+
+test "DependOn makes a system race free" {
+    const SystemStruct = struct {
+        pub fn addStuff1(a: *Testing.Component.A, b: Testing.Component.B) void {
+            std.time.sleep(std.time.ns_per_us * 3);
+            a.value += @intCast(u32, b.value);
+        }
+
+        pub fn multiplyStuff1(a: *Testing.Component.A, b: Testing.Component.B) void {
+            std.time.sleep(std.time.ns_per_us * 2);
+            a.value *= @intCast(u32, b.value);
+        }
+
+        pub fn addStuff2(a: *Testing.Component.A, b: Testing.Component.B) void {
+            std.time.sleep(std.time.ns_per_us);
+            a.value += @intCast(u32, b.value);
+        }
+
+        pub fn multiplyStuff2(a: *Testing.Component.A, b: Testing.Component.B) void {
+            a.value *= @intCast(u32, b.value);
+        }
+    };
+
+    const World = WorldStub.WithSystems(.{
+        SystemStruct.addStuff1,
+        DependOn(SystemStruct.multiplyStuff1, .{SystemStruct.addStuff1}),
+        DependOn(SystemStruct.addStuff2, .{SystemStruct.multiplyStuff1}),
+        DependOn(SystemStruct.multiplyStuff2, .{SystemStruct.addStuff2}),
+    }).Build();
+
+    var world = try World.init(testing.allocator, .{});
+    defer world.deinit();
+
+    const entity_count = 10_000;
+    var entities: [entity_count]Entity = undefined;
+
+    for (entities) |*entity| {
+        entity.* = try world.createEntity(.{
+            Testing.Component.A{ .value = 3 },
+            Testing.Component.B{ .value = 2 },
+        });
+    }
+
+    try world.dispatch();
+    world.waitDispatch();
+
+    try world.dispatch();
+    world.waitDispatch();
+
+    for (entities) |entity| {
+        // (((3  + 2) * 2) + 2) * 2 =  24
+        // (((24 + 2) * 2) + 2) * 2 = 108
+        try testing.expectEqual(
+            Testing.Component.A{ .value = 108 },
+            try world.getComponent(entity, Testing.Component.A),
+        );
+    }
+}
+
+test "DependOn can have multiple dependencies" {
+    const SystemStruct = struct {
+        pub fn addStuff1(a: *Testing.Component.A) void {
+            std.time.sleep(std.time.ns_per_us * 2);
+            a.value += 1;
+        }
+
+        pub fn addStuff2(a: *Testing.Component.A, b: Testing.Component.B) void {
+            std.time.sleep(std.time.ns_per_us);
+            a.value += b.value;
+        }
+
+        pub fn multiplyStuff(a: *Testing.Component.A, b: Testing.Component.B) void {
+            a.value *= @intCast(u32, b.value);
+        }
+    };
+
+    const World = WorldStub.WithSystems(.{
+        SystemStruct.addStuff1,
+        SystemStruct.addStuff2,
+        DependOn(SystemStruct.multiplyStuff, .{ SystemStruct.addStuff1, SystemStruct.addStuff2 }),
+    }).Build();
+
+    var world = try World.init(testing.allocator, .{});
+    defer world.deinit();
+
+    const entity_count = 10_000;
+    var entities: [entity_count]Entity = undefined;
+
+    for (entities) |*entity| {
+        entity.* = try world.createEntity(.{
+            Testing.Component.A{ .value = 3 },
+            Testing.Component.B{ .value = 2 },
+        });
+    }
+
+    try world.dispatch();
+    world.waitDispatch();
+
+    try world.dispatch();
+    world.waitDispatch();
+
+    for (entities) |entity| {
+        // (3  + 1 + 2) * 2 = 12
+        // (12 + 1 + 2) * 2 = 30
+        try testing.expectEqual(
+            Testing.Component.A{ .value = 30 },
+            try world.getComponent(entity, Testing.Component.A),
+        );
+    }
 }
