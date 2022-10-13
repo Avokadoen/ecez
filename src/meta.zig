@@ -440,7 +440,11 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                         const dependency_func = dependency_functions[depend_on_index];
 
                                         const previous_system_info_index: usize = indexOfFunctionInSystems(dependency_func, j, systems) orelse {
-                                            @compileError("did not find '" ++ @typeName(@TypeOf(dependency_func)) ++ "' in systems tuple, dependencies must be added before system that depend on them");
+                                            const err_msg = std.fmt.comptimePrint(
+                                                "System {d} did not find '{s}' in systems tuple, dependencies must be added before system that depend on them",
+                                                .{ i, @typeName(@TypeOf(dependency_func)) },
+                                            );
+                                            @compileError(err_msg);
                                         };
                                         systems_info.depend_on_index_pool[systems_info.depend_on_indices_used] = previous_system_info_index;
                                         systems_info.depend_on_indices_used += 1;
