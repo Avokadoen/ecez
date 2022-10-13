@@ -1,11 +1,13 @@
 const std = @import("std");
 const testing = std.testing;
 
-const world = @import("world.zig");
+pub const WorldBuilder = @import("world.zig").WorldBuilder;
 
-pub const WorldBuilder = world.WorldBuilder;
-pub const SharedState = world.SharedState;
-pub const Event = world.Event;
+const meta = @import("meta.zig");
+pub const DependOn = meta.DependOn;
+pub const SharedState = meta.SharedState;
+pub const EventArgument = meta.EventArgument;
+pub const Event = meta.Event;
 
 pub const Query = @import("query.zig").Query;
 pub const tracy_alloc = @import("tracy_alloc.zig");

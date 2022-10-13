@@ -36,9 +36,10 @@ pub fn main() anyerror!void {
         LinePos,
         FlushTag,
     }).WithSystems(.{
-        // systems are currently order-dependent
-        // this will change in the future, but there will also be order forcing semantics
-        System,
+        renderCell,
+        renderLine,
+        ecez.DependOn(flushBuffer, .{ renderCell, renderLine }),
+        ecez.DependOn(tickCell, .{flushBuffer}),
     }).WithSharedState(.{
         RenderTarget,
     }).init(allocator, .{render_target});
@@ -85,6 +86,10 @@ pub fn main() anyerror!void {
     var refresh_delay = std.Thread.ResetEvent{};
     while (true) {
         ztracy.FrameMarkNamed("gameloop");
+
+        // wait for previous update and render
+        world.waitDispatch();
+        // schedule a new update cycle
         try world.dispatch();
 
         refresh_delay.timedWait(std.time.ns_per_s) catch {};
@@ -110,83 +115,80 @@ const LinePos = struct {
 };
 const FlushTag = struct {};
 
-const System = struct {
-    // systems must work on components (not archetypes)
-    pub fn renderCell(pos: GridPos, health: Health, render_target: *ecez.SharedState(RenderTarget)) void {
-        const zone = ztracy.ZoneNC(@src(), "Render Cell", Color.Light.red);
-        defer zone.End();
+fn renderCell(pos: GridPos, health: Health, render_target: *ecez.SharedState(RenderTarget)) void {
+    const zone = ztracy.ZoneNC(@src(), "Render Cell", Color.Light.red);
+    defer zone.End();
 
-        const cell_x = @intCast(usize, pos.x);
-        const cell_y = @intCast(usize, pos.y);
+    const cell_x = @intCast(usize, pos.x);
+    const cell_y = @intCast(usize, pos.y);
 
-        const new_line_count = cell_y;
-        const start: usize = (cell_x + (cell_y * grid_dimensions)) * characters_per_cell + new_line_count;
+    const new_line_count = cell_y;
+    const start: usize = (cell_x + (cell_y * grid_dimensions)) * characters_per_cell + new_line_count;
 
-        if (health.alive) {
-            const output = "[X]";
-            inline for (output) |o, i| {
-                render_target.output_buffer[start + i] = o;
+    if (health.alive) {
+        const output = "[X]";
+        inline for (output) |o, i| {
+            render_target.output_buffer[start + i] = o;
+        }
+    } else {
+        const output = "[ ]";
+        inline for (output) |o, i| {
+            render_target.output_buffer[start + i] = o;
+        }
+    }
+}
+
+fn renderLine(pos: LinePos, render_target: *ecez.SharedState(RenderTarget)) void {
+    const zone = ztracy.ZoneNC(@src(), "Render newline", Color.Light.turquoise);
+    defer zone.End();
+    const nth = @intCast(usize, pos.nth);
+
+    render_target.output_buffer[nth * grid_dimensions * characters_per_cell + nth - 1] = '\n';
+}
+
+fn flushBuffer(flush: FlushTag, render_target: ecez.SharedState(RenderTarget)) void {
+    const zone = ztracy.ZoneNC(@src(), "Flush buffer", Color.Light.turquoise);
+    defer zone.End();
+
+    _ = flush;
+    std.debug.print("{s}\n", .{render_target.output_buffer});
+    std.debug.print("-" ** (grid_dimensions * characters_per_cell) ++ "\n", .{});
+}
+
+fn tickCell(pos: GridPos, health: *Health, render_target: ecez.SharedState(RenderTarget)) void {
+    const zone = ztracy.ZoneNC(@src(), "Update Cell", Color.Light.red);
+    defer zone.End();
+
+    const cell_x = @intCast(usize, pos.x);
+    const cell_y = @intCast(usize, pos.y);
+
+    // again here we have to cheat by reading the output buffer
+    const new_line_count = cell_y;
+    const start = (cell_x + (cell_y * grid_dimensions)) * characters_per_cell + new_line_count + 1;
+
+    const up = -@intCast(i32, cell_y * grid_dimensions * characters_per_cell + 1);
+    const down = -up;
+    const left = -characters_per_cell;
+    const right = characters_per_cell;
+    var index = @intCast(i32, start);
+
+    var neighbour_sum: u8 = 0;
+    for ([_]i32{ left, up, right, right, down, down, left, left }) |delta| {
+        index += delta;
+        if (index > 0 and index < render_target.output_buffer.len) {
+            if (render_target.output_buffer[@intCast(usize, index)] == 'X') {
+                neighbour_sum += 1;
             }
+        }
+    }
+
+    health.alive = blk: {
+        if (neighbour_sum == 2) {
+            break :blk health.alive;
+        } else if (neighbour_sum == 3) {
+            break :blk true;
         } else {
-            const output = "[ ]";
-            inline for (output) |o, i| {
-                render_target.output_buffer[start + i] = o;
-            }
+            break :blk false;
         }
-    }
-
-    pub fn renderLine(pos: LinePos, render_target: *ecez.SharedState(RenderTarget)) void {
-        const zone = ztracy.ZoneNC(@src(), "Render newline", Color.Light.turquoise);
-        defer zone.End();
-        const nth = @intCast(usize, pos.nth);
-
-        render_target.output_buffer[nth * grid_dimensions * characters_per_cell + nth - 1] = '\n';
-    }
-
-    pub fn flushBuffer(flush: FlushTag, render_target: ecez.SharedState(RenderTarget)) void {
-        const zone = ztracy.ZoneNC(@src(), "Flush buffer", Color.Light.turquoise);
-        defer zone.End();
-
-        _ = flush;
-        std.debug.print("{s}\n", .{render_target.output_buffer});
-        std.debug.print("-" ** (grid_dimensions * characters_per_cell) ++ "\n", .{});
-    }
-
-    pub fn tickCell(pos: GridPos, health: *Health, render_target: ecez.SharedState(RenderTarget)) void {
-        const zone = ztracy.ZoneNC(@src(), "Update Cell", Color.Light.red);
-        defer zone.End();
-
-        const cell_x = @intCast(usize, pos.x);
-        const cell_y = @intCast(usize, pos.y);
-
-        // again here we have to cheat by reading the output buffer
-        const new_line_count = cell_y;
-        const start = (cell_x + (cell_y * grid_dimensions)) * characters_per_cell + new_line_count + 1;
-
-        const up = -@intCast(i32, cell_y * grid_dimensions * characters_per_cell + 1);
-        const down = -up;
-        const left = -characters_per_cell;
-        const right = characters_per_cell;
-        var index = @intCast(i32, start);
-
-        var neighbour_sum: u8 = 0;
-        for ([_]i32{ left, up, right, right, down, down, left, left }) |delta| {
-            index += delta;
-            if (index > 0 and index < render_target.output_buffer.len) {
-                if (render_target.output_buffer[@intCast(usize, index)] == 'X') {
-                    neighbour_sum += 1;
-                }
-            }
-        }
-
-        health.alive = blk: {
-            if (neighbour_sum == 2) {
-                break :blk health.alive;
-            } else if (neighbour_sum == 3) {
-                break :blk true;
-            } else {
-                break :blk false;
-            }
-        };
-    }
-};
+    };
+}
