@@ -1,6 +1,3 @@
-const std = @import("std");
-const testing = std.testing;
-
 pub const WorldBuilder = @import("world.zig").WorldBuilder;
 
 const meta = @import("meta.zig");
