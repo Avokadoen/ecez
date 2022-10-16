@@ -398,7 +398,7 @@ fn CreateWorld(
                 // wait for previous dispatch to finish
                 self.execution_job_queue.wait(self.system_jobs_in_flight[system_index]);
 
-                const dependency_job_indices = comptime getMetadataIndexRange(metadata);
+                const dependency_job_indices = comptime getSystemMetadataIndexRange(metadata);
 
                 if (dependency_job_indices) |indices| {
                     var jobs: [indices.len]JobId = undefined;
@@ -519,12 +519,29 @@ fn CreateWorld(
                 // wait for previous dispatch to finish
                 self.execution_job_queue.wait(event_jobs_in_flight[system_index]);
 
-                event_jobs_in_flight[system_index] = self.execution_job_queue.schedule(zjobs.JobId.none, system_job) catch |err| {
-                    switch (err) {
-                        error.Uninitialized => unreachable, // schedule can fail on "Uninitialized" which does not happen since you must init world
-                        error.Stopped => return,
+                const dependency_job_indices = comptime getEventMetadataIndexRange(triggered_event, metadata);
+
+                if (dependency_job_indices) |indices| {
+                    var jobs: [indices.len]JobId = undefined;
+                    for (indices) |index, i| {
+                        jobs[i] = event_jobs_in_flight[index];
                     }
-                };
+
+                    const combinded_job = self.execution_job_queue.combine(&jobs) catch JobId.none;
+                    event_jobs_in_flight[system_index] = self.execution_job_queue.schedule(combinded_job, system_job) catch |err| {
+                        switch (err) {
+                            error.Uninitialized => unreachable, // schedule can fail on "Uninitialized" which does not happen since you must init world
+                            error.Stopped => return,
+                        }
+                    };
+                } else {
+                    event_jobs_in_flight[system_index] = self.execution_job_queue.schedule(JobId.none, system_job) catch |err| {
+                        switch (err) {
+                            error.Uninitialized => unreachable, // schedule can fail on "Uninitialized" which does not happen since you must init world
+                            error.Stopped => return,
+                        }
+                    };
+                }
             }
         }
 
@@ -710,7 +727,7 @@ fn CreateWorld(
                                             const from = i * param_size;
                                             const to = from + param_size;
                                             const bytes = storage.outer[j][from..to];
-                                            arguments[j] = @ptrCast(Param, @alignCast(@alignOf(Param), bytes.ptr));
+                                            arguments[j] = @ptrCast(Param, @alignCast(@alignOf(component_query_types[j]), bytes.ptr));
                                         } else {
                                             arguments[j] = &component_query_types[j]{};
                                         }
@@ -735,9 +752,16 @@ fn CreateWorld(
             };
         }
 
-        inline fn getMetadataIndexRange(comptime metadata: SystemMetadata) ?[]const u32 {
+        inline fn getSystemMetadataIndexRange(comptime metadata: SystemMetadata) ?[]const u32 {
             if (metadata.depend_on_indices_range) |range| {
                 return systems_info.depend_on_index_pool[range.from..range.to];
+            }
+            return null;
+        }
+
+        inline fn getEventMetadataIndexRange(comptime triggered_event: anytype, comptime metadata: SystemMetadata) ?[]const u32 {
+            if (metadata.depend_on_indices_range) |range| {
+                return triggered_event.systems_info.depend_on_index_pool[range.from..range.to];
             }
             return null;
         }
@@ -1389,7 +1413,7 @@ test "DependOn makes a system race free" {
     }
 }
 
-test "DependOn can have multiple dependencies" {
+test "System DependOn can have multiple dependencies" {
     const SystemStruct = struct {
         pub fn addStuff1(a: *Testing.Component.A) void {
             std.time.sleep(std.time.ns_per_us * 2);
@@ -1415,7 +1439,7 @@ test "DependOn can have multiple dependencies" {
     var world = try World.init(testing.allocator, .{});
     defer world.deinit();
 
-    const entity_count = 10_000;
+    const entity_count = 100;
     var entities: [entity_count]Entity = undefined;
 
     for (entities) |*entity| {
@@ -1430,6 +1454,118 @@ test "DependOn can have multiple dependencies" {
 
     try world.dispatch();
     world.waitDispatch();
+
+    for (entities) |entity| {
+        // (3  + 1 + 2) * 2 = 12
+        // (12 + 1 + 2) * 2 = 30
+        try testing.expectEqual(
+            Testing.Component.A{ .value = 30 },
+            try world.getComponent(entity, Testing.Component.A),
+        );
+    }
+}
+
+test "DependOn makes a events race free" {
+    const SystemStruct = struct {
+        pub fn addStuff1(a: *Testing.Component.A, b: Testing.Component.B) void {
+            std.time.sleep(std.time.ns_per_us * 3);
+            a.value += @intCast(u32, b.value);
+        }
+
+        pub fn multiplyStuff1(a: *Testing.Component.A, b: Testing.Component.B) void {
+            std.time.sleep(std.time.ns_per_us * 2);
+            a.value *= @intCast(u32, b.value);
+        }
+
+        pub fn addStuff2(a: *Testing.Component.A, b: Testing.Component.B) void {
+            std.time.sleep(std.time.ns_per_us);
+            a.value += @intCast(u32, b.value);
+        }
+
+        pub fn multiplyStuff2(a: *Testing.Component.A, b: Testing.Component.B) void {
+            a.value *= @intCast(u32, b.value);
+        }
+    };
+
+    const World = WorldStub.WithEvents(.{
+        Event("onEvent", .{
+            SystemStruct.addStuff1,
+            DependOn(SystemStruct.multiplyStuff1, .{SystemStruct.addStuff1}),
+            DependOn(SystemStruct.addStuff2, .{SystemStruct.multiplyStuff1}),
+            DependOn(SystemStruct.multiplyStuff2, .{SystemStruct.addStuff2}),
+        }, .{}),
+    }).Build();
+
+    var world = try World.init(testing.allocator, .{});
+    defer world.deinit();
+
+    const entity_count = 10_000;
+    var entities: [entity_count]Entity = undefined;
+
+    for (entities) |*entity| {
+        entity.* = try world.createEntity(.{
+            Testing.Component.A{ .value = 3 },
+            Testing.Component.B{ .value = 2 },
+        });
+    }
+
+    try world.triggerEvent(.onEvent, .{});
+    world.waitEvent(.onEvent);
+
+    try world.triggerEvent(.onEvent, .{});
+    world.waitEvent(.onEvent);
+
+    for (entities) |entity| {
+        // (((3  + 2) * 2) + 2) * 2 =  24
+        // (((24 + 2) * 2) + 2) * 2 = 108
+        try testing.expectEqual(
+            Testing.Component.A{ .value = 108 },
+            try world.getComponent(entity, Testing.Component.A),
+        );
+    }
+}
+
+test "Event DependOn events can have multiple dependencies" {
+    const SystemStruct = struct {
+        pub fn addStuff1(a: *Testing.Component.A) void {
+            std.time.sleep(std.time.ns_per_us * 2);
+            a.value += 1;
+        }
+
+        pub fn addStuff2(a: *Testing.Component.A, b: Testing.Component.B) void {
+            std.time.sleep(std.time.ns_per_us);
+            a.value += b.value;
+        }
+
+        pub fn multiplyStuff(a: *Testing.Component.A, b: Testing.Component.B) void {
+            a.value *= @intCast(u32, b.value);
+        }
+    };
+
+    const World = WorldStub.WithEvents(.{Event("onFoo", .{
+        SystemStruct.addStuff1,
+        SystemStruct.addStuff2,
+        DependOn(SystemStruct.multiplyStuff, .{ SystemStruct.addStuff1, SystemStruct.addStuff2 }),
+    }, .{})}).Build();
+
+    var world = try World.init(testing.allocator, .{});
+    defer world.deinit();
+
+    const entity_count = 100;
+    var entities: [entity_count]Entity = undefined;
+
+    for (entities) |*entity| {
+        entity.* = try world.createEntity(.{
+            Testing.Component.A{ .value = 3 },
+            Testing.Component.B{ .value = 2 },
+        });
+    }
+
+    try world.triggerEvent(.onFoo, .{});
+    world.waitEvent(.onFoo);
+
+    try world.triggerEvent(.onFoo, .{});
+    world.waitEvent(.onFoo);
 
     for (entities) |entity| {
         // (3  + 1 + 2) * 2 = 12
