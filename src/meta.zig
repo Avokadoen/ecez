@@ -8,6 +8,7 @@ pub const secret_field = "magic_secret_sauce";
 pub const shared_secret_field = "shared_magic_secret_sauce";
 pub const event_argument_secret_field = "event_magic_secret_sauce";
 pub const system_depend_on_secret_field = "system_depend_on_secret_sauce";
+pub const view_secret_field = "view_secret_sauce";
 pub const event_magic = 0xaa_bb_cc;
 
 const DependOnRange = struct {
@@ -23,6 +24,7 @@ pub const SystemMetadata = struct {
         event_argument_value,
         shared_state_ptr,
         shared_state_value,
+        view,
     };
 
     depend_on_indices_range: ?DependOnRange,
@@ -97,8 +99,10 @@ pub const SystemMetadata = struct {
                         if (@hasField(pointer.child, shared_secret_field)) {
                             parsing_state = .not_component_parsing;
                             args[i] = Arg.shared_state_ptr;
+                        } else if (@hasField(pointer.child, view_secret_field)) {
+                            @compileError("view argument can't be pointers");
                         } else if (@hasField(pointer.child, event_argument_secret_field)) {
-                            @compileError("event arguments can't be pointers");
+                            @compileError("event argument can't be pointers");
                         } else {
                             component_args_count = i + 1;
                             args[i] = Arg.component_ptr;
@@ -108,10 +112,20 @@ pub const SystemMetadata = struct {
                         // must be either shared state, or an event argument
                         if (@hasField(pointer.child, shared_secret_field)) {
                             args[i] = Arg.shared_state_ptr;
+                        } else if (@hasField(pointer.child, view_secret_field)) {
+                            @compileError("view argument can't be pointers");
                         } else if (@hasField(pointer.child, event_argument_secret_field)) {
-                            @compileError("event arguments can't be pointers");
+                            @compileError("event argument can't be pointers");
                         } else {
-                            const err_msg = std.fmt.comptimePrint("system {s} argument {d} is not a shared state or event argument but comes after one", .{
+                            const pre_arg_str = switch (args[i - 1]) {
+                                .component_ptr, .component_value => unreachable,
+                                .event_argument_value => "event",
+                                .shared_state_ptr, .shared_state_value => "shared state",
+                                .view => "view",
+                                else => {},
+                            };
+                            const err_msg = std.fmt.comptimePrint("system {s} argument {d} is a component but comes after {s}", .{
+                                pre_arg_str,
                                 function_name,
                                 i,
                             });
@@ -128,6 +142,9 @@ pub const SystemMetadata = struct {
                         } else if (@hasField(T, event_argument_secret_field)) {
                             parsing_state = .not_component_parsing;
                             args[i] = Arg.event_argument_value;
+                        } else if (@hasField(T, view_secret_field)) {
+                            parsing_state = .not_component_parsing;
+                            args[i] = Arg.view;
                         } else {
                             component_args_count = i + 1;
                             args[i] = Arg.component_value;
@@ -139,8 +156,18 @@ pub const SystemMetadata = struct {
                             args[i] = Arg.shared_state_value;
                         } else if (@hasField(T, event_argument_secret_field)) {
                             args[i] = Arg.event_argument_value;
+                        } else if (@hasField(T, view_secret_field)) {
+                            args[i] = Arg.view;
                         } else {
-                            const err_msg = std.fmt.comptimePrint("system {s} argument {d} is not a shared state or event argument but comes after one", .{
+                            const pre_arg_str = switch (args[i - 1]) {
+                                .component_ptr, .component_value => unreachable,
+                                .event_argument_value => "event",
+                                .shared_state_ptr, .shared_state_value => "shared state",
+                                .view => "view",
+                                else => {},
+                            };
+                            const err_msg = std.fmt.comptimePrint("system {s} argument {d} is a component but comes after {s}", .{
+                                pre_arg_str,
                                 function_name,
                                 i,
                             });

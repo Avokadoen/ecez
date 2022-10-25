@@ -668,6 +668,7 @@ fn CreateWorld(
                                     .event_argument_value => @compileError("event arguments are illegal for dispatch systems"),
                                     .shared_state_value => arguments[j] = self_job.world.getSharedStateWithSharedStateType(Param),
                                     .shared_state_ptr => arguments[j] = self_job.world.getSharedStatePtrWithSharedStateType(Param),
+                                    .view => @compileError("view not implemented yet"),
                                 }
                             }
                             const system_ptr = @ptrCast(FuncType, func);
@@ -735,6 +736,7 @@ fn CreateWorld(
                                     .event_argument_value => arguments[j] = @bitCast(meta.EventArgument(ExtraArgumentType), self_job.extra_argument),
                                     .shared_state_value => arguments[j] = self_job.world.getSharedStateWithSharedStateType(Param),
                                     .shared_state_ptr => arguments[j] = self_job.world.getSharedStatePtrWithSharedStateType(Param),
+                                    .view => @compileError("view not implemented yet"),
                                 }
                             }
 
