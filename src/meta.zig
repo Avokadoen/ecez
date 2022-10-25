@@ -708,6 +708,45 @@ pub fn typeMap(comptime type_tuple: anytype, comptime runtime_tuple_type: type) 
     return map;
 }
 
+/// used by the View function to get a view of data which can be iterated
+pub fn ViewIterator(comptime T: type) type {
+    return struct {
+        const Iter2D = @This();
+
+        // read only view
+        internal: []const []const T,
+        inner_arr: []const T,
+
+        outer_index: usize,
+        inner_index: usize,
+
+        pub inline fn init(internal: []const []const T) Iter2D {
+            return Iter2D{
+                .internal = internal,
+                .inner_arr = undefined,
+                .outer_index = 0,
+                .inner_index = std.math.maxInt(usize),
+            };
+        }
+
+        pub fn next(self: *Iter2D) ?T {
+            if (self.inner_index >= self.inner_arr.len) {
+                if (self.outer_index < self.internal.len) {
+                    self.inner_arr = self.internal[self.outer_index];
+                    self.outer_index += 1;
+                    self.inner_index = 0;
+                } else {
+                    return null;
+                }
+            }
+
+            const rtr_index = self.inner_index;
+            self.inner_index += 1;
+            return self.inner_arr[rtr_index];
+        }
+    };
+}
+
 pub fn SharedStateStorage(comptime shared_state: anytype) type {
     const shared_info = blk: {
         const info = @typeInfo(@TypeOf(shared_state));
@@ -1097,6 +1136,25 @@ test "typeMap maps a type tuple to a value tuple" {
     try testing.expectEqual(2, type_map[0]);
     try testing.expectEqual(1, type_map[1]);
     try testing.expectEqual(0, type_map[2]);
+}
+
+test "ViewIterator can iterate a double array" {
+    const Iter = ViewIterator(usize);
+
+    const inner_arr = [3]usize{ 0, 1, 2 };
+    const arr: [3][]const usize = .{
+        &inner_arr,
+        &inner_arr,
+        &inner_arr,
+    };
+    var iter = Iter.init(&arr);
+    var i: usize = 0;
+    while (iter.next()) |elem| {
+        try testing.expectEqual(i % 3, elem);
+        i += 1;
+    }
+
+    try testing.expectEqual(@as(usize, 9), i);
 }
 
 test "SharedStateStorage generate suitable storage tuple" {
