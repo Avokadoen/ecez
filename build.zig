@@ -14,7 +14,7 @@ pub fn link(b: *std.build.Builder, exe: *std.build.LibExeObjStep, enable_ztracy:
     const ecez_package = std.build.Pkg{
         .name = "ecez",
         .source = .{ .path = thisDir() ++ "/src/main.zig" },
-        .dependencies = &[_]std.build.Pkg{ztracy_pkg},
+        .dependencies = &[_]std.build.Pkg{ ztracy_pkg, zjobs.pkg },
     };
 
     // add ztracy or a stub if disabled
