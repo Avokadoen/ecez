@@ -62,19 +62,21 @@ var world = try ecez.WorldBuilder().WithComponents(.{
         Position,
         HelloWorldMsg,
         // ...
-    }).WithSystems(.{
-        // here we see that 'calculateDamage', 'printHelloWorld' and 'applyDrag'
-        // can be executed in parallel
-        Systems.calculateDamage,
-        Systems.printHelloWorld,
-        // Apply drag reduce velocity over time
-        Systems.applyDrag,
-        // Move moves all entities with a Postion and Velocity component. 
-        // We need to make sure any drag has been applied 
-        // to a velocity before applying velocity to the position. 
-        // We also have to make sure that a new "hello world" is visible in the 
-        // terminal as well because why not :)                       
-        DependOn(Systems.move, .{Systems.applyDrag, Systems.printHelloWorld})      
+    }).WithEvents(.{
+        Event("updateLoop", .{
+            // here we see that 'calculateDamage', 'printHelloWorld' and 'applyDrag'
+            // can be executed in parallel
+            Systems.calculateDamage,
+            Systems.printHelloWorld,
+            // Apply drag reduce velocity over time
+            Systems.applyDrag,
+            // Move moves all entities with a Postion and Velocity component. 
+            // We need to make sure any drag has been applied 
+            // to a velocity before applying velocity to the position. 
+            // We also have to make sure that a new "hello world" is visible in the 
+            // terminal as well because why not :)                       
+            DependOn(Systems.move, .{Systems.applyDrag, Systems.printHelloWorld})      
+        }, .{})
     }).init(allocator, .{});
 ```
 
