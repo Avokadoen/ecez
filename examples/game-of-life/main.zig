@@ -35,12 +35,12 @@ pub fn main() anyerror!void {
         Health,
         LinePos,
         FlushTag,
-    }).WithSystems(.{
+    }).WithEvents(.{ecez.Event("loop", .{
         renderCell,
         renderLine,
         ecez.DependOn(flushBuffer, .{ renderCell, renderLine }),
         ecez.DependOn(tickCell, .{flushBuffer}),
-    }).WithSharedState(.{
+    }, .{})}).WithSharedState(.{
         RenderTarget,
     }).init(allocator, .{render_target});
     defer world.deinit();
@@ -88,9 +88,9 @@ pub fn main() anyerror!void {
         ztracy.FrameMarkNamed("gameloop");
 
         // wait for previous update and render
-        world.waitDispatch();
+        world.waitEvent(.loop);
         // schedule a new update cycle
-        try world.dispatch();
+        try world.triggerEvent(.loop, .{});
 
         refresh_delay.timedWait(std.time.ns_per_s) catch {};
     }
