@@ -36,11 +36,11 @@ pub const DependOn = meta.DependOn;
 
 /// Create a ecs instance by gradually defining application types, systems and events.
 pub fn WorldBuilder() type {
-    return WorldIntermediate(.{}, .{}, .{}, .{});
+    return WorldIntermediate(.{}, .{}, .{});
 }
 
 // temporary type state for world
-fn WorldIntermediate(comptime prev_components: anytype, comptime prev_shared_state: anytype, comptime prev_systems: anytype, comptime prev_events: anytype) type {
+fn WorldIntermediate(comptime prev_components: anytype, comptime prev_shared_state: anytype, comptime prev_events: anytype) type {
     return struct {
         const Self = @This();
 
@@ -48,46 +48,34 @@ fn WorldIntermediate(comptime prev_components: anytype, comptime prev_shared_sta
         /// Parameters:
         ///     - components: structures of components that will used by the application
         pub fn WithComponents(comptime components: anytype) type {
-            return WorldIntermediate(components, prev_shared_state, prev_systems, prev_events);
+            return WorldIntermediate(components, prev_shared_state, prev_events);
         }
 
         /// define application shared state
         /// Parameters:
         ///     - archetypes: structures of archetypes that will used by the application
         pub fn WithSharedState(comptime shared_state: anytype) type {
-            return WorldIntermediate(prev_components, shared_state, prev_systems, prev_events);
-        }
-
-        /// define application systems which should run on each dispatch
-        /// Parameters:
-        ///     - systems: a tuple of each system used by the world each frame
-        pub fn WithSystems(comptime systems: anytype) type {
-            return WorldIntermediate(prev_components, prev_shared_state, systems, prev_events);
+            return WorldIntermediate(prev_components, shared_state, prev_events);
         }
 
         /// define application events that can be triggered programmatically
         ///     - events: a tuple of events created using the ecez.Event function
         pub fn WithEvents(comptime events: anytype) type {
-            return WorldIntermediate(prev_components, prev_shared_state, prev_systems, events);
+            return WorldIntermediate(prev_components, prev_shared_state, events);
         }
 
         pub fn Build() type {
-            return CreateWorld(prev_components, prev_shared_state, prev_systems, prev_events);
+            return CreateWorld(prev_components, prev_shared_state, prev_events);
         }
 
         /// build the world instance which can be initialized
-        pub fn init(allocator: Allocator, shared_state: anytype) !CreateWorld(prev_components, prev_shared_state, prev_systems, prev_events) {
-            return CreateWorld(prev_components, prev_shared_state, prev_systems, prev_events).init(allocator, shared_state);
+        pub fn init(allocator: Allocator, shared_state: anytype) !CreateWorld(prev_components, prev_shared_state, prev_events) {
+            return CreateWorld(prev_components, prev_shared_state, prev_events).init(allocator, shared_state);
         }
     };
 }
 
-fn CreateWorld(
-    comptime components: anytype,
-    comptime shared_state_types: anytype,
-    comptime systems: anytype,
-    comptime events: anytype,
-) type {
+fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytype, comptime events: anytype) type {
     @setEvalBranchQuota(10_000);
     const component_types = blk: {
         const components_info = @typeInfo(@TypeOf(components));
@@ -103,16 +91,12 @@ fn CreateWorld(
         }
         break :blk types;
     };
+
     const Container = archetype_container.FromComponents(&component_types);
-
     const SharedStateStorage = meta.SharedStateStorage(shared_state_types);
-
-    const system_count = meta.countAndVerifySystems(systems);
-    const systems_info = meta.createSystemInfo(system_count, systems);
-    const event_count = meta.countAndVerifyEvents(events);
-
     const CacheMask = archetype_cache.ArchetypeCacheMask(&components);
-    const DispatchCacheStorage = archetype_cache.ArchetypeCacheStorage(system_count);
+
+    const event_count = meta.countAndVerifyEvents(events);
     const EventCacheStorages = blk: {
         // TODO: move to meta
         const Type = std.builtin.Type;
@@ -171,16 +155,11 @@ fn CreateWorld(
         container: Container,
         shared_state: SharedStateStorage,
 
-        // the dispatch cache used to store archetypes for each system
-        dispatch_cache_mask: CacheMask,
-        dispatch_cache_storage: DispatchCacheStorage,
-
         // the trigger event cache used to store archetypes for each system
         event_cache_masks: [event_count]CacheMask,
         event_cache_storages: EventCacheStorages,
 
         execution_job_queue: JobQueue,
-        system_jobs_in_flight: [system_count]JobId,
         event_jobs_in_flight: EventJobsInFlight,
 
         // TODO: event jobs in flight
@@ -222,8 +201,6 @@ fn CreateWorld(
             var execution_job_queue = JobQueue.init();
             errdefer execution_job_queue.deinit();
 
-            const system_jobs_in_flight = [_]JobId{JobId.none} ** system_count;
-
             var event_jobs_in_flight: EventJobsInFlight = undefined;
             {
                 const event_jobs_in_flight_info = @typeInfo(EventJobsInFlight).Struct;
@@ -236,12 +213,9 @@ fn CreateWorld(
                 .allocator = allocator,
                 .container = container,
                 .shared_state = actual_shared_state,
-                .dispatch_cache_mask = CacheMask.init(),
-                .dispatch_cache_storage = DispatchCacheStorage.init(),
                 .event_cache_masks = event_cache_masks,
                 .event_cache_storages = event_cache_storages,
                 .execution_job_queue = execution_job_queue,
-                .system_jobs_in_flight = system_jobs_in_flight,
                 .event_jobs_in_flight = event_jobs_in_flight,
             };
         }
@@ -251,8 +225,6 @@ fn CreateWorld(
             defer zone.End();
 
             self.execution_job_queue.deinit();
-
-            self.dispatch_cache_storage.deinit(self.allocator);
 
             const event_cache_storages_info = @typeInfo(EventCacheStorages).Struct;
             inline for (event_cache_storages_info.fields) |_, i| {
@@ -327,109 +299,6 @@ fn CreateWorld(
             const zone = ztracy.ZoneNC(@src(), "World getComponent", Color.world);
             defer zone.End();
             return self.container.getComponent(entity, Component);
-        }
-
-        /// Call all systems registered when calling CreateWorld
-        pub fn dispatch(self: *World) error{OutOfMemory}!void {
-            const zone = ztracy.ZoneNC(@src(), "World dispatch", Color.world);
-            defer zone.End();
-
-            // prime job execution for dispatch
-            if (self.execution_job_queue.isStarted() == false) {
-                self.execution_job_queue.start();
-            }
-
-            // at the end of the function all bits should be coherent
-            defer self.dispatch_cache_mask.setAllCoherent();
-
-            inline for (systems_info.metadata) |metadata, system_index| {
-                const component_query_types = comptime metadata.componentQueryArgTypes();
-
-                const component_hashes: [component_query_types.len]u64 = comptime blk: {
-                    var hashes: [component_query_types.len]u64 = undefined;
-                    inline for (component_query_types) |T, i| {
-                        hashes[i] = query.hashType(T);
-                    }
-                    break :blk hashes;
-                };
-
-                const DispatchJob = SystemDispatchJob(
-                    systems_info.functions[system_index],
-                    *const systems_info.function_types[system_index],
-                    metadata,
-                    &component_query_types,
-                    &component_hashes,
-                );
-
-                // extract data relative to system for each relevant archetype
-                const opaque_archetypes = blk: {
-                    // if cache is invalid
-                    if (self.dispatch_cache_mask.isCoherent(&component_query_types) == false) {
-                        comptime var sorted_component_hashes: [component_query_types.len]u64 = undefined;
-                        comptime {
-                            std.mem.copy(u64, &sorted_component_hashes, &component_hashes);
-                            const lessThan = struct {
-                                fn cmp(context: void, lhs: u64, rhs: u64) bool {
-                                    _ = context;
-                                    return lhs < rhs;
-                                }
-                            }.cmp;
-                            std.sort.sort(u64, &sorted_component_hashes, {}, lessThan);
-                        }
-
-                        // store new cache result
-                        self.dispatch_cache_storage.assignCacheEntry(
-                            self.allocator,
-                            system_index,
-                            try self.container.getArchetypesWithComponents(self.allocator, &sorted_component_hashes),
-                        );
-                    }
-
-                    break :blk self.dispatch_cache_storage.cache[system_index];
-                };
-
-                // initialized the system job
-                var system_job = DispatchJob{
-                    .world = self,
-                    .opaque_archetypes = opaque_archetypes,
-                };
-
-                // TODO: should dispatch be synchronous? (move wait until the end of the dispatch function)
-                // wait for previous dispatch to finish
-                self.execution_job_queue.wait(self.system_jobs_in_flight[system_index]);
-
-                const dependency_job_indices = comptime getSystemMetadataIndexRange(metadata);
-
-                if (dependency_job_indices) |indices| {
-                    var jobs: [indices.len]JobId = undefined;
-                    for (indices) |index, i| {
-                        jobs[i] = self.system_jobs_in_flight[index];
-                    }
-
-                    const combinded_job = self.execution_job_queue.combine(&jobs) catch JobId.none;
-                    self.system_jobs_in_flight[system_index] = self.execution_job_queue.schedule(combinded_job, system_job) catch |err| {
-                        switch (err) {
-                            error.Uninitialized => unreachable, // schedule can fail on "Uninitialized" which does not happen since you must init world
-                            error.Stopped => return,
-                        }
-                    };
-                } else {
-                    self.system_jobs_in_flight[system_index] = self.execution_job_queue.schedule(JobId.none, system_job) catch |err| {
-                        switch (err) {
-                            error.Uninitialized => unreachable, // schedule can fail on "Uninitialized" which does not happen since you must init world
-                            error.Stopped => return,
-                        }
-                    };
-                }
-            }
-        }
-
-        /// Wait for all jobs from a dispatch to finish by blocking the calling thread
-        /// should only be called from the dispatch thread
-        pub fn waitDispatch(self: *World) void {
-            for (self.system_jobs_in_flight) |job_in_flight| {
-                self.execution_job_queue.wait(job_in_flight);
-            }
         }
 
         pub fn triggerEvent(self: *World, comptime event: EventsEnum, event_extra_argument: anytype) error{OutOfMemory}!void {
@@ -605,8 +474,6 @@ fn CreateWorld(
 
         inline fn markAllCacheMasks(self: *World, entity: Entity) void {
             if (self.container.getTypeHashes(entity)) |type_hashes| {
-                self.dispatch_cache_mask.setIncoherentBitWithTypeHashes(type_hashes);
-
                 for (self.event_cache_masks) |*mask| {
                     mask.setIncoherentBitWithTypeHashes(type_hashes);
                 }
@@ -754,13 +621,6 @@ fn CreateWorld(
             };
         }
 
-        inline fn getSystemMetadataIndexRange(comptime metadata: SystemMetadata) ?[]const u32 {
-            if (metadata.depend_on_indices_range) |range| {
-                return systems_info.depend_on_index_pool[range.from..range.to];
-            }
-            return null;
-        }
-
         inline fn getEventMetadataIndexRange(comptime triggered_event: anytype, comptime metadata: SystemMetadata) ?[]const u32 {
             if (metadata.depend_on_indices_range) |range| {
                 return triggered_event.systems_info.depend_on_index_pool[range.from..range.to];
@@ -890,16 +750,14 @@ test "getSharedState retrieve state" {
 //     });
 //     defer world.deinit();
 
-test "systems can mutate components" {
+test "event can mutate components" {
     const SystemStruct = struct {
         pub fn mutateStuff(a: *Testing.Component.A, b: Testing.Component.B) void {
             a.value += @intCast(u32, b.value);
         }
     };
 
-    var world = try WorldStub.WithSystems(.{
-        SystemStruct,
-    }).init(testing.allocator, .{});
+    var world = try WorldStub.WithEvents(.{Event("onFoo", .{SystemStruct}, .{})}).init(testing.allocator, .{});
     defer world.deinit();
 
     const entity = try world.createEntity(.{
@@ -907,8 +765,8 @@ test "systems can mutate components" {
         Testing.Component.B{ .value = 2 },
     });
 
-    try world.dispatch();
-    world.waitDispatch();
+    try world.triggerEvent(.onFoo, .{});
+    world.waitEvent(.onFoo);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 3 },
@@ -916,7 +774,7 @@ test "systems can mutate components" {
     );
 }
 
-test "system parameter order is independent" {
+test "event parameter order is independent" {
     const SystemStruct = struct {
         pub fn mutateStuff(b: Testing.Component.B, c: Testing.Component.C, a: *Testing.Component.A) void {
             _ = c;
@@ -924,9 +782,7 @@ test "system parameter order is independent" {
         }
     };
 
-    var world = try WorldStub.WithSystems(.{
-        SystemStruct,
-    }).init(testing.allocator, .{});
+    var world = try WorldStub.WithEvents(.{Event("onFoo", .{SystemStruct}, .{})}).init(testing.allocator, .{});
     defer world.deinit();
 
     const entity = try world.createEntity(.{
@@ -935,8 +791,8 @@ test "system parameter order is independent" {
         Testing.Component.C{},
     });
 
-    try world.dispatch();
-    world.waitDispatch();
+    try world.triggerEvent(.onFoo, .{});
+    world.waitEvent(.onFoo);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 3 },
@@ -944,128 +800,7 @@ test "system parameter order is independent" {
     );
 }
 
-test "systems can access shared state" {
-    const A = Testing.Component.A;
-
-    const SystemStruct = struct {
-        pub fn aSystem(a: *A, shared: SharedState(A)) void {
-            a.* = @bitCast(A, shared);
-        }
-    };
-
-    const shared_state = A{ .value = 8 };
-    var world = try WorldStub.WithSystems(.{
-        SystemStruct,
-    }).WithSharedState(.{A}).init(testing.allocator, .{
-        shared_state,
-    });
-    defer world.deinit();
-
-    const entity = try world.createEntity(.{A{ .value = 0 }});
-    try world.dispatch();
-    world.waitDispatch();
-
-    try testing.expectEqual(shared_state, try world.getComponent(entity, A));
-}
-
-test "systems can mutate shared state" {
-    const A = struct {
-        value: u8,
-    };
-    const SystemStruct = struct {
-        pub fn func(a: Testing.Component.A, shared: *SharedState(A)) void {
-            _ = a;
-            shared.value += 1;
-        }
-
-        pub fn bSystem(a: Testing.Component.A, b: Testing.Component.B, shared: *SharedState(A)) void {
-            _ = a;
-            _ = b;
-            shared.value += 1;
-        }
-    };
-
-    var world = try WorldStub.WithSystems(.{
-        SystemStruct,
-    }).WithSharedState(.{
-        A,
-    }).init(testing.allocator, .{
-        A{ .value = 0 },
-    });
-    defer world.deinit();
-
-    _ = try world.createEntity(.{ Testing.Component.A{}, Testing.Component.B{} });
-    try world.dispatch();
-    world.waitDispatch();
-
-    try testing.expectEqual(@as(u8, 2), world.shared_state[0].value);
-}
-
-// TODO: https://github.com/Avokadoen/ecez/issues/57
-// test "systems can have many shared state" {
-//     const A = struct {
-//         value: u8,
-//     };
-//     const B = struct {
-//         value: u8,
-//     };
-//     const C = struct {
-//         value: u8,
-//     };
-
-//     const SystemStruct = struct {
-//         pub fn system1(a: Testing.Component.A, shared: SharedState(A)) !void {
-//             _ = a;
-//             try testing.expectEqual(@as(u8, 0), shared.value);
-//         }
-
-//         pub fn system2(a: Testing.Component.A, shared: SharedState(B)) !void {
-//             _ = a;
-//             try testing.expectEqual(@as(u8, 1), shared.value);
-//         }
-
-//         pub fn system3(a: Testing.Component.A, shared: SharedState(C)) !void {
-//             _ = a;
-//             try testing.expectEqual(@as(u8, 2), shared.value);
-//         }
-
-//         pub fn system4(a: Testing.Component.A, shared_a: SharedState(A), shared_b: SharedState(B)) !void {
-//             _ = a;
-//             try testing.expectEqual(@as(u8, 0), shared_a.value);
-//             try testing.expectEqual(@as(u8, 1), shared_b.value);
-//         }
-
-//         pub fn system5(a: Testing.Component.A, shared_b: SharedState(B), shared_a: SharedState(A)) !void {
-//             _ = a;
-//             try testing.expectEqual(@as(u8, 0), shared_a.value);
-//             try testing.expectEqual(@as(u8, 1), shared_b.value);
-//         }
-
-//         pub fn system6(a: Testing.Component.A, shared_c: SharedState(C), shared_b: SharedState(B), shared_a: SharedState(A)) !void {
-//             _ = a;
-//             try testing.expectEqual(@as(u8, 0), shared_a.value);
-//             try testing.expectEqual(@as(u8, 1), shared_b.value);
-//             try testing.expectEqual(@as(u8, 2), shared_c.value);
-//         }
-//     };
-
-//     var world = try WorldStub.WithSystems(.{
-//         SystemStruct,
-//     }).WithSharedState(.{
-//         A, B, C,
-//     }).init(testing.allocator, .{
-//         A{ .value = 0 },
-//         B{ .value = 1 },
-//         C{ .value = 2 },
-//     });
-//     defer world.deinit();
-
-//     _ = try world.createEntity(.{Testing.Component.A{}});
-
-//     try world.dispatch();
-// }
-
-test "systems can be registered through struct or individual function(s)" {
+test "events can be registered through struct or individual function(s)" {
     const SystemStruct1 = struct {
         pub fn func1(a: *Testing.Component.A) void {
             a.value += 1;
@@ -1086,10 +821,12 @@ test "systems can be registered through struct or individual function(s)" {
         }
     };
 
-    var world = try WorldStub.WithSystems(.{
-        SystemStruct1.func1,
-        SystemStruct1.func2,
-        SystemStruct2,
+    var world = try WorldStub.WithEvents(.{
+        Event("onFoo", .{
+            SystemStruct1.func1,
+            SystemStruct1.func2,
+            SystemStruct2,
+        }, .{}),
     }).init(testing.allocator, .{});
     defer world.deinit();
 
@@ -1097,8 +834,8 @@ test "systems can be registered through struct or individual function(s)" {
         .value = 0,
     }});
 
-    try world.dispatch();
-    world.waitDispatch();
+    try world.triggerEvent(.onFoo, .{});
+    world.waitEvent(.onFoo);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 4 },
@@ -1218,6 +955,70 @@ test "events can mutate shared state" {
     try testing.expectEqual(@as(u8, 2), world.shared_state[0].value);
 }
 
+// TODO: https://github.com/Avokadoen/ecez/issues/57
+// test "systems can have many shared state" {
+//     const A = struct {
+//         value: u8,
+//     };
+//     const B = struct {
+//         value: u8,
+//     };
+//     const C = struct {
+//         value: u8,
+//     };
+
+//     const SystemStruct = struct {
+//         pub fn system1(a: Testing.Component.A, shared: SharedState(A)) !void {
+//             _ = a;
+//             try testing.expectEqual(@as(u8, 0), shared.value);
+//         }
+
+//         pub fn system2(a: Testing.Component.A, shared: SharedState(B)) !void {
+//             _ = a;
+//             try testing.expectEqual(@as(u8, 1), shared.value);
+//         }
+
+//         pub fn system3(a: Testing.Component.A, shared: SharedState(C)) !void {
+//             _ = a;
+//             try testing.expectEqual(@as(u8, 2), shared.value);
+//         }
+
+//         pub fn system4(a: Testing.Component.A, shared_a: SharedState(A), shared_b: SharedState(B)) !void {
+//             _ = a;
+//             try testing.expectEqual(@as(u8, 0), shared_a.value);
+//             try testing.expectEqual(@as(u8, 1), shared_b.value);
+//         }
+
+//         pub fn system5(a: Testing.Component.A, shared_b: SharedState(B), shared_a: SharedState(A)) !void {
+//             _ = a;
+//             try testing.expectEqual(@as(u8, 0), shared_a.value);
+//             try testing.expectEqual(@as(u8, 1), shared_b.value);
+//         }
+
+//         pub fn system6(a: Testing.Component.A, shared_c: SharedState(C), shared_b: SharedState(B), shared_a: SharedState(A)) !void {
+//             _ = a;
+//             try testing.expectEqual(@as(u8, 0), shared_a.value);
+//             try testing.expectEqual(@as(u8, 1), shared_b.value);
+//             try testing.expectEqual(@as(u8, 2), shared_c.value);
+//         }
+//     };
+
+//     var world = try WorldStub.WithSystems(.{
+//         SystemStruct,
+//     }).WithSharedState(.{
+//         A, B, C,
+//     }).init(testing.allocator, .{
+//         A{ .value = 0 },
+//         B{ .value = 1 },
+//         C{ .value = 2 },
+//     });
+//     defer world.deinit();
+
+//     _ = try world.createEntity(.{Testing.Component.A{}});
+
+//     try world.dispatch();
+// }
+
 test "events can accepts event related data" {
     const MouseInput = struct { x: u32, y: u32 };
     // define a system type
@@ -1241,51 +1042,6 @@ test "events can accepts event related data" {
     try testing.expectEqual(
         Testing.Component.A{ .value = 42 },
         try world.getComponent(entity, Testing.Component.A),
-    );
-}
-
-test "dispatch cache works" {
-    const SystemStruct = struct {
-        pub fn aSystem(a: *Testing.Component.A) void {
-            a.value += 1;
-        }
-    };
-
-    var world = try WorldStub.WithSystems(.{
-        SystemStruct,
-    }).init(testing.allocator, .{});
-    defer world.deinit();
-
-    const entity1 = try world.createEntity(.{Testing.Component.A{ .value = 0 }});
-    try world.dispatch();
-    world.waitDispatch();
-
-    try testing.expectEqual(Testing.Component.A{ .value = 1 }, try world.getComponent(
-        entity1,
-        Testing.Component.A,
-    ));
-
-    // move entity to archetype A, B
-    try world.setComponent(entity1, Testing.Component.B{});
-    try world.dispatch();
-    world.waitDispatch();
-
-    try testing.expectEqual(Testing.Component.A{ .value = 2 }, try world.getComponent(
-        entity1,
-        Testing.Component.A,
-    ));
-
-    const entity2 = try world.createEntity(.{
-        Testing.Component.A{ .value = 0 },
-        Testing.Component.B{},
-        Testing.Component.C{},
-    });
-    try world.dispatch();
-    world.waitDispatch();
-
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 1 },
-        try world.getComponent(entity2, Testing.Component.A),
     );
 }
 
@@ -1355,116 +1111,6 @@ test "event cache works" {
         Testing.Component.B{ .value = 1 },
         try world.getComponent(entity2, Testing.Component.B),
     );
-}
-
-test "DependOn makes a system race free" {
-    const SystemStruct = struct {
-        pub fn addStuff1(a: *Testing.Component.A, b: Testing.Component.B) void {
-            std.time.sleep(std.time.ns_per_us * 3);
-            a.value += @intCast(u32, b.value);
-        }
-
-        pub fn multiplyStuff1(a: *Testing.Component.A, b: Testing.Component.B) void {
-            std.time.sleep(std.time.ns_per_us * 2);
-            a.value *= @intCast(u32, b.value);
-        }
-
-        pub fn addStuff2(a: *Testing.Component.A, b: Testing.Component.B) void {
-            std.time.sleep(std.time.ns_per_us);
-            a.value += @intCast(u32, b.value);
-        }
-
-        pub fn multiplyStuff2(a: *Testing.Component.A, b: Testing.Component.B) void {
-            a.value *= @intCast(u32, b.value);
-        }
-    };
-
-    const World = WorldStub.WithSystems(.{
-        SystemStruct.addStuff1,
-        DependOn(SystemStruct.multiplyStuff1, .{SystemStruct.addStuff1}),
-        DependOn(SystemStruct.addStuff2, .{SystemStruct.multiplyStuff1}),
-        DependOn(SystemStruct.multiplyStuff2, .{SystemStruct.addStuff2}),
-    }).Build();
-
-    var world = try World.init(testing.allocator, .{});
-    defer world.deinit();
-
-    const entity_count = 10_000;
-    var entities: [entity_count]Entity = undefined;
-
-    for (entities) |*entity| {
-        entity.* = try world.createEntity(.{
-            Testing.Component.A{ .value = 3 },
-            Testing.Component.B{ .value = 2 },
-        });
-    }
-
-    try world.dispatch();
-    world.waitDispatch();
-
-    try world.dispatch();
-    world.waitDispatch();
-
-    for (entities) |entity| {
-        // (((3  + 2) * 2) + 2) * 2 =  24
-        // (((24 + 2) * 2) + 2) * 2 = 108
-        try testing.expectEqual(
-            Testing.Component.A{ .value = 108 },
-            try world.getComponent(entity, Testing.Component.A),
-        );
-    }
-}
-
-test "System DependOn can have multiple dependencies" {
-    const SystemStruct = struct {
-        pub fn addStuff1(a: *Testing.Component.A) void {
-            std.time.sleep(std.time.ns_per_us * 2);
-            a.value += 1;
-        }
-
-        pub fn addStuff2(a: *Testing.Component.A, b: Testing.Component.B) void {
-            std.time.sleep(std.time.ns_per_us);
-            a.value += b.value;
-        }
-
-        pub fn multiplyStuff(a: *Testing.Component.A, b: Testing.Component.B) void {
-            a.value *= @intCast(u32, b.value);
-        }
-    };
-
-    const World = WorldStub.WithSystems(.{
-        SystemStruct.addStuff1,
-        SystemStruct.addStuff2,
-        DependOn(SystemStruct.multiplyStuff, .{ SystemStruct.addStuff1, SystemStruct.addStuff2 }),
-    }).Build();
-
-    var world = try World.init(testing.allocator, .{});
-    defer world.deinit();
-
-    const entity_count = 100;
-    var entities: [entity_count]Entity = undefined;
-
-    for (entities) |*entity| {
-        entity.* = try world.createEntity(.{
-            Testing.Component.A{ .value = 3 },
-            Testing.Component.B{ .value = 2 },
-        });
-    }
-
-    try world.dispatch();
-    world.waitDispatch();
-
-    try world.dispatch();
-    world.waitDispatch();
-
-    for (entities) |entity| {
-        // (3  + 1 + 2) * 2 = 12
-        // (12 + 1 + 2) * 2 = 30
-        try testing.expectEqual(
-            Testing.Component.A{ .value = 30 },
-            try world.getComponent(entity, Testing.Component.A),
-        );
-    }
 }
 
 test "DependOn makes a events race free" {
