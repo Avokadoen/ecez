@@ -39,14 +39,18 @@ var world = try ecez.WorldBuilder().WithComponents(.{
         Blunt,
         Sharp,
         // ...
-    }).WithSystems(.{
-        // register your game systems using WithSystems
-        // Here AttackSystems is a struct with multiple functions which will be registered
-        AttackSystems,
-        // moveSystem is a single function that will be registered 
-        moveSystem,
-        // ...
+    }).WithEvents(.{
+        Event("update_loop", .{
+            // register your game systems using WithSystems
+            // Here AttackSystems is a struct with multiple functions which will be registered
+            AttackSystems,
+            // moveSystem is a single function that will be registered 
+            moveSystem,
+            // ...
+        }, .{})
     }).init(allocator, .{});
+
+try world.triggerEvent(.update_loop);
 ```
 
 ### Implicit multithreading of systems
@@ -63,7 +67,7 @@ var world = try ecez.WorldBuilder().WithComponents(.{
         HelloWorldMsg,
         // ...
     }).WithEvents(.{
-        Event("updateLoop", .{
+        Event("update_loop", .{
             // here we see that 'calculateDamage', 'printHelloWorld' and 'applyDrag'
             // can be executed in parallel
             Systems.calculateDamage,
