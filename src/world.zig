@@ -955,69 +955,66 @@ test "events can mutate shared state" {
     try testing.expectEqual(@as(u8, 2), world.shared_state[0].value);
 }
 
-// TODO: https://github.com/Avokadoen/ecez/issues/57
-// test "systems can have many shared state" {
-//     const A = struct {
-//         value: u8,
-//     };
-//     const B = struct {
-//         value: u8,
-//     };
-//     const C = struct {
-//         value: u8,
-//     };
+test "event can have many shared state" {
+    const A = Testing.Component.A;
+    const B = Testing.Component.B;
+    const D = struct { value: u8 };
 
-//     const SystemStruct = struct {
-//         pub fn system1(a: Testing.Component.A, shared: SharedState(A)) !void {
-//             _ = a;
-//             try testing.expectEqual(@as(u8, 0), shared.value);
-//         }
+    const SystemStruct = struct {
+        pub fn system1(a: *A, shared: SharedState(A)) void {
+            a.value += @intCast(u32, shared.value);
+        }
 
-//         pub fn system2(a: Testing.Component.A, shared: SharedState(B)) !void {
-//             _ = a;
-//             try testing.expectEqual(@as(u8, 1), shared.value);
-//         }
+        pub fn system2(a: *A, shared: SharedState(B)) void {
+            a.value += @intCast(u32, shared.value);
+        }
 
-//         pub fn system3(a: Testing.Component.A, shared: SharedState(C)) !void {
-//             _ = a;
-//             try testing.expectEqual(@as(u8, 2), shared.value);
-//         }
+        pub fn system3(a: *A, shared: SharedState(D)) void {
+            a.value += @intCast(u32, shared.value);
+        }
 
-//         pub fn system4(a: Testing.Component.A, shared_a: SharedState(A), shared_b: SharedState(B)) !void {
-//             _ = a;
-//             try testing.expectEqual(@as(u8, 0), shared_a.value);
-//             try testing.expectEqual(@as(u8, 1), shared_b.value);
-//         }
+        pub fn system4(b: *B, shared_a: SharedState(A), shared_b: SharedState(B)) void {
+            b.value += @intCast(u8, shared_a.value);
+            b.value += @intCast(u8, shared_b.value);
+        }
 
-//         pub fn system5(a: Testing.Component.A, shared_b: SharedState(B), shared_a: SharedState(A)) !void {
-//             _ = a;
-//             try testing.expectEqual(@as(u8, 0), shared_a.value);
-//             try testing.expectEqual(@as(u8, 1), shared_b.value);
-//         }
+        pub fn system5(b: *B, shared_b: SharedState(B), shared_a: SharedState(A)) void {
+            b.value += @intCast(u8, shared_a.value);
+            b.value += @intCast(u8, shared_b.value);
+        }
 
-//         pub fn system6(a: Testing.Component.A, shared_c: SharedState(C), shared_b: SharedState(B), shared_a: SharedState(A)) !void {
-//             _ = a;
-//             try testing.expectEqual(@as(u8, 0), shared_a.value);
-//             try testing.expectEqual(@as(u8, 1), shared_b.value);
-//             try testing.expectEqual(@as(u8, 2), shared_c.value);
-//         }
-//     };
+        pub fn system6(b: *B, shared_c: SharedState(D), shared_b: SharedState(B), shared_a: SharedState(A)) void {
+            b.value += @intCast(u8, shared_a.value);
+            b.value += @intCast(u8, shared_b.value);
+            b.value += @intCast(u8, shared_c.value);
+        }
+    };
 
-//     var world = try WorldStub.WithSystems(.{
-//         SystemStruct,
-//     }).WithSharedState(.{
-//         A, B, C,
-//     }).init(testing.allocator, .{
-//         A{ .value = 0 },
-//         B{ .value = 1 },
-//         C{ .value = 2 },
-//     });
-//     defer world.deinit();
+    var world = try WorldStub.WithEvents(.{Event("onFoo", .{
+        SystemStruct.system1,
+        DependOn(SystemStruct.system2, .{SystemStruct.system1}),
+        DependOn(SystemStruct.system3, .{SystemStruct.system2}),
+        SystemStruct.system4,
+        DependOn(SystemStruct.system5, .{SystemStruct.system4}),
+        DependOn(SystemStruct.system6, .{SystemStruct.system5}),
+    }, .{})}).WithSharedState(.{
+        A, B, D,
+    }).init(testing.allocator, .{
+        A{ .value = 1 },
+        B{ .value = 2 },
+        D{ .value = 3 },
+    });
+    defer world.deinit();
 
-//     _ = try world.createEntity(.{Testing.Component.A{}});
+    const entity_a = try world.createEntity(.{A{ .value = 0 }});
+    const entity_b = try world.createEntity(.{B{ .value = 0 }});
 
-//     try world.dispatch();
-// }
+    try world.triggerEvent(.onFoo, .{});
+    world.waitEvent(.onFoo);
+
+    try testing.expectEqual(A{ .value = 6 }, try world.getComponent(entity_a, A));
+    try testing.expectEqual(B{ .value = 12 }, try world.getComponent(entity_b, B));
+}
 
 test "events can accepts event related data" {
     const MouseInput = struct { x: u32, y: u32 };

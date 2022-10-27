@@ -357,7 +357,7 @@ pub fn countAndVerifySystems(comptime systems: anytype) comptime_int {
     const SystemsType = @TypeOf(systems);
     const systems_type_info = @typeInfo(SystemsType);
     if (systems_type_info != .Struct) {
-        @compileError("CreateWorld system argument expected tuple- or struct type, found " ++ @typeName(SystemsType));
+        @compileError("CreateWorld system argument expected tuple- or struct type, found " ++ @typeName(SystemsType) ++ "\n\tHint: did you rembember to wrap your depend_on_systems in a tuple '.{system}'?");
     }
 
     const fields_info = systems_type_info.Struct.fields;
@@ -557,7 +557,7 @@ pub fn indexOfFunctionInSystems(comptime function: anytype, comptime stop_at: us
                             // check if struct is a DependOn generated struct
                             if (std.mem.eql(u8, stru.decls[0].name, system_depend_on_secret_field)) {
                                 const dep_on_function = @field(systems[j], "_system");
-                                if (function == dep_on_function) {
+                                if (@TypeOf(function) == @TypeOf(dep_on_function) and function == dep_on_function) {
                                     return i;
                                 }
                                 i += 1;
