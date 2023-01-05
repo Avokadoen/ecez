@@ -32,10 +32,6 @@ pub fn build(b: *std.build.Builder) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
     const mode = b.standardReleaseOptions();
 
-    // we force stage 1 until certain issues have been resolved
-    // see issue: https://github.com/ziglang/zig/issues/12521
-    b.use_stage1 = true;
-
     // initialize tracy
     const ztracy_enable = b.option(bool, "enable-tracy", "Enable Tracy profiler") orelse false;
     const ztracy_options = ztracy.BuildOptionsStep.init(b, .{ .enable_ztracy = ztracy_enable });

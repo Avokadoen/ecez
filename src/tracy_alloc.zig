@@ -19,7 +19,14 @@ pub fn TracyAllocator(comptime T: type) type {
         }
 
         pub fn allocator(self: *Self) Allocator {
-            return Allocator.init(self, alloc, resize, free);
+            return .{
+                .ptr = self,
+                .vtable = &.{
+                    .alloc = alloc,
+                    .resize = resize,
+                    .free = free,
+                },
+            };
         }
 
         fn getUnderlyingAllocatorPtr(self: *Self) Allocator {
@@ -27,43 +34,35 @@ pub fn TracyAllocator(comptime T: type) type {
             return self.underlying_allocator.allocator();
         }
 
-        pub fn alloc(
-            self: *Self,
-            n: usize,
-            ptr_align: u29,
-            len_align: u29,
-            ret_addr: usize,
-        ) Allocator.Error![]u8 {
+        pub fn alloc(ctx: *anyopaque, len: usize, ptr_align: u8, ret_addr: usize) ?[*]u8 {
+            const self = @ptrCast(*Self, @alignCast(@alignOf(Self), ctx));
+
             const underlying = self.getUnderlyingAllocatorPtr();
-            const result = try underlying.rawAlloc(n, ptr_align, len_align, ret_addr);
-            ztracy.Alloc(result.ptr, result.len);
+            const result = underlying.rawAlloc(len, ptr_align, ret_addr);
+            if (result) |some| {
+                ztracy.Alloc(some, len);
+            } else {
+                ztracy.Alloc(null, 0);
+            }
             return result;
         }
 
-        pub fn resize(
-            self: *Self,
-            buf: []u8,
-            buf_align: u29,
-            new_len: usize,
-            len_align: u29,
-            ret_addr: usize,
-        ) ?usize {
+        pub fn resize(ctx: *anyopaque, buf: []u8, buf_align: u8, new_len: usize, ret_addr: usize) bool {
+            const self = @ptrCast(*Self, @alignCast(@alignOf(Self), ctx));
+
             const underlying = self.getUnderlyingAllocatorPtr();
             ztracy.Free(buf.ptr);
-            const result = underlying.rawResize(buf, buf_align, new_len, len_align, ret_addr);
+            const result = underlying.rawResize(buf, buf_align, new_len, ret_addr);
             ztracy.Alloc(buf.ptr, new_len);
             return result;
         }
 
-        pub fn free(
-            self: *Self,
-            buf: []u8,
-            buf_align: u29,
-            ret_addr: usize,
-        ) void {
+        pub fn free(ctx: *anyopaque, buf: []u8, buf_align: u8, ret_addr: usize) void {
+            const self = @ptrCast(*Self, @alignCast(@alignOf(Self), ctx));
+
             const underlying = self.getUnderlyingAllocatorPtr();
-            ztracy.Free(buf.ptr);
             underlying.rawFree(buf, buf_align, ret_addr);
+            ztracy.Free(buf.ptr);
         }
 
         pub usingnamespace if (T == Allocator or !@hasDecl(T, "reset")) struct {} else struct {

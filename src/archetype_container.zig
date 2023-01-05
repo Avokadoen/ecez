@@ -30,7 +30,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
     const ComponentInfo = struct {
         hash: u64,
-        @"type": type,
+        type: type,
         @"struct": Type.Struct,
     };
     const Sort = struct {
@@ -56,7 +56,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             info[i] = .{
                 .hash = hashType(Component),
                 .@"struct" = type_info.Struct,
-                .@"type" = Component,
+                .type = Component,
             };
             sort[i] = .{ .hash = info[i].hash };
         }
@@ -122,7 +122,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         }
 
         /// retrieve all archetype interfaces that are at the path destination and all children of the destination
-        pub inline fn getIArchetypesWithComponents(self: Self, path: ?[]u16, result: *ArrayList(OpaqueArchetype), depth: usize) error{OutOfMemory}!void {
+        pub fn getIArchetypesWithComponents(self: Self, path: ?[]u16, result: *ArrayList(OpaqueArchetype), depth: usize) error{OutOfMemory}!void {
             // if we have not found nodes with our requirements
             if (path) |some_path| {
                 std.debug.assert(some_path.len > 0);
@@ -225,7 +225,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             comptime var component_sizes: [len]usize = undefined;
             inline for (component_info) |info, i| {
                 component_hashes[i] = info.hash;
-                component_sizes[i] = @sizeOf(info.@"type");
+                component_sizes[i] = @sizeOf(info.type);
             }
 
             return ArcheContainer{
@@ -245,12 +245,16 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             self.root_node.deinit(self.allocator);
         }
 
+        pub const CreateEntityResult = struct {
+            new_archetype_container: bool,
+            entity: Entity,
+        };
         /// create a new entity and supply it an initial state
         /// Parameters:
         ///     - inital_state: the initial state of the entity, this must be a registered archetype
         ///
-        /// Returns: A bool indicating if a new archetype have been made, and the entity
-        pub inline fn createEntity(self: *ArcheContainer, initial_state: anytype) StorageError!std.meta.Tuple(&[_]type{ bool, Entity }) {
+        /// Returns: A bool indicating if a new archetype has been made, and the entity
+        pub inline fn createEntity(self: *ArcheContainer, initial_state: anytype) StorageError!CreateEntityResult {
             const zone = ztracy.ZoneNC(@src(), "Container createEntity", Color.arche_container);
             defer zone.End();
 
@@ -276,15 +280,15 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                     // find index of field in outer component array
                     const component_index = blk2: {
                         inline for (component_info) |component, j| {
-                            if (field.field_type == component.@"type") {
+                            if (field.type == component.type) {
                                 break :blk2 @intCast(u15, j);
                             }
                         }
-                        @compileError(@typeName(field.field_type) ++ " is not a registered component type");
+                        @compileError(@typeName(field.type) ++ " is not a registered component type");
                     };
 
                     path[i] = TypeMap{
-                        .hash = hashType(field.field_type),
+                        .hash = hashType(field.type),
                         .state_index = i,
                         .component_index = component_index,
                     };
@@ -338,10 +342,12 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             };
 
             // create a component byte data view
+            const fields = @typeInfo(ArchetypeStruct).Struct.fields;
             var data: [arche_struct_info.fields.len][]const u8 = undefined;
             inline for (index_path) |path, i| {
-                if (@sizeOf(@TypeOf(initial_state[path.state_index])) > 0) {
-                    data[i] = std.mem.asBytes(&initial_state[path.state_index]);
+                if (@sizeOf(fields[path.state_index].type) > 0) {
+                    const field = &@field(initial_state, fields[path.state_index].name);
+                    data[i] = std.mem.asBytes(field);
                 } else {
                     data[i] = &self.empty_bytes;
                 }
@@ -376,7 +382,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                     comptime var type_hashes: [index_path.len]u64 = undefined;
                     comptime var type_sizes: [index_path.len]usize = undefined;
                     inline for (index_path) |path, i| {
-                        const Component = @TypeOf(initial_state[path.state_index]);
+                        const Component = fields[path.state_index].type;
                         type_hashes[i] = comptime ecez_query.hashType(Component);
                         type_sizes[i] = @sizeOf(Component);
                     }
@@ -402,7 +408,10 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             });
             errdefer _ = self.entity_references.pop();
 
-            return std.meta.Tuple(&[_]type{ bool, Entity }){ new_archetype, entity };
+            return CreateEntityResult{
+                .new_archetype_container = new_archetype,
+                .entity = entity,
+            };
         }
 
         /// Assign the component value to an entity
@@ -415,8 +424,6 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             const zone = ztracy.ZoneNC(@src(), "Container setComponent", Color.arche_container);
             defer zone.End();
 
-            const component_index = comptime componentIndex(@TypeOf(component));
-
             // get the archetype of the entity
             if (self.getArchetypeWithEntity(entity)) |arche| {
                 // try to update component in current archetype
@@ -427,6 +434,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                     switch (err) {
                         // component is not part of current archetype
                         error.ComponentMissing => {
+                            const component_index = comptime componentIndex(@TypeOf(component));
+
                             const old_path = self.archetype_paths.items[arche.path_index];
                             var new_component_index: usize = 0;
                             const new_path = blk1: {
@@ -529,7 +538,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                             // insert the new component at it's correct location
                             var rhd = data[new_component_index..new_path.len];
                             std.mem.rotate([]u8, rhd, rhd.len);
-                            data[new_component_index] = &std.mem.toBytes(component);
+                            std.mem.copy(u8, data[new_component_index], std.mem.asBytes(&component));
 
                             // register the entity in the new archetype
                             try new_arche.archetype.rawRegisterEntity(entity, data[0..new_path.len]);
@@ -576,7 +585,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
             if (old_path.len <= 1) {
                 // update entity reference
-                self.entity_references.items[entity.id] = EntityRef.@"void";
+                self.entity_references.items[entity.id] = EntityRef.void;
                 return false;
             }
 
@@ -681,7 +690,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
         pub inline fn getTypeHashes(self: ArcheContainer, entity: Entity) ?[]u64 {
             const ref = switch (self.entity_references.items[entity.id]) {
-                EntityRef.@"void" => return null,
+                EntityRef.void => return null,
                 EntityRef.type_index => |index| index,
             };
             const path = self.archetype_paths.items[ref];
@@ -732,7 +741,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
         inline fn getArchetypeWithEntity(self: ArcheContainer, entity: Entity) ?*Node.Arch {
             const ref = switch (self.entity_references.items[entity.id]) {
-                EntityRef.@"void" => return null,
+                EntityRef.void => return null,
                 EntityRef.type_index => |index| index,
             };
             const path = self.archetype_paths.items[ref];
@@ -755,7 +764,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
         inline fn componentIndex(comptime Component: type) comptime_int {
             inline for (component_info) |info, i| {
-                if (Component == info.@"type") {
+                if (Component == info.type) {
                     return i;
                 }
             }
@@ -766,6 +775,20 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
 const TestContainer = FromComponents(&Testing.AllComponentsArr);
 
+// TODO: we cant use tuples here becuase of https://github.com/ziglang/zig/issues/12963
+const AbcEntityType = struct {
+    a: Testing.Component.A,
+    b: Testing.Component.B,
+    c: Testing.Component.C,
+};
+const AcEntityType = struct {
+    a: Testing.Component.A,
+    c: Testing.Component.C,
+};
+const CEntityType = struct {
+    c: Testing.Component.C,
+};
+
 test "ArcheContainer init + deinit is idempotent" {
     var container = try TestContainer.init(testing.allocator);
     container.deinit();
@@ -775,24 +798,29 @@ test "ArcheContainer createEntity & getComponent works" {
     var container = try TestContainer.init(testing.allocator);
     defer container.deinit();
 
-    const a = Testing.Component.A{ .value = 1 };
-    const b = Testing.Component.B{ .value = 2 };
-    const c = Testing.Component.C{};
-    const entity = (try container.createEntity(.{ a, b, c }))[1];
+    const initial_state = AbcEntityType{
+        .a = Testing.Component.A{ .value = 1 },
+        .b = Testing.Component.B{ .value = 2 },
+        .c = Testing.Component.C{},
+    };
 
-    try testing.expectEqual(a, try container.getComponent(entity, Testing.Component.A));
-    try testing.expectEqual(b, try container.getComponent(entity, Testing.Component.B));
-    try testing.expectEqual(c, try container.getComponent(entity, Testing.Component.C));
+    const create_result = try container.createEntity(initial_state);
+    const entity = create_result.entity;
+
+    try testing.expectEqual(initial_state.a, try container.getComponent(entity, Testing.Component.A));
+    try testing.expectEqual(initial_state.b, try container.getComponent(entity, Testing.Component.B));
+    try testing.expectEqual(initial_state.c, try container.getComponent(entity, Testing.Component.C));
 }
 
 test "ArcheContainer setComponent & getComponent works" {
     var container = try TestContainer.init(testing.allocator);
     defer container.deinit();
 
-    const entity = (try container.createEntity(.{
-        Testing.Component.A{ .value = 1 },
-        Testing.Component.C{},
-    }))[1];
+    const initial_state = AcEntityType{
+        .a = Testing.Component.A{ .value = 1 },
+        .c = Testing.Component.C{},
+    };
+    const entity = (try container.createEntity(initial_state)).entity;
 
     const a = Testing.Component.A{ .value = 40 };
     _ = try container.setComponent(entity, a);
@@ -807,10 +835,11 @@ test "ArcheContainer getTypeHashes works" {
     var container = try TestContainer.init(testing.allocator);
     defer container.deinit();
 
-    const entity = (try container.createEntity(.{
-        Testing.Component.A{ .value = 1 },
-        Testing.Component.C{},
-    }))[1];
+    const initial_state = AcEntityType{
+        .a = Testing.Component.A{ .value = 1 },
+        .c = Testing.Component.C{},
+    };
+    const entity = (try container.createEntity(initial_state)).entity;
 
     try testing.expectEqualSlices(
         u64,
@@ -823,10 +852,11 @@ test "ArcheContainer hasComponent works" {
     var container = try TestContainer.init(testing.allocator);
     defer container.deinit();
 
-    const entity = (try container.createEntity(.{
-        Testing.Component.A{ .value = 1 },
-        Testing.Component.C{},
-    }))[1];
+    const initial_state = AcEntityType{
+        .a = Testing.Component.A{ .value = 1 },
+        .c = Testing.Component.C{},
+    };
+    const entity = (try container.createEntity(initial_state)).entity;
 
     try testing.expectEqual(true, container.hasComponent(entity, Testing.Component.A));
     try testing.expectEqual(false, container.hasComponent(entity, Testing.Component.B));
@@ -847,7 +877,10 @@ test "ArcheContainer getArchetypesWithComponents returns matching archetypes" {
         @compileError("hash function give unexpected result");
     }
 
-    const entity = (try container.createEntity(.{Testing.Component.C{}}))[1];
+    const initial_state = CEntityType{
+        .c = Testing.Component.C{},
+    };
+    const entity = (try container.createEntity(initial_state)).entity;
     {
         const arch = try container.getArchetypesWithComponents(testing.allocator, &[_]u64{c_hash});
         defer testing.allocator.free(arch);
