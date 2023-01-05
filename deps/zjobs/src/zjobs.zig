@@ -1,7 +1,5 @@
 const std = @import("std");
 
-const builtin = @import("builtin");
-
 const assert = std.debug.assert;
 
 const panic = std.debug.panic;
@@ -61,27 +59,14 @@ pub const JobId = enum(u32) {
             return .{ .index = _index, .cycle = _cycle };
         }
 
-        // TODO: seems like a bug in stage one gives align 1 so we overwrite this temporarly
-        // see: https://github.com/Avokadoen/ecez/issues/32
-        inline fn id(_fields: Fields) JobId {
+        inline fn id(_fields: *const Fields) JobId {
             comptime assert(@sizeOf(Fields) == @sizeOf(JobId));
-            return @intToEnum(JobId, @bitCast(u32, _fields));
+            return @ptrCast(*const JobId, _fields).*;
         }
     };
 };
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-// ECEZ TODO: because of a bug in stage one we need this patch for now
-// see: https://github.com/Avokadoen/ecez/issues/32 for when ecez will be able to remove this
-pub const JobQueueConfig = struct {
-    // zig fmt: off
-    max_jobs      : u16 = 256,
-    max_job_size  : u16 =  64,
-    max_threads   : u8  =   8,
-    idle_sleep_ns : u32 =  10,
-    // zig fmt: on
-};
 
 /// Returns a struct that executes jobs on a pool of threads, which may be
 /// configured as follows:
@@ -100,7 +85,14 @@ pub const JobQueueConfig = struct {
 ///   has not been tested for correctness in case background threads cannot be
 ///   spawned.
 pub fn JobQueue(
-    comptime config: JobQueueConfig,
+    comptime config: struct {
+        // zig fmt: off
+        max_jobs      : u16 = 256,
+        max_job_size  : u16 =  64,
+        max_threads   : u8  =   8,
+        idle_sleep_ns : u32 =  10,
+        // zig fmt: on
+    },
 ) type {
     compileAssert(
         config.max_jobs >= min_jobs,
@@ -128,8 +120,7 @@ pub fn JobQueue(
         pub const max_job_size = config.max_job_size;
 
         const Data = [max_job_size]u8;
-        // ECEZ TODO: https://github.com/Avokadoen/ecez/issues/32 for when ecez will be able to remove this
-        const Main = if (builtin.zig_backend == .stage1) fn (*Data) void else *const fn (*Data) void;
+        const Main = *const fn (*Data) void;
 
         // zig fmt: off
         data     : Data align(cache_line_size) = undefined,
@@ -164,13 +155,7 @@ pub fn JobQueue(
             std.mem.set(u8, &self.data, 0);
             std.mem.copy(u8, &self.data, std.mem.asBytes(job));
 
-            const exec = blk: {
-                if (builtin.zig_backend == .stage1) {
-                    break :blk @as(fn (*Job) void, @field(Job, "exec"));
-                } else {
-                    break :blk @as(*const fn (*Job) void, &@field(Job, "exec"));
-                } 
-            };
+            const exec: *const fn (*Job) void = &@field(Job, "exec");
             const id = jobId(@truncate(u16, index), new_cycle);
 
             self.exec = @ptrCast(Main, exec);
@@ -202,8 +187,7 @@ pub fn JobQueue(
         }
 
         fn jobId(index: u16, cycle: u16) JobId {
-            const fields = JobId.Fields.init(index, cycle);
-            return fields.id();
+            return JobId.Fields.init(index, cycle).id();
         }
     };
 
@@ -474,12 +458,8 @@ pub fn JobQueue(
             self.lock("schedule");
             defer self.unlock("schedule");
 
-            if (!self.isInitialized()) {
-                return Error.Uninitialized;
-            }
-            if (self.isStopping()) {
-                return Error.Stopped;
-            }
+            if (!self.isInitialized()) return Error.Uninitialized;
+            if (self.isStopping()) return Error.Stopped;
 
             const index = self.dequeueFreeIndex();
             const slot: *Slot = &self._slots[index];
@@ -500,13 +480,15 @@ pub fn JobQueue(
 
             var id = JobId.none;
             var i: usize = 0;
-            while (i < prereqs.len) {
-                var job = CombinePrereqsJob.init(self);
+            const in: []const JobId = prereqs;
+            while (i < in.len) {
+                var job = CombinePrereqsJob{ .jobs = self };
 
                 // copy prereqs to job
                 var o: usize = 0;
-                while (i < prereqs.len and o < job.prereqs.len) {
-                    job.prereqs[o] = prereqs[i];
+                const out: []JobId = &job.prereqs;
+                while (i < in.len and o < out.len) {
+                    out[o] = in[i];
                     i += 1;
                     o += 1;
                 }
@@ -596,14 +578,7 @@ pub fn JobQueue(
             const max_prereqs = (max_job_size - jobs_size) / prereq_size;
 
             jobs: *Self,
-            prereqs: [max_prereqs]JobId,
-
-            fn init(self: *Self) CombinePrereqsJob {
-                return CombinePrereqsJob{
-                    .jobs = self,
-                    .prereqs = [_]JobId{JobId.none} ** max_prereqs,
-                };
-            }
+            prereqs: [max_prereqs]JobId = [_]JobId{JobId.none} ** max_prereqs,
 
             fn exec(job: *@This()) void {
                 for (job.prereqs) |prereq| {
@@ -916,12 +891,12 @@ pub fn JobQueue(
                 );
 
                 compileAssert(
-                    fn_info.args.len > 0,
+                    fn_info.params.len > 0,
                     "{s}.exec() must have at least one parameter",
                     .{@typeName(Job)},
                 );
 
-                const arg_type_0 = fn_info.args[0].arg_type;
+                const arg_type_0 = fn_info.params[0].type;
 
                 compileAssert(
                     arg_type_0 == *Job or arg_type_0 == *const Job,
@@ -1173,4 +1148,59 @@ test "JobQueue throughput" {
 
     const throughput = @intToFloat(f64, job_ms) / @intToFloat(f64, main_ms);
     print("completed {} jobs ({}ms) in {}ms ({d:.1}x)\n", .{ job_count, job_ms, main_ms, throughput });
+}
+
+test "combine jobs respect prereq" {
+    const Jobs = JobQueue(.{});
+    var jobs = Jobs.init();
+    defer jobs.deinit();
+
+    const Counter = std.atomic.Atomic(u32);
+
+    const PrereqJob = struct {
+        counter: *Counter,
+
+        fn exec(self: *@This()) void {
+            _ = self.counter.fetchAdd(1, .Monotonic);
+        }
+    };
+
+    const FinalJob = struct {
+        counter: *Counter,
+
+        fn exec(self: *@This()) void {
+            const count = self.counter.load(.Monotonic);
+            self.counter.store(count * 100, .Monotonic);
+        }
+    };
+
+    var counter = try std.testing.allocator.create(Counter);
+    defer std.testing.allocator.destroy(counter);
+    counter.* = Counter.init(0);
+
+    jobs.start();
+    var stressers: usize = 0;
+    while (stressers < 1000) : (stressers += 1) {
+        // Generate more prereqs than fit in a single CombinePrereqsJob
+        const prereq_count = Jobs.CombinePrereqsJob.max_prereqs + 2;
+        var chain_data: [prereq_count]PrereqJob = undefined;
+        for (chain_data) |*step| {
+            step.* = PrereqJob{ .counter = counter };
+        }
+
+        var prereqs: [prereq_count]JobId = undefined;
+        for (chain_data) |step, i| {
+            prereqs[i] = try jobs.schedule(JobId.none, step);
+        }
+
+        const final = FinalJob{ .counter = counter };
+        const combined_prereq = try jobs.combine(&prereqs);
+        const final_job = try jobs.schedule(combined_prereq, final);
+
+        jobs.wait(final_job);
+        try std.testing.expectEqual(@as(u32, prereq_count * 100), counter.load(.Monotonic));
+        counter.store(0, .Monotonic);
+    }
+
+    jobs.deinit();
 }

@@ -30,8 +30,8 @@ pub const SystemMetadata = struct {
     depend_on_indices_range: ?DependOnRange,
 
     fn_info: FnInfo,
-    component_args_count: usize,
-    args: []const Arg,
+    component_params_count: usize,
+    params: []const Arg,
 
     /// initalize metadata for a system using a supplied function type info
     pub fn init(
@@ -46,7 +46,7 @@ pub const SystemMetadata = struct {
         if (fn_info.is_generic) {
             @compileError("system " ++ function_name ++ " functions cannot use generic arguments");
         }
-        if (fn_info.args.len == 0) {
+        if (fn_info.params.len == 0) {
             @compileError("system " ++ function_name ++ " missing component arguments");
         }
 
@@ -69,11 +69,11 @@ pub const SystemMetadata = struct {
             not_component_parsing,
         };
 
-        var component_args_count: usize = 0;
+        var component_params_count: usize = 0;
         var parsing_state = ParsingState.component_parsing;
-        var args: [fn_info.args.len]Arg = undefined;
-        inline for (fn_info.args) |arg, i| {
-            const T = arg.arg_type orelse {
+        var params: [fn_info.params.len]Arg = undefined;
+        inline for (fn_info.params) |param, i| {
+            const T = param.type orelse {
                 const err_msg = std.fmt.comptimePrint("system {s} argument {d} is missing type", .{
                     function_name,
                     i,
@@ -98,26 +98,26 @@ pub const SystemMetadata = struct {
                         // if argument is a shared state argument or event we are done parsing components
                         if (@hasField(pointer.child, shared_secret_field)) {
                             parsing_state = .not_component_parsing;
-                            args[i] = Arg.shared_state_ptr;
+                            params[i] = Arg.shared_state_ptr;
                         } else if (@hasField(pointer.child, view_secret_field)) {
                             @compileError("view argument can't be pointers");
                         } else if (@hasField(pointer.child, event_argument_secret_field)) {
                             @compileError("event argument can't be pointers");
                         } else {
-                            component_args_count = i + 1;
-                            args[i] = Arg.component_ptr;
+                            component_params_count = i + 1;
+                            params[i] = Arg.component_ptr;
                         }
                     } else {
                         // we are now done parsing components which means that any argument
                         // must be either shared state, or an event argument
                         if (@hasField(pointer.child, shared_secret_field)) {
-                            args[i] = Arg.shared_state_ptr;
+                            params[i] = Arg.shared_state_ptr;
                         } else if (@hasField(pointer.child, view_secret_field)) {
                             @compileError("view argument can't be pointers");
                         } else if (@hasField(pointer.child, event_argument_secret_field)) {
                             @compileError("event argument can't be pointers");
                         } else {
-                            const pre_arg_str = switch (args[i - 1]) {
+                            const pre_arg_str = switch (params[i - 1]) {
                                 .component_ptr, .component_value => unreachable,
                                 .event_argument_value => "event",
                                 .shared_state_ptr, .shared_state_value => "shared state",
@@ -138,28 +138,28 @@ pub const SystemMetadata = struct {
                         // if argument is a shared state argument or event we are done parsing components
                         if (@hasField(T, shared_secret_field)) {
                             parsing_state = .not_component_parsing;
-                            args[i] = Arg.shared_state_value;
+                            params[i] = Arg.shared_state_value;
                         } else if (@hasField(T, event_argument_secret_field)) {
                             parsing_state = .not_component_parsing;
-                            args[i] = Arg.event_argument_value;
+                            params[i] = Arg.event_argument_value;
                         } else if (@hasField(T, view_secret_field)) {
                             parsing_state = .not_component_parsing;
-                            args[i] = Arg.view;
+                            params[i] = Arg.view;
                         } else {
-                            component_args_count = i + 1;
-                            args[i] = Arg.component_value;
+                            component_params_count = i + 1;
+                            params[i] = Arg.component_value;
                         }
                     } else {
                         // we are now done parsing components which means that any argument
                         // must be either shared state, or an event argument
                         if (@hasField(T, shared_secret_field)) {
-                            args[i] = Arg.shared_state_value;
+                            params[i] = Arg.shared_state_value;
                         } else if (@hasField(T, event_argument_secret_field)) {
-                            args[i] = Arg.event_argument_value;
+                            params[i] = Arg.event_argument_value;
                         } else if (@hasField(T, view_secret_field)) {
-                            args[i] = Arg.view;
+                            params[i] = Arg.view;
                         } else {
-                            const pre_arg_str = switch (args[i - 1]) {
+                            const pre_arg_str = switch (params[i - 1]) {
                                 .component_ptr, .component_value => unreachable,
                                 .event_argument_value => "event",
                                 .shared_state_ptr, .shared_state_value => "shared state",
@@ -187,8 +187,8 @@ pub const SystemMetadata = struct {
         return SystemMetadata{
             .depend_on_indices_range = depend_on_indices_range,
             .fn_info = fn_info,
-            .component_args_count = component_args_count,
-            .args = args[0..],
+            .component_params_count = component_params_count,
+            .params = params[0..],
         };
     }
 
@@ -205,33 +205,33 @@ pub const SystemMetadata = struct {
 
     /// Get the argument types as proper component types
     /// This function will extrapolate interior types from pointers
-    pub fn componentQueryArgTypes(comptime self: SystemMetadata) [self.component_args_count]type {
-        comptime var args: [self.component_args_count]type = undefined;
-        inline for (self.fn_info.args) |arg, i| {
-            if (self.component_args_count == i) {
+    pub fn componentQueryArgTypes(comptime self: SystemMetadata) [self.component_params_count]type {
+        comptime var params: [self.component_params_count]type = undefined;
+        inline for (self.fn_info.params) |arg, i| {
+            if (self.component_params_count == i) {
                 break;
             }
 
-            switch (@typeInfo(arg.arg_type.?)) {
+            switch (@typeInfo(arg.type.?)) {
                 .Pointer => |p| {
-                    args[i] = p.child;
+                    params[i] = p.child;
                     continue;
                 },
                 else => {},
             }
-            args[i] = arg.arg_type.?;
+            params[i] = arg.type.?;
         }
-        return args;
+        return params;
     }
 
     /// Get the argument types as requested
     /// This function will include pointer types
-    pub fn paramArgTypes(comptime self: SystemMetadata) [self.args.len]type {
-        comptime var args: [self.fn_info.args.len]type = undefined;
-        inline for (self.fn_info.args) |arg, i| {
-            args[i] = arg.arg_type.?;
+    pub fn paramArgTypes(comptime self: SystemMetadata) [self.params.len]type {
+        comptime var params: [self.fn_info.params.len]type = undefined;
+        inline for (self.fn_info.params) |arg, i| {
+            params[i] = arg.type.?;
         }
-        return args;
+        return params;
     }
 
     pub fn canReturnError(comptime self: SystemMetadata) bool {
@@ -296,7 +296,7 @@ pub fn countAndVerifyEvents(comptime events: anytype) comptime_int {
     comptime var event_count = 0;
     // start by counting events registered
     inline for (fields_info) |field_info, i| {
-        switch (@typeInfo(field_info.field_type)) {
+        switch (@typeInfo(field_info.type)) {
             .Type => {
                 switch (@typeInfo(events[i])) {
                     .Struct => {
@@ -319,7 +319,7 @@ pub fn countAndVerifyEvents(comptime events: anytype) comptime_int {
             },
             else => {
                 const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct, got {s}", .{
-                    @typeName(field_info.field_type),
+                    @typeName(field_info.type),
                 });
                 @compileError(err_msg);
             },
@@ -328,7 +328,7 @@ pub fn countAndVerifyEvents(comptime events: anytype) comptime_int {
     return event_count;
 }
 
-pub fn GenerateEventsEnum(comptime event_count: comptime_int, events: anytype) type {
+pub fn GenerateEventsEnum(comptime event_count: comptime_int, comptime events: anytype) type {
     const EventsType = @TypeOf(events);
     const events_type_info = @typeInfo(EventsType);
     const fields_info = events_type_info.Struct.fields;
@@ -342,7 +342,6 @@ pub fn GenerateEventsEnum(comptime event_count: comptime_int, events: anytype) t
     }
 
     const event_enum_info = Type{ .Enum = .{
-        .layout = .Auto,
         .tag_type = usize,
         .fields = &enum_fields,
         .decls = &[0]Type.Declaration{},
@@ -364,7 +363,7 @@ pub fn countAndVerifySystems(comptime systems: anytype) comptime_int {
     comptime var systems_count = 0;
     // start by counting systems registered
     inline for (fields_info) |field_info, i| {
-        switch (@typeInfo(field_info.field_type)) {
+        switch (@typeInfo(field_info.type)) {
             .Fn => systems_count += 1,
             .Type => {
                 switch (@typeInfo(systems[i])) {
@@ -399,7 +398,7 @@ pub fn countAndVerifySystems(comptime systems: anytype) comptime_int {
             },
             else => {
                 const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct, got {s}", .{
-                    @typeName(field_info.field_type),
+                    @typeName(field_info.type),
                 });
                 @compileError(err_msg);
             },
@@ -444,10 +443,10 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
     {
         comptime var i: usize = 0;
         inline for (fields_info) |field_info, j| {
-            switch (@typeInfo(field_info.field_type)) {
+            switch (@typeInfo(field_info.type)) {
                 .Fn => |func| {
-                    systems_info.metadata[i] = SystemMetadata.init(null, field_info.field_type, func);
-                    systems_info.function_types[i] = field_info.field_type;
+                    systems_info.metadata[i] = SystemMetadata.init(null, field_info.type, func);
+                    systems_info.function_types[i] = field_info.type;
                     systems_info.functions[i] = field_info.default_value.?;
                     i += 1;
                 },
@@ -502,7 +501,7 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                     const decl_info = @typeInfo(DeclType);
                                     switch (decl_info) {
                                         .Fn => |func| {
-                                            // const err_msg = std.fmt.comptimePrint("{d}", .{func.args.len});
+                                            // const err_msg = std.fmt.comptimePrint("{d}", .{func.params.len});
                                             // @compileError(err_msg);
                                             systems_info.metadata[i] = SystemMetadata.init(null, DeclType, func);
                                             systems_info.function_types[i] = DeclType;
@@ -521,7 +520,7 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                         },
                         else => {
                             const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct and/or type with functions, got {s}", .{
-                                @typeName(field_info.field_type),
+                                @typeName(field_info.type),
                             });
                             @compileError(err_msg);
                         },
@@ -544,7 +543,7 @@ pub fn indexOfFunctionInSystems(comptime function: anytype, comptime stop_at: us
     {
         comptime var i: usize = 0;
         inline for (fields_info) |field_info, j| {
-            switch (@typeInfo(field_info.field_type)) {
+            switch (@typeInfo(field_info.type)) {
                 .Fn => {
                     if (@TypeOf(systems[j]) == @TypeOf(function) and systems[j] == function) {
                         return i;
@@ -585,7 +584,7 @@ pub fn indexOfFunctionInSystems(comptime function: anytype, comptime stop_at: us
                         },
                         else => {
                             const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct and/or type with functions, got {s}", .{
-                                @typeName(field_info.field_type),
+                                @typeName(field_info.type),
                             });
                             @compileError(err_msg);
                         },
@@ -610,7 +609,7 @@ pub fn ComponentStorage(comptime types: []const type) type {
         var num_buf: [8]u8 = undefined;
         struct_fields[i] = .{
             .name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable,
-            .field_type = if (@sizeOf(T) > 0) ArrT else T,
+            .type = if (@sizeOf(T) > 0) ArrT else T,
             .default_value = null,
             .is_comptime = false,
             .alignment = if (@sizeOf(T) > 0) @alignOf(ArrT) else 0,
@@ -640,7 +639,7 @@ pub fn countRelevantStructuresContainingTs(comptime structures: []const type, co
         comptime var matched = 0;
         inline for (s_info.Struct.fields) |field| {
             inner: inline for (t) |T| {
-                if (T == field.field_type) {
+                if (T == field.type) {
                     matched += 1;
                     break :inner;
                 }
@@ -668,7 +667,7 @@ pub fn indexOfStructuresContainingTs(
         comptime var matched = 0;
         inline for (s_info.Struct.fields) |field| {
             inner: inline for (t) |T| {
-                if (T == field.field_type) {
+                if (T == field.type) {
                     matched += 1;
                     break :inner;
                 }
@@ -706,7 +705,7 @@ pub fn countTypeMapIndices(comptime type_tuple: anytype, comptime runtime_tuple_
             @compileError("expected type tuple to only have types");
         }
         inline for (runtime_struct_info.fields) |runtime_field| {
-            if (type_tuple[i] == runtime_field.field_type) {
+            if (type_tuple[i] == runtime_field.type) {
                 counter += 1;
                 continue :outer;
             }
@@ -727,7 +726,7 @@ pub fn typeMap(comptime type_tuple: anytype, comptime runtime_tuple_type: type) 
     var map: [rtr_array_size]comptime_int = undefined;
     inline for (type_tuple_info.fields) |_, i| {
         inline for (runtime_struct_info.fields) |runtime_field, j| {
-            if (type_tuple[i] == runtime_field.field_type) {
+            if (type_tuple[i] == runtime_field.type) {
                 map[i] = j;
             }
         }
@@ -796,13 +795,13 @@ pub fn SharedStateStorage(comptime shared_state: anytype) type {
         var num_buf: [8]u8 = undefined;
         const str_i = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable;
 
-        if (@typeInfo(field.field_type) != .Type) {
+        if (@typeInfo(field.type) != .Type) {
             @compileError("expected shared state field " ++ str_i ++ " to be a type, was " ++ @typeName(shared_state[i]));
         }
         const ActualStoredSharedState = SharedState(shared_state[i]);
         storage_fields[i] = Type.StructField{
             .name = str_i,
-            .field_type = ActualStoredSharedState,
+            .type = ActualStoredSharedState,
             .default_value = null,
             .is_comptime = false,
             .alignment = @alignOf(ActualStoredSharedState),
@@ -836,7 +835,7 @@ pub fn SharedState(comptime State: type) type {
     const default_value: u8 = 0;
     shared_state_fields[state_info.fields.len] = Type.StructField{
         .name = shared_secret_field,
-        .field_type = u8,
+        .type = u8,
         .default_value = @ptrCast(?*const anyopaque, &default_value),
         .is_comptime = true,
         .alignment = 0,
@@ -868,7 +867,7 @@ pub fn EventArgument(comptime Argument: type) type {
     const default_value: u8 = 0;
     shared_state_fields[state_info.fields.len] = Type.StructField{
         .name = event_argument_secret_field,
-        .field_type = u8,
+        .type = u8,
         .default_value = @ptrCast(?*const anyopaque, &default_value),
         .is_comptime = true,
         .alignment = 0,
@@ -941,11 +940,11 @@ test "SystemMetadata componentQueryArgTypes results in queryable types" {
     };
 
     inline for (metadatas) |metadata| {
-        const args = metadata.componentQueryArgTypes();
+        const params = metadata.componentQueryArgTypes();
 
-        try testing.expectEqual(args.len, 2);
-        try testing.expectEqual(A, args[0]);
-        try testing.expectEqual(B, args[1]);
+        try testing.expectEqual(params.len, 2);
+        try testing.expectEqual(A, params[0]);
+        try testing.expectEqual(B, params[1]);
     }
 }
 
@@ -977,19 +976,19 @@ test "SystemMetadata paramArgTypes results in pointer types" {
     };
 
     {
-        const args = metadatas[0].paramArgTypes();
-        try testing.expectEqual(A, args[0]);
-        try testing.expectEqual(B, args[1]);
+        const params = metadatas[0].paramArgTypes();
+        try testing.expectEqual(A, params[0]);
+        try testing.expectEqual(B, params[1]);
     }
     {
-        const args = metadatas[1].paramArgTypes();
-        try testing.expectEqual(*A, args[0]);
-        try testing.expectEqual(B, args[1]);
+        const params = metadatas[1].paramArgTypes();
+        try testing.expectEqual(*A, params[0]);
+        try testing.expectEqual(B, params[1]);
     }
     {
-        const args = metadatas[2].paramArgTypes();
-        try testing.expectEqual(A, args[0]);
-        try testing.expectEqual(*B, args[1]);
+        const params = metadatas[2].paramArgTypes();
+        try testing.expectEqual(A, params[0]);
+        try testing.expectEqual(*B, params[1]);
     }
 }
 
@@ -1076,9 +1075,9 @@ test "createSystemInfo generate accurate system information" {
     try testing.expectEqual(3, info.functions.len);
     try testing.expectEqual(3, info.metadata.len);
 
-    try testing.expectEqual(1, info.metadata[0].args.len);
-    try testing.expectEqual(1, info.metadata[1].args.len);
-    try testing.expectEqual(1, info.metadata[2].args.len);
+    try testing.expectEqual(1, info.metadata[0].params.len);
+    try testing.expectEqual(1, info.metadata[1].params.len);
+    try testing.expectEqual(1, info.metadata[2].params.len);
 
     const hello_ptr = @ptrCast(*const info.function_types[1], info.functions[1]);
     var a: A = .{ .a = 0 };

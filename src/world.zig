@@ -108,7 +108,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
             var num_buf: [8]u8 = undefined;
             field.* = Type.StructField{
                 .name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable,
-                .field_type = EventCacheStorage,
+                .type = EventCacheStorage,
                 .default_value = null,
                 .is_comptime = false,
                 .alignment = @alignOf(EventCacheStorage),
@@ -131,7 +131,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
             var num_buf: [8]u8 = undefined;
             field.* = Type.StructField{
                 .name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable,
-                .field_type = [event_system_count]JobId,
+                .type = [event_system_count]JobId,
                 .default_value = null,
                 .is_comptime = false,
                 .alignment = @alignOf([event_system_count]JobId),
@@ -191,7 +191,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
             {
                 const event_cache_storages_info = @typeInfo(EventCacheStorages).Struct;
                 inline for (event_cache_storages_info.fields) |field, i| {
-                    event_cache_storages[i] = field.field_type.init();
+                    event_cache_storages[i] = field.type.init();
                 }
             }
 
@@ -241,17 +241,11 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
             const zone = ztracy.ZoneNC(@src(), "World createEntity", Color.world);
             defer zone.End();
 
-            var entity: Entity = undefined;
-            var new_archetype_created: bool = undefined;
-            {
-                var result = try self.container.createEntity(entity_state);
-                entity = result[1];
-                new_archetype_created = result[0];
+            var create_result = try self.container.createEntity(entity_state);
+            if (create_result.new_archetype_container) {
+                self.markAllCacheMasks(create_result.entity);
             }
-            if (new_archetype_created) {
-                self.markAllCacheMasks(entity);
-            }
-            return entity;
+            return create_result.entity;
         }
 
         /// Reassign a component value owned by entity
@@ -465,7 +459,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
         fn indexOfSharedType(comptime Shared: type) comptime_int {
             const shared_storage_fields = @typeInfo(SharedStateStorage).Struct.fields;
             inline for (shared_storage_fields) |field, i| {
-                if (field.field_type == Shared) {
+                if (field.type == Shared) {
                     return i;
                 }
             }
@@ -507,7 +501,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                         while (i < storage.inner_len) : (i += 1) {
                             var arguments: std.meta.Tuple(&param_types) = undefined;
                             inline for (param_types) |Param, j| {
-                                switch (metadata.args[j]) {
+                                switch (metadata.params[j]) {
                                     .component_value => {
                                         // get size of the parameter type
                                         const param_size = @sizeOf(Param);
@@ -575,7 +569,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                         while (i < storage.inner_len) : (i += 1) {
                             var arguments: std.meta.Tuple(&param_types) = undefined;
                             inline for (param_types) |Param, j| {
-                                switch (metadata.args[j]) {
+                                switch (metadata.params[j]) {
                                     .component_value => {
                                         // get size of the parameter type
                                         const param_size = @sizeOf(Param);
@@ -600,7 +594,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                                             arguments[j] = &component_query_types[j]{};
                                         }
                                     },
-                                    .event_argument_value => arguments[j] = @bitCast(meta.EventArgument(ExtraArgumentType), self_job.extra_argument),
+                                    .event_argument_value => arguments[j] = @ptrCast(*meta.EventArgument(ExtraArgumentType), &self_job.extra_argument).*,
                                     .shared_state_value => arguments[j] = self_job.world.getSharedStateWithSharedStateType(Param),
                                     .shared_state_ptr => arguments[j] = self_job.world.getSharedStatePtrWithSharedStateType(Param),
                                     .view => @compileError("view not implemented yet"),
@@ -631,25 +625,54 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
 }
 
 // Workaround see issue #5170 : https://github.com/ziglang/zig/issues/5170
-fn callWrapper(func: anytype, args: anytype) void {
-    @call(.{}, func, args);
+inline fn callWrapper(func: anytype, params: anytype) void {
+    @call(.always_inline, func, params);
 }
 
 // Workaround see issue #5170 : https://github.com/ziglang/zig/issues/5170
-fn failableCallWrapper(func: anytype, args: anytype) !void {
-    try @call(.{}, func, args);
+inline fn failableCallWrapper(func: anytype, params: anytype) !void {
+    try @call(.always_inline, func, params);
 }
 
 // world without systems
 const WorldStub = WorldBuilder().WithComponents(Testing.AllComponentsTuple);
 
+// TODO: we cant use tuples here becuase of https://github.com/ziglang/zig/issues/12963
+//       when this is resolve, the git history can be checked on how you should initialize an entity
+const AEntityType = struct {
+    a: Testing.Component.A,
+};
+const BEntityType = struct {
+    b: Testing.Component.B,
+};
+const AbEntityType = struct {
+    a: Testing.Component.A,
+    b: Testing.Component.B,
+};
+const AcEntityType = struct {
+    a: Testing.Component.A,
+    c: Testing.Component.C,
+};
+const BcEntityType = struct {
+    b: Testing.Component.B,
+    c: Testing.Component.C,
+};
+const AbcEntityType = struct {
+    a: Testing.Component.A,
+    b: Testing.Component.B,
+    c: Testing.Component.C,
+};
+
 test "init() + deinit() is idempotent" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    const entity0 = try world.createEntity(.{Testing.Component.A{}});
+    const initial_state = AEntityType{
+        .a = Testing.Component.A{},
+    };
+    const entity0 = try world.createEntity(initial_state);
     try testing.expectEqual(entity0.id, 0);
-    const entity1 = try world.createEntity(.{Testing.Component.A{}});
+    const entity1 = try world.createEntity(initial_state);
     try testing.expectEqual(entity1.id, 1);
 }
 
@@ -657,7 +680,12 @@ test "setComponent() component moves entity to correct archetype" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    const entity1 = try world.createEntity(.{Testing.Component.A{}});
+    const entity1 = blk: {
+        const initial_state = AEntityType{
+            .a = Testing.Component.A{},
+        };
+        break :blk try world.createEntity(initial_state);
+    };
 
     const a = Testing.Component.A{ .value = 123 };
     try world.setComponent(entity1, a);
@@ -677,7 +705,11 @@ test "setComponent() update entities component state" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    const entity = try world.createEntity(.{ Testing.Component.A{}, Testing.Component.B{} });
+    const initial_state = AbEntityType{
+        .a = Testing.Component.A{},
+        .b = Testing.Component.B{},
+    };
+    const entity = try world.createEntity(initial_state);
 
     const a = Testing.Component.A{ .value = 123 };
     try world.setComponent(entity, a);
@@ -690,7 +722,11 @@ test "removeComponent() removes the component as expected" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    const entity = try world.createEntity(.{ Testing.Component.B{}, Testing.Component.C{} });
+    const initial_state = BcEntityType{
+        .b = Testing.Component.B{},
+        .c = Testing.Component.C{},
+    };
+    const entity = try world.createEntity(initial_state);
 
     try world.setComponent(entity, Testing.Component.A{});
     try testing.expectEqual(true, world.hasComponent(entity, Testing.Component.A));
@@ -708,7 +744,11 @@ test "hasComponent() responds as expected" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    const entity = try world.createEntity(.{ Testing.Component.A{}, Testing.Component.C{} });
+    const initial_state = AcEntityType{
+        .a = Testing.Component.A{},
+        .c = Testing.Component.C{},
+    };
+    const entity = try world.createEntity(initial_state);
 
     try testing.expectEqual(true, world.hasComponent(entity, Testing.Component.A));
     try testing.expectEqual(false, world.hasComponent(entity, Testing.Component.B));
@@ -718,17 +758,28 @@ test "getComponent() retrieve component value" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    _ = try world.createEntity(.{Testing.Component.A{ .value = 0 }});
-    _ = try world.createEntity(.{Testing.Component.A{ .value = 1 }});
-    _ = try world.createEntity(.{Testing.Component.A{ .value = 2 }});
+    var initial_state = AEntityType{
+        .a = Testing.Component.A{ .value = 0 },
+    };
+    _ = try world.createEntity(initial_state);
 
-    const a = Testing.Component.A{ .value = 123 };
-    const entity = try world.createEntity(.{a});
+    initial_state.a = Testing.Component.A{ .value = 1 };
+    _ = try world.createEntity(initial_state);
 
-    _ = try world.createEntity(.{Testing.Component.A{ .value = 3 }});
-    _ = try world.createEntity(.{Testing.Component.A{ .value = 4 }});
+    initial_state.a = Testing.Component.A{ .value = 2 };
+    _ = try world.createEntity(initial_state);
 
-    try testing.expectEqual(a, try world.getComponent(entity, Testing.Component.A));
+    const entity_initial_state = AEntityType{
+        .a = Testing.Component.A{ .value = 123 },
+    };
+    const entity = try world.createEntity(entity_initial_state);
+
+    initial_state.a = Testing.Component.A{ .value = 3 };
+    _ = try world.createEntity(initial_state);
+    initial_state.a = Testing.Component.A{ .value = 4 };
+    _ = try world.createEntity(initial_state);
+
+    try testing.expectEqual(entity_initial_state.a, try world.getComponent(entity, Testing.Component.A));
 }
 
 test "getSharedState retrieve state" {
@@ -760,10 +811,11 @@ test "event can mutate components" {
     var world = try WorldStub.WithEvents(.{Event("onFoo", .{SystemStruct}, .{})}).init(testing.allocator, .{});
     defer world.deinit();
 
-    const entity = try world.createEntity(.{
-        Testing.Component.A{ .value = 1 },
-        Testing.Component.B{ .value = 2 },
-    });
+    const initial_state = AbEntityType{
+        .a = Testing.Component.A{ .value = 1 },
+        .b = Testing.Component.B{ .value = 2 },
+    };
+    const entity = try world.createEntity(initial_state);
 
     try world.triggerEvent(.onFoo, .{});
     world.waitEvent(.onFoo);
@@ -785,11 +837,12 @@ test "event parameter order is independent" {
     var world = try WorldStub.WithEvents(.{Event("onFoo", .{SystemStruct}, .{})}).init(testing.allocator, .{});
     defer world.deinit();
 
-    const entity = try world.createEntity(.{
-        Testing.Component.A{ .value = 1 },
-        Testing.Component.B{ .value = 2 },
-        Testing.Component.C{},
-    });
+    const initial_state = AbcEntityType{
+        .a = Testing.Component.A{ .value = 1 },
+        .b = Testing.Component.B{ .value = 2 },
+        .c = Testing.Component.C{},
+    };
+    const entity = try world.createEntity(initial_state);
 
     try world.triggerEvent(.onFoo, .{});
     world.waitEvent(.onFoo);
@@ -830,9 +883,10 @@ test "events can be registered through struct or individual function(s)" {
     }).init(testing.allocator, .{});
     defer world.deinit();
 
-    const entity = try world.createEntity(.{Testing.Component.A{
-        .value = 0,
-    }});
+    const initial_state = AEntityType{
+        .a = Testing.Component.A{ .value = 0 },
+    };
+    const entity = try world.createEntity(initial_state);
 
     try world.triggerEvent(.onFoo, .{});
     world.waitEvent(.onFoo);
@@ -868,14 +922,20 @@ test "events call systems" {
     var world = try World.init(testing.allocator, .{});
     defer world.deinit();
 
-    const entity1 = try world.createEntity(.{ Testing.Component.A{
-        .value = 0,
-    }, Testing.Component.B{
-        .value = 0,
-    } });
-    const entity2 = try world.createEntity(.{Testing.Component.A{
-        .value = 2,
-    }});
+    const entity1 = blk: {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 0 },
+            .b = Testing.Component.B{ .value = 0 },
+        };
+        break :blk try world.createEntity(initial_state);
+    };
+
+    const entity2 = blk: {
+        const initial_state = AEntityType{
+            .a = Testing.Component.A{ .value = 2 },
+        };
+        break :blk try world.createEntity(initial_state);
+    };
 
     try world.triggerEvent(.onFoo, .{});
     world.waitEvent(.onFoo);
@@ -911,7 +971,7 @@ test "events can access shared state" {
     // define a system type
     const SystemType = struct {
         pub fn systemOne(a: *A, shared: SharedState(A)) void {
-            a.* = @bitCast(A, shared);
+            a.*.value = shared.value;
         }
     };
 
@@ -922,7 +982,10 @@ test "events can access shared state" {
 
     defer world.deinit();
 
-    const entity = try world.createEntity(.{A{ .value = 0 }});
+    const initial_state = AEntityType{
+        .a = Testing.Component.A{ .value = 0 },
+    };
+    const entity = try world.createEntity(initial_state);
     try world.triggerEvent(.onFoo, .{});
     world.waitEvent(.onFoo);
 
@@ -947,7 +1010,10 @@ test "events can mutate shared state" {
 
     defer world.deinit();
 
-    _ = try world.createEntity(.{Testing.Component.A{}});
+    const initial_state = AEntityType{
+        .a = .{},
+    };
+    _ = try world.createEntity(initial_state);
 
     try world.triggerEvent(.onFoo, .{});
     world.waitEvent(.onFoo);
@@ -1006,8 +1072,14 @@ test "event can have many shared state" {
     });
     defer world.deinit();
 
-    const entity_a = try world.createEntity(.{A{ .value = 0 }});
-    const entity_b = try world.createEntity(.{B{ .value = 0 }});
+    const initial_state_a = AEntityType{
+        .a = .{ .value = 0 },
+    };
+    const entity_a = try world.createEntity(initial_state_a);
+    const initial_state_b = BEntityType{
+        .b = .{ .value = 0 },
+    };
+    const entity_b = try world.createEntity(initial_state_b);
 
     try world.triggerEvent(.onFoo, .{});
     world.waitEvent(.onFoo);
@@ -1031,7 +1103,10 @@ test "events can accepts event related data" {
 
     defer world.deinit();
 
-    const entity = try world.createEntity(.{Testing.Component.A{ .value = 0 }});
+    const initial_state = AEntityType{
+        .a = .{ .value = 0 },
+    };
+    const entity = try world.createEntity(initial_state);
 
     try world.triggerEvent(.onFoo, MouseInput{ .x = 40, .y = 2 });
     world.waitEvent(.onFoo);
@@ -1059,7 +1134,12 @@ test "event cache works" {
     }).init(testing.allocator, .{});
     defer world.deinit();
 
-    const entity1 = try world.createEntity(.{Testing.Component.A{ .value = 0 }});
+    const entity1 = blk: {
+        const initial_state = AEntityType{
+            .a = .{ .value = 0 },
+        };
+        break :blk try world.createEntity(initial_state);
+    };
 
     try world.triggerEvent(.onEvent1, .{});
     world.waitEvent(.onEvent1);
@@ -1087,11 +1167,14 @@ test "event cache works" {
         Testing.Component.B,
     ));
 
-    const entity2 = try world.createEntity(.{
-        Testing.Component.A{ .value = 0 },
-        Testing.Component.B{ .value = 0 },
-        Testing.Component.C{},
-    });
+    const entity2 = blk: {
+        const initial_state = AbcEntityType{
+            .a = .{ .value = 0 },
+            .b = .{ .value = 0 },
+            .c = .{},
+        };
+        break :blk try world.createEntity(initial_state);
+    };
 
     try world.triggerEvent(.onEvent1, .{});
     world.waitEvent(.onEvent1);
@@ -1147,11 +1230,12 @@ test "DependOn makes a events race free" {
     const entity_count = 10_000;
     var entities: [entity_count]Entity = undefined;
 
+    const inital_state = AbEntityType{
+        .a = .{ .value = 3 },
+        .b = .{ .value = 2 },
+    };
     for (entities) |*entity| {
-        entity.* = try world.createEntity(.{
-            Testing.Component.A{ .value = 3 },
-            Testing.Component.B{ .value = 2 },
-        });
+        entity.* = try world.createEntity(inital_state);
     }
 
     try world.triggerEvent(.onEvent, .{});
@@ -1199,11 +1283,12 @@ test "Event DependOn events can have multiple dependencies" {
     const entity_count = 100;
     var entities: [entity_count]Entity = undefined;
 
+    const inital_state = AbEntityType{
+        .a = .{ .value = 3 },
+        .b = .{ .value = 2 },
+    };
     for (entities) |*entity| {
-        entity.* = try world.createEntity(.{
-            Testing.Component.A{ .value = 3 },
-            Testing.Component.B{ .value = 2 },
-        });
+        entity.* = try world.createEntity(inital_state);
     }
 
     try world.triggerEvent(.onFoo, .{});
