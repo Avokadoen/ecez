@@ -417,12 +417,12 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
         }
 
         /// get a shared state using the inner type
-        pub fn getSharedState(self: *World, comptime T: type) meta.SharedState(T) {
+        pub fn getSharedState(self: World, comptime T: type) meta.SharedState(T) {
             return self.getSharedStateWithSharedStateType(meta.SharedState(T));
         }
 
         /// get a shared state using ecez.SharedState(InnerType) retrieve it's current value
-        pub fn getSharedStateWithSharedStateType(self: *World, comptime T: type) T {
+        pub fn getSharedStateWithSharedStateType(self: World, comptime T: type) T {
             const index = indexOfSharedType(T);
             return self.shared_state[index];
         }
