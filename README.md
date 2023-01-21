@@ -50,7 +50,7 @@ var world = try ecez.WorldBuilder().WithComponents(.{
         }, .{})
     }).init(allocator, .{});
 
-try world.triggerEvent(.update_loop);
+try world.triggerEvent(.update_loop, .{});
 ```
 
 ### Implicit multithreading of systems
@@ -100,10 +100,10 @@ Currently the project has one simple example in the [example folder](https://git
 
 ### Test Driven Development
 
-The code base also utilize TDD to ensure a certain level of robustness, altough I can assure you that there are many bugs to find yet! ;)
+The codebase also utilize TDD to ensure a certain level of robustness, altough I can assure you that there are many bugs to find yet! ;)
 
 ### Planned
 
 Please see the issues for planned features.
 
-Some key features include queries with iterators and implicit (but configurable) multithreading 
+Some key features include queries with iterators
