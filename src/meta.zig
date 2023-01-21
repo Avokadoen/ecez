@@ -844,7 +844,7 @@ pub fn SharedState(comptime State: type) type {
     return @Type(Type{ .Struct = .{
         .layout = state_info.layout,
         .fields = &shared_state_fields,
-        .decls = state_info.decls,
+        .decls = &[0]Type.Declaration{},
         .is_tuple = state_info.is_tuple,
     } });
 }

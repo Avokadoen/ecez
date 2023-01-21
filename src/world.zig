@@ -676,6 +676,19 @@ test "init() + deinit() is idempotent" {
     try testing.expectEqual(entity1.id, 1);
 }
 
+test "createEntity() can create empty entities" {
+    var world = try WorldStub.init(testing.allocator, .{});
+    defer world.deinit();
+
+    const entity = try world.createEntity(.{});
+    try testing.expectEqual(false, world.hasComponent(entity, Testing.Component.A));
+
+    const a = Testing.Component.A{ .value = 123 };
+    try world.setComponent(entity, a);
+
+    try testing.expectEqual(a.value, (try world.getComponent(entity, Testing.Component.A)).value);
+}
+
 test "setComponent() component moves entity to correct archetype" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
@@ -738,6 +751,19 @@ test "removeComponent() removes the component as expected" {
 
     try world.removeComponent(entity, Testing.Component.B);
     try testing.expectEqual(false, world.hasComponent(entity, Testing.Component.B));
+}
+
+test "removeComponent() removes all components from entity" {
+    var world = try WorldStub.init(testing.allocator, .{});
+    defer world.deinit();
+
+    const initial_state = AEntityType{
+        .a = Testing.Component.A{},
+    };
+    const entity = try world.createEntity(initial_state);
+
+    try world.removeComponent(entity, Testing.Component.A);
+    try testing.expectEqual(false, world.hasComponent(entity, Testing.Component.A));
 }
 
 test "hasComponent() responds as expected" {

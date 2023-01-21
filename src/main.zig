@@ -1,4 +1,11 @@
-pub const WorldBuilder = @import("world.zig").WorldBuilder;
+// TODO: submit to repo
+const world = @import("world.zig");
+pub const WorldBuilder = world.WorldBuilder;
+
+const entity_type = @import("entity_type.zig");
+pub const Entity = entity_type.Entity;
+pub const EntityId = entity_type.EntityId;
+pub const EntityRef = entity_type.EntityRef;
 
 const meta = @import("meta.zig");
 pub const DependOn = meta.DependOn;

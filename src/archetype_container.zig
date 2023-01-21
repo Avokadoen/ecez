@@ -251,7 +251,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         };
         /// create a new entity and supply it an initial state
         /// Parameters:
-        ///     - inital_state: the initial state of the entity, this must be a registered archetype
+        ///     - inital_state: the initial components of the entity
         ///
         /// Returns: A bool indicating if a new archetype has been made, and the entity
         pub inline fn createEntity(self: *ArcheContainer, initial_state: anytype) StorageError!CreateEntityResult {
@@ -267,149 +267,23 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 break :blk info.Struct;
             };
 
-            const TypeMap = struct {
-                hash: u64,
-                state_index: usize,
-                component_index: u16,
-            };
+            // create new entity
+            const entity = Entity{ .id = @intCast(u32, self.entity_references.items.len) };
 
-            const index_path = comptime blk1: {
-                var path: [arche_struct_info.fields.len]TypeMap = undefined;
-                var sort: [arche_struct_info.fields.len]Sort = undefined;
-                inline for (arche_struct_info.fields) |field, i| {
-                    // find index of field in outer component array
-                    const component_index = blk2: {
-                        inline for (component_info) |component, j| {
-                            if (field.type == component.type) {
-                                break :blk2 @intCast(u15, j);
-                            }
-                        }
-                        @compileError(@typeName(field.type) ++ " is not a registered component type");
-                    };
-
-                    path[i] = TypeMap{
-                        .hash = hashType(field.type),
-                        .state_index = i,
-                        .component_index = component_index,
-                    };
-                    sort[i] = .{ .hash = path[i].hash };
-                }
-                // sort based on hash
-                ecez_query.sort(Sort, &sort);
-
-                // sort path based on hash
-                for (sort) |s, j| {
-                    for (path) |p, k| {
-                        if (s.hash == p.hash) {
-                            std.mem.swap(TypeMap, &path[j], &path[k]);
-                        }
-                    }
-                }
-                break :blk1 path;
-            };
-
-            // TODO: errdefer deinit allocations!
-            // get the node that will store the new entity
-            var entity_node: *Node = blk: {
-                var current_node = &self.root_node;
-                for (index_path[0 .. index_path.len - 1]) |path, depth| {
-                    const index = path.component_index - depth;
-                    // see if our new node exist
-                    if (current_node.children[index]) |*child| {
-                        // set target child node as current node
-                        current_node = child;
-                    } else {
-                        // create new node and set it as current node
-                        current_node.children[index] = try Node.init(
-                            self.allocator,
-                            current_node.children.len - 1,
-                            self.archetype_paths.items.len,
-                        );
-                        current_node = &(current_node.children[index].?);
-
-                        // register new node path
-                        var archetype_path = ArchetypePath{
-                            .len = depth + 1,
-                            .indices = undefined,
-                        };
-                        for (index_path[0..archetype_path.len]) |sub_path, i| {
-                            archetype_path.indices[i] = sub_path.component_index - @intCast(u15, i);
-                        }
-                        try self.archetype_paths.append(archetype_path);
-                    }
-                }
-                break :blk current_node;
-            };
-
-            // create a component byte data view
-            const fields = @typeInfo(ArchetypeStruct).Struct.fields;
-            var data: [arche_struct_info.fields.len][]const u8 = undefined;
-            inline for (index_path) |path, i| {
-                if (@sizeOf(fields[path.state_index].type) > 0) {
-                    const field = &@field(initial_state, fields[path.state_index].name);
-                    data[i] = std.mem.asBytes(field);
-                } else {
-                    data[i] = &self.empty_bytes;
-                }
+            // if no initial_state
+            if (arche_struct_info.fields.len == 0) {
+                // register a void reference to able to locate empty entity
+                try self.entity_references.append(EntityRef.void);
+                return CreateEntityResult{
+                    .new_archetype_container = false,
+                    .entity = entity,
+                };
             }
 
-            // create new entity
-            const entity = Entity{ .id = self.entity_references.items.len };
-            var new_archetype: bool = undefined;
-
-            // get the index of the archetype in the node
-            const archetype_index = index_path[index_path.len - 1].component_index - (index_path.len - 1);
-            const path_index = blk1: {
-                if (entity_node.archetypes[archetype_index]) |*arche| {
-                    try arche.archetype.rawRegisterEntity(entity, &data);
-                    new_archetype = false;
-                    break :blk1 arche.path_index;
-                } else {
-                    // register archetype path
-                    const arche_path_index = self.archetype_paths.items.len;
-                    {
-                        var archetype_path = ArchetypePath{
-                            .len = index_path.len,
-                            .indices = undefined,
-                        };
-                        for (index_path) |sub_path, i| {
-                            archetype_path.indices[i] = sub_path.component_index - @intCast(u15, i);
-                        }
-                        try self.archetype_paths.append(archetype_path);
-                    }
-                    errdefer _ = self.archetype_paths.pop();
-
-                    comptime var type_hashes: [index_path.len]u64 = undefined;
-                    comptime var type_sizes: [index_path.len]usize = undefined;
-                    inline for (index_path) |path, i| {
-                        const Component = fields[path.state_index].type;
-                        type_hashes[i] = comptime ecez_query.hashType(Component);
-                        type_sizes[i] = @sizeOf(Component);
-                    }
-
-                    // create new opaque archetype
-                    entity_node.archetypes[archetype_index] = Node.Arch{
-                        .path_index = arche_path_index,
-                        .archetype = OpaqueArchetype.init(self.allocator, &type_hashes, &type_sizes) catch {
-                            return error.OutOfMemory;
-                        },
-                    };
-                    // register entity in the new archetype
-                    try entity_node.archetypes[archetype_index].?.archetype.rawRegisterEntity(entity, &data);
-
-                    new_archetype = true;
-                    break :blk1 arche_path_index;
-                }
-            };
-
-            // register a new component reference to able to locate entity
-            try self.entity_references.append(EntityRef{
-                .type_index = @intCast(u15, path_index),
-            });
-            errdefer _ = self.entity_references.pop();
-
+            // if some initial state, then we initialize the storage needed
+            const new_archetype_created = try self.initializeEntityStorage(entity, .create_new_ref, initial_state);
             return CreateEntityResult{
-                .new_archetype_container = new_archetype,
+                .new_archetype_container = new_archetype_created,
                 .entity = entity,
             };
         }
@@ -556,6 +430,14 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                         },
                     }
                 }
+            } else {
+                // workaround for https://github.com/ziglang/zig/issues/12963
+                const T = std.meta.Tuple(&[_]type{@TypeOf(component)});
+                var t: T = undefined;
+                t[0] = component;
+
+                // this entity has no previous storage, initialize some if needed
+                return self.initializeEntityStorage(entity, .reassign_existing_ref, t);
             }
             return false;
         }
@@ -737,6 +619,178 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             defer zone.End();
             const node = self.getArchetypeWithEntity(entity) orelse return error.ComponentMissing;
             return node.archetype.getComponent(entity, Component);
+        }
+
+        const RefHandling = enum {
+            create_new_ref,
+            reassign_existing_ref,
+        };
+        /// This function can initialize the storage for
+        inline fn initializeEntityStorage(self: *ArcheContainer, entity: Entity, entity_ref_handling: RefHandling, initial_state: anytype) StorageError!bool {
+            const zone = ztracy.ZoneNC(@src(), "Container createEntity", Color.arche_container);
+            defer zone.End();
+
+            const ArchetypeStruct = @TypeOf(initial_state);
+            const arche_struct_info = blk: {
+                const info = @typeInfo(ArchetypeStruct);
+                if (info != .Struct) {
+                    @compileError("expected initial_state to be of type struct");
+                }
+                break :blk info.Struct;
+            };
+            if (arche_struct_info.fields.len == 0) {
+                // no storage should be created if initial state is empty
+                @compileError("called initializeEntityStorage with empty initial_state is illegal");
+            }
+
+            const TypeMap = struct {
+                hash: u64,
+                state_index: usize,
+                component_index: u16,
+            };
+
+            const index_path = comptime blk1: {
+                var path: [arche_struct_info.fields.len]TypeMap = undefined;
+                var sort: [arche_struct_info.fields.len]Sort = undefined;
+                inline for (arche_struct_info.fields) |field, i| {
+                    // find index of field in outer component array
+                    const component_index = blk2: {
+                        inline for (component_info) |component, j| {
+                            if (field.type == component.type) {
+                                break :blk2 @intCast(u15, j);
+                            }
+                        }
+                        @compileError(@typeName(field.type) ++ " is not a registered component type");
+                    };
+
+                    path[i] = TypeMap{
+                        .hash = hashType(field.type),
+                        .state_index = i,
+                        .component_index = component_index,
+                    };
+                    sort[i] = .{ .hash = path[i].hash };
+                }
+                // sort based on hash
+                ecez_query.sort(Sort, &sort);
+
+                // sort path based on hash
+                for (sort) |s, j| {
+                    for (path) |p, k| {
+                        if (s.hash == p.hash) {
+                            std.mem.swap(TypeMap, &path[j], &path[k]);
+                        }
+                    }
+                }
+                break :blk1 path;
+            };
+
+            // TODO: errdefer deinit allocations!
+            // get the node that will store the new entity
+            var entity_node: *Node = blk: {
+                var current_node = &self.root_node;
+                for (index_path[0 .. index_path.len - 1]) |path, depth| {
+                    const index = path.component_index - depth;
+                    // see if our new node exist
+                    if (current_node.children[index]) |*child| {
+                        // set target child node as current node
+                        current_node = child;
+                    } else {
+                        // create new node and set it as current node
+                        current_node.children[index] = try Node.init(
+                            self.allocator,
+                            current_node.children.len - 1,
+                            self.archetype_paths.items.len,
+                        );
+                        current_node = &(current_node.children[index].?);
+
+                        // register new node path
+                        var archetype_path = ArchetypePath{
+                            .len = depth + 1,
+                            .indices = undefined,
+                        };
+                        for (index_path[0..archetype_path.len]) |sub_path, i| {
+                            archetype_path.indices[i] = sub_path.component_index - @intCast(u15, i);
+                        }
+                        try self.archetype_paths.append(archetype_path);
+                    }
+                }
+                break :blk current_node;
+            };
+
+            // create a component byte data view
+            const fields = @typeInfo(ArchetypeStruct).Struct.fields;
+            var data: [arche_struct_info.fields.len][]const u8 = undefined;
+            inline for (index_path) |path, i| {
+                if (@sizeOf(fields[path.state_index].type) > 0) {
+                    const field = &@field(initial_state, fields[path.state_index].name);
+                    data[i] = std.mem.asBytes(field);
+                } else {
+                    data[i] = &self.empty_bytes;
+                }
+            }
+
+            var new_archetype_created: bool = undefined;
+            // get the index of the archetype in the node
+            const archetype_index = index_path[index_path.len - 1].component_index - (index_path.len - 1);
+            const path_index = blk1: {
+                if (entity_node.archetypes[archetype_index]) |*arche| {
+                    try arche.archetype.rawRegisterEntity(entity, &data);
+                    new_archetype_created = false;
+                    break :blk1 arche.path_index;
+                } else {
+                    // register archetype path
+                    const arche_path_index = self.archetype_paths.items.len;
+                    {
+                        var archetype_path = ArchetypePath{
+                            .len = index_path.len,
+                            .indices = undefined,
+                        };
+                        for (index_path) |sub_path, i| {
+                            archetype_path.indices[i] = sub_path.component_index - @intCast(u15, i);
+                        }
+                        try self.archetype_paths.append(archetype_path);
+                    }
+                    errdefer _ = self.archetype_paths.pop();
+
+                    comptime var type_hashes: [index_path.len]u64 = undefined;
+                    comptime var type_sizes: [index_path.len]usize = undefined;
+                    inline for (index_path) |path, i| {
+                        const Component = fields[path.state_index].type;
+                        type_hashes[i] = comptime ecez_query.hashType(Component);
+                        type_sizes[i] = @sizeOf(Component);
+                    }
+
+                    // create new opaque archetype
+                    entity_node.archetypes[archetype_index] = Node.Arch{
+                        .path_index = arche_path_index,
+                        .archetype = OpaqueArchetype.init(self.allocator, &type_hashes, &type_sizes) catch {
+                            return error.OutOfMemory;
+                        },
+                    };
+                    // register entity in the new archetype
+                    try entity_node.archetypes[archetype_index].?.archetype.rawRegisterEntity(entity, &data);
+
+                    new_archetype_created = true;
+                    break :blk1 arche_path_index;
+                }
+            };
+
+            // register a reference to able to locate entity
+            const new_ref = EntityRef{
+                .type_index = @intCast(u15, path_index),
+            };
+            if (entity_ref_handling == .create_new_ref) {
+                try self.entity_references.append(new_ref);
+            } else {
+                self.entity_references.items[entity.id] = new_ref;
+            }
+            errdefer {
+                if (entity_ref_handling == .create_new_ref) {
+                    _ = self.entity_references.pop();
+                }
+            }
+
+            return new_archetype_created;
         }
 
         inline fn getArchetypeWithEntity(self: ArcheContainer, entity: Entity) ?*Node.Arch {

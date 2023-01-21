@@ -1,11 +1,11 @@
-pub const EntityId = usize;
+pub const EntityId = u32;
 pub const Entity = struct {
     id: EntityId,
 };
 
 /// used to retrieve a specific entity
 pub const EntityRef = union(enum) {
-    @"void",
+    void,
     type_index: u15,
 };
 
