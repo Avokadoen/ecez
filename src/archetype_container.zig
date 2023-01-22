@@ -128,6 +128,11 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 std.debug.assert(some_path.len > 0);
 
                 if (some_path.len > 1) {
+                    // if desired path contains a step that is not part of the next step
+                    if (some_path[0] < depth) {
+                        return;
+                    }
+
                     for (self.children) |maybe_child, i| {
                         if (maybe_child) |child| {
                             // if the path index is the current loop index

@@ -624,14 +624,17 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
     };
 }
 
+// if this is a debug build we do not want inline (to get better error messages), otherwise inline systems for performance
+const call_modidifer: std.builtin.CallModifier = if (@import("builtin").mode == .Debug) .never_inline else .always_inline;
+
 // Workaround see issue #5170 : https://github.com/ziglang/zig/issues/5170
 inline fn callWrapper(func: anytype, params: anytype) void {
-    @call(.always_inline, func, params);
+    @call(call_modidifer, func, params);
 }
 
 // Workaround see issue #5170 : https://github.com/ziglang/zig/issues/5170
 inline fn failableCallWrapper(func: anytype, params: anytype) !void {
-    try @call(.always_inline, func, params);
+    try @call(call_modidifer, func, params);
 }
 
 // world without systems
@@ -683,16 +686,17 @@ test "createEntity() can create empty entities" {
     const entity = try world.createEntity(.{});
     try testing.expectEqual(false, world.hasComponent(entity, Testing.Component.A));
 
+    const a = Testing.Component.A{ .value = 123 };
     {
-        const a = Testing.Component.A{ .value = 123 };
         try world.setComponent(entity, a);
         try testing.expectEqual(a.value, (try world.getComponent(entity, Testing.Component.A)).value);
     }
 
+    const b = Testing.Component.B{ .value = 8 };
     {
-        const b = Testing.Component.B{ .value = 8 };
         try world.setComponent(entity, b);
         try testing.expectEqual(b.value, (try world.getComponent(entity, Testing.Component.B)).value);
+        try testing.expectEqual(a.value, (try world.getComponent(entity, Testing.Component.A)).value);
     }
 }
 
@@ -1224,6 +1228,25 @@ test "event cache works" {
         Testing.Component.B{ .value = 1 },
         try world.getComponent(entity2, Testing.Component.B),
     );
+}
+
+test "Event with no archetypes does not crash" {
+    const SystemStruct = struct {
+        pub fn event1System(a: *Testing.Component.A) void {
+            a.value += 1;
+        }
+    };
+
+    var world = try WorldStub.WithEvents(.{
+        Event("onEvent1", .{SystemStruct.event1System}, .{}),
+    }).init(testing.allocator, .{});
+    defer world.deinit();
+
+    var i: usize = 0;
+    while (i < 100) : (i += 1) {
+        try world.triggerEvent(.onEvent1, .{});
+        world.waitEvent(.onEvent1);
+    }
 }
 
 test "DependOn makes a events race free" {
