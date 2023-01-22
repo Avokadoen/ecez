@@ -535,13 +535,16 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                                 }
                             }
 
+                            // if this is a debug build we do not want inline (to get better error messages), otherwise inline systems for performance
+                            const system_call_modidifer: std.builtin.CallModifier = if (@import("builtin").mode == .Debug) .never_inline else .always_inline;
+
                             if (comptime metadata.canReturnError()) {
                                 // TODO: remove this error: https://github.com/Avokadoen/ecez/issues/57
                                 //failableCallWrapper(system_ptr.*, arguments);
                                 @compileError("system that can fail are currently unsupported");
                             } else {
                                 const system_ptr = @ptrCast(FuncType, func);
-                                callWrapper(system_ptr.*, arguments);
+                                @call(system_call_modidifer, system_ptr.*, arguments);
                             }
                         }
                     }
@@ -556,19 +559,6 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
             return null;
         }
     };
-}
-
-// if this is a debug build we do not want inline (to get better error messages), otherwise inline systems for performance
-const call_modidifer: std.builtin.CallModifier = if (@import("builtin").mode == .Debug) .never_inline else .always_inline;
-
-// Workaround see issue #5170 : https://github.com/ziglang/zig/issues/5170
-inline fn callWrapper(func: anytype, params: anytype) void {
-    @call(call_modidifer, func, params);
-}
-
-// Workaround see issue #5170 : https://github.com/ziglang/zig/issues/5170
-inline fn failableCallWrapper(func: anytype, params: anytype) !void {
-    try @call(call_modidifer, func, params);
 }
 
 // world without systems
