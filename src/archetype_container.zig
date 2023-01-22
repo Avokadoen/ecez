@@ -130,7 +130,10 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 if (some_path.len > 1) {
                     for (self.children) |maybe_child, i| {
                         if (maybe_child) |child| {
-                            const from: usize = if ((some_path[0] - depth) == i) 1 else 0;
+                            // if the path index is the current loop index
+                            const on_path = (some_path[0] - depth) == i;
+
+                            const from: usize = if (on_path) 1 else 0;
                             try child.getIArchetypesWithComponents(some_path[from..], result, depth + 1);
                         }
                     }
@@ -411,9 +414,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
                             // insert the new component at it's correct location
                             var rhd = data[new_component_index..new_path.len];
-                            std.mem.rotate([]u8, rhd, rhd.len);
+                            std.mem.rotate([]u8, rhd, rhd.len - 1);
                             std.mem.copy(u8, data[new_component_index], std.mem.asBytes(&component));
-
                             // register the entity in the new archetype
                             try new_arche.archetype.rawRegisterEntity(entity, data[0..new_path.len]);
 
@@ -597,7 +599,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         /// Query archetypes containing all components listed in component_hashes
         /// caller own the returned memory
         pub inline fn getArchetypesWithComponents(self: ArcheContainer, allocator: Allocator, component_hashes: []const u64) error{OutOfMemory}![]OpaqueArchetype {
-            var path: [len]u16 = undefined;
+            var path: [submitted_components.len]u16 = undefined;
             for (component_hashes) |requested_hash, i| {
                 path[i] = blk: {
                     for (self.component_hashes[i..]) |stored_hash, step| {
