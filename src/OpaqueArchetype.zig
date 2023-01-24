@@ -182,10 +182,13 @@ pub fn rawRegisterEntity(self: *OpaqueArchetype, entity: Entity, data: []const [
         }
     }
 
+    const type_infos = self.type_info.values();
     for (data) |component_bytes, i| {
         if (data.len > 0) {
+            // this might change in the future, which will mean we will need to update this code
+            std.debug.assert(type_infos[i].storage_index == i);
             // TODO: proper errdefer
-            try self.component_storage[i].appendSlice(component_bytes);
+            try self.component_storage[i].appendSlice(component_bytes[0..type_infos[i].size]);
             appended_component = i;
         }
     }

@@ -1287,7 +1287,7 @@ test "Event DependOn events can have multiple dependencies" {
     }
 }
 
-// this reproducer never git an issue filed, so no issue number
+// this reproducer never had an issue filed, so no issue number
 test "reproducer: component data is mangled by adding additional components to entity" {
     // until issue https://github.com/Avokadoen/ecez/issues/91 is resolved we must make sure to match type names
     const Editor = struct {
@@ -1330,4 +1330,61 @@ test "reproducer: component data is mangled by adding additional components to e
         instance,
         try world.getComponent(entity, Editor.InstanceHandle),
     );
+}
+
+// this reproducer never had an issue filed, so no issue number
+test "reproducer: component data is mangled by having more than one entity" {
+    // until issue https://github.com/Avokadoen/ecez/issues/91 is resolved we must make sure to match type names
+    const Editor = struct {
+        pub const InstanceHandle = packed struct {
+            a: u16,
+            b: u32,
+            c: u16,
+        };
+    };
+    const RenderContext = struct {
+        pub const ObjectMetadata = struct {
+            a: Entity,
+            b: u8,
+            c: [64]u8,
+        };
+    };
+
+    const RepWorld = WorldBuilder().WithComponents(.{ Editor.InstanceHandle, RenderContext.ObjectMetadata }).Build();
+
+    var world = try RepWorld.init(testing.allocator, .{});
+    defer world.deinit();
+
+    {
+        const entity = try world.createEntity(.{});
+        const obj = RenderContext.ObjectMetadata{ .a = entity, .b = 0, .c = undefined };
+        try world.setComponent(entity, obj);
+        const instance = Editor.InstanceHandle{ .a = 1, .b = 2, .c = 3 };
+        try world.setComponent(entity, instance);
+
+        try testing.expectEqual(
+            obj,
+            try world.getComponent(entity, RenderContext.ObjectMetadata),
+        );
+        try testing.expectEqual(
+            instance,
+            try world.getComponent(entity, Editor.InstanceHandle),
+        );
+    }
+    {
+        const entity = try world.createEntity(.{});
+        const obj = RenderContext.ObjectMetadata{ .a = entity, .b = 0, .c = undefined };
+        try world.setComponent(entity, obj);
+        const instance = Editor.InstanceHandle{ .a = 1, .b = 1, .c = 1 };
+        try world.setComponent(entity, instance);
+
+        try testing.expectEqual(
+            obj,
+            try world.getComponent(entity, RenderContext.ObjectMetadata),
+        );
+        try testing.expectEqual(
+            instance,
+            try world.getComponent(entity, Editor.InstanceHandle),
+        );
+    }
 }
