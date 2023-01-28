@@ -484,7 +484,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
         ) type {
             return struct {
                 world: *World,
-                opaque_archetypes: []OpaqueArchetype,
+                opaque_archetypes: []*OpaqueArchetype,
                 extra_argument: ExtraArgumentType,
 
                 pub fn exec(self_job: *@This()) void {
@@ -496,7 +496,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                         .outer = &storage_buffer,
                     };
 
-                    for (self_job.opaque_archetypes) |*opaque_archetype| {
+                    for (self_job.opaque_archetypes) |opaque_archetype| {
                         // TODO: try
                         opaque_archetype.rawGetStorageData(component_hashes, &storage) catch unreachable;
                         var i: usize = 0;
@@ -1387,4 +1387,69 @@ test "reproducer: component data is mangled by having more than one entity" {
             try world.getComponent(entity, Editor.InstanceHandle),
         );
     }
+}
+
+// this reproducer never had an issue filed, so no issue number
+test "reproducer: Dispatcher does not include new components to systems previously triggered" {
+    const ObjTracker = struct {
+        count: u32,
+    };
+
+    // until issue https://github.com/Avokadoen/ecez/issues/91 is resolved we must make sure to match type names
+    const RenderContext = struct {
+        pub const ObjectMetadata = struct {
+            a: Entity,
+            b: u8,
+            c: [64]u8,
+        };
+
+        pub fn onFooSystem(obj: *ObjectMetadata, tracker: *SharedState(ObjTracker)) void {
+            tracker.count += obj.a.id;
+        }
+    };
+
+    const RepWorld = WorldBuilder().WithComponents(
+        .{RenderContext.ObjectMetadata},
+    ).WithEvents(
+        .{Event("onFoo", .{RenderContext.onFooSystem}, .{})},
+    ).WithSharedState(.{ObjTracker}).Build();
+
+    var world = try RepWorld.init(testing.allocator, .{ObjTracker{ .count = 0 }});
+    defer world.deinit();
+
+    {
+        const entity = try world.createEntity(.{});
+        const obj = RenderContext.ObjectMetadata{ .a = entity, .b = 0, .c = undefined };
+        try world.setComponent(entity, obj);
+    }
+
+    {
+        const entity = try world.createEntity(.{});
+        const obj = RenderContext.ObjectMetadata{ .a = entity, .b = 0, .c = undefined };
+        try world.setComponent(entity, obj);
+    }
+
+    try world.triggerEvent(.onFoo, .{});
+    world.waitEvent(.onFoo);
+
+    {
+        const entity = try world.createEntity(.{});
+        const obj = RenderContext.ObjectMetadata{ .a = entity, .b = 0, .c = undefined };
+        try world.setComponent(entity, obj);
+    }
+
+    {
+        const entity = try world.createEntity(.{});
+        const obj = RenderContext.ObjectMetadata{ .a = entity, .b = 0, .c = undefined };
+        try world.setComponent(entity, obj);
+    }
+
+    try world.triggerEvent(.onFoo, .{});
+    world.waitEvent(.onFoo);
+
+    // at this point we expect tracker to have a count of:
+    // trigger1: 0 + 1 = 1
+    // trigger2: trigger1 + 0 + 1 + 2 + 3
+    // = 7
+    try testing.expectEqual(@as(u32, 7), world.getSharedState(ObjTracker).count);
 }

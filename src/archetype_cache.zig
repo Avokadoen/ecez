@@ -83,7 +83,7 @@ pub fn ArchetypeCacheStorage(comptime storage_count: comptime_int) type {
         const Self = @This();
 
         initialized_mask: InitializeMask,
-        cache: [storage_count][]OpaqueArchetype,
+        cache: [storage_count][]*OpaqueArchetype,
 
         pub fn init() Self {
             return Self{
@@ -103,7 +103,7 @@ pub fn ArchetypeCacheStorage(comptime storage_count: comptime_int) type {
             }
         }
 
-        pub inline fn assignCacheEntry(self: *Self, allocator: Allocator, comptime system_index: comptime_int, archetypes: []OpaqueArchetype) void {
+        pub inline fn assignCacheEntry(self: *Self, allocator: Allocator, comptime system_index: comptime_int, archetypes: []*OpaqueArchetype) void {
             if ((self.initialized_mask & (1 << system_index)) != 0) {
                 allocator.free(self.cache[system_index]);
             }

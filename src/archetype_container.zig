@@ -122,7 +122,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         }
 
         /// retrieve all archetype interfaces that are at the path destination and all children of the destination
-        pub fn getIArchetypesWithComponents(self: Self, path: ?[]u16, result: *ArrayList(OpaqueArchetype), depth: usize) error{OutOfMemory}!void {
+        pub fn getIArchetypesWithComponents(self: Self, path: ?[]u16, result: *ArrayList(*OpaqueArchetype), depth: usize) error{OutOfMemory}!void {
             // if we have not found nodes with our requirements
             if (path) |some_path| {
                 std.debug.assert(some_path.len > 0);
@@ -145,8 +145,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 } else {
                     const arche_index = some_path[0] - depth;
                     // store the initial archetype meeting our requirement
-                    if (self.archetypes[arche_index]) |arche| {
-                        try result.append(arche.archetype);
+                    if (self.archetypes[arche_index]) |*arche| {
+                        try result.append(&arche.archetype);
                     }
 
                     const next_depth = depth + 1;
@@ -187,9 +187,9 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 }
             } else {
                 // all archetypes should be fitting our requirement
-                for (self.archetypes) |maybe_arche| {
-                    if (maybe_arche) |arche| {
-                        try result.append(arche.archetype);
+                for (self.archetypes) |*maybe_arche| {
+                    if (maybe_arche.*) |*arche| {
+                        try result.append(&arche.archetype);
                     }
                 }
 
@@ -603,7 +603,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
         /// Query archetypes containing all components listed in component_hashes
         /// caller own the returned memory
-        pub inline fn getArchetypesWithComponents(self: ArcheContainer, allocator: Allocator, component_hashes: []const u64) error{OutOfMemory}![]OpaqueArchetype {
+        pub inline fn getArchetypesWithComponents(self: ArcheContainer, allocator: Allocator, component_hashes: []const u64) error{OutOfMemory}![]*OpaqueArchetype {
             var path: [submitted_components.len]u16 = undefined;
             for (component_hashes) |requested_hash, i| {
                 path[i] = blk: {
@@ -615,7 +615,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                     unreachable; // should be compile type guards before we reach this point ...
                 };
             }
-            var resulting_archetypes = ArrayList(OpaqueArchetype).init(allocator);
+            var resulting_archetypes = ArrayList(*OpaqueArchetype).init(allocator);
             try self.root_node.getIArchetypesWithComponents(path[0..component_hashes.len], &resulting_archetypes, 0);
 
             return resulting_archetypes.toOwnedSlice();
