@@ -26,8 +26,6 @@ const ecez_error = @import("error.zig");
 const StorageError = ecez_error.StorageError;
 
 pub fn FromComponents(comptime submitted_components: []const type) type {
-    const len = submitted_components.len;
-
     const ComponentInfo = struct {
         hash: u64,
         type: type,
@@ -40,9 +38,9 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
     comptime var biggest_component_size: usize = 0;
 
     // get some inital type info from the submitted components, and verify that all are components
-    const component_info: [len]ComponentInfo = blk: {
-        comptime var info: [len]ComponentInfo = undefined;
-        comptime var sort: [len]Sort = undefined;
+    const component_info: [submitted_components.len]ComponentInfo = blk: {
+        comptime var info: [submitted_components.len]ComponentInfo = undefined;
+        comptime var sort: [submitted_components.len]Sort = undefined;
         for (submitted_components) |Component, i| {
             const component_size = @sizeOf(Component);
             if (component_size > biggest_component_size) {
@@ -86,7 +84,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         path_index: usize,
 
         pub fn init(allocator: Allocator, count: usize, path_index: usize) error{OutOfMemory}!Self {
-            std.debug.assert(len >= count);
+            std.debug.assert(submitted_components.len >= count);
 
             var archetypes = try allocator.alloc(?Arch, count);
             errdefer allocator.free(archetypes);
@@ -209,15 +207,15 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         // contains the indices to find a given archetype
         pub const ArchetypePath = struct {
             len: usize,
-            indices: [len]u16,
+            indices: [submitted_components.len]u16,
         };
         allocator: Allocator,
         archetype_paths: ArrayList(ArchetypePath),
         entity_references: ArrayList(EntityRef),
         root_node: Node,
 
-        component_hashes: [len]u64,
-        component_sizes: [len]usize,
+        component_hashes: [submitted_components.len]u64,
+        component_sizes: [submitted_components.len]usize,
 
         empty_bytes: [0]u8,
 
@@ -226,11 +224,11 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             try archetype_paths.append(ArchetypePath{ .len = 0, .indices = undefined });
             errdefer archetype_paths.deinit();
 
-            const root_node = try Node.init(allocator, len, 0);
+            const root_node = try Node.init(allocator, submitted_components.len, 0);
             errdefer root_node.deinit(allocator);
 
-            comptime var component_hashes: [len]u64 = undefined;
-            comptime var component_sizes: [len]usize = undefined;
+            comptime var component_hashes: [submitted_components.len]u64 = undefined;
+            comptime var component_sizes: [submitted_components.len]usize = undefined;
             inline for (component_info) |info, i| {
                 component_hashes[i] = info.hash;
                 component_sizes[i] = @sizeOf(info.type);
@@ -384,8 +382,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                                     new_archetype_created = false;
                                     break :blk1 some;
                                 } else {
-                                    var type_hashes: [len]u64 = undefined;
-                                    var type_sizes: [len]usize = undefined;
+                                    var type_hashes: [submitted_components.len]u64 = undefined;
+                                    var type_sizes: [submitted_components.len]usize = undefined;
                                     for (new_path.indices[0..new_path.len]) |step, i| {
                                         type_hashes[i] = self.component_hashes[step + i];
                                         type_sizes[i] = self.component_sizes[step + i];
@@ -408,7 +406,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                                 }
                             };
 
-                            var data: [len][]u8 = undefined;
+                            var data: [submitted_components.len][]u8 = undefined;
                             inline for (component_info) |_, i| {
                                 var buf: [biggest_component_size]u8 = undefined;
                                 data[i] = &buf;
@@ -455,7 +453,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         ///     - OutOfMemory: if OOM
         /// Return:
         ///     True if a new archetype was created for this operation
-        pub inline fn removeComponent(self: *ArcheContainer, entity: Entity, comptime Component: type) error{ EntityMissing, OutOfMemory }!bool {
+        pub fn removeComponent(self: *ArcheContainer, entity: Entity, comptime Component: type) error{ EntityMissing, OutOfMemory }!bool {
             if (self.hasComponent(entity, Component) == false) {
                 return false;
             }
@@ -464,7 +462,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             const old_arche = self.getArchetypeWithEntity(entity).?;
             const old_path = self.archetype_paths.items[old_arche.path_index];
 
-            var data: [len][]u8 = undefined;
+            var data: [submitted_components.len][]u8 = undefined;
             inline for (component_info) |_, i| {
                 var buf: [biggest_component_size]u8 = undefined;
                 data[i] = &buf;
@@ -537,8 +535,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                     new_archetype_created = false;
                     break :blk some;
                 } else {
-                    var type_hashes: [len]u64 = undefined;
-                    var type_sizes: [len]usize = undefined;
+                    var type_hashes: [submitted_components.len]u64 = undefined;
+                    var type_sizes: [submitted_components.len]usize = undefined;
                     for (new_path.indices[0..new_path.len]) |step, i| {
                         type_hashes[i] = self.component_hashes[step + i];
                         type_sizes[i] = self.component_sizes[step + i];
@@ -560,11 +558,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 }
             };
 
-            // remove the component if it is not the last element
-            if (remove_component_index < new_path.len - 1) {
-                var rhd = data[remove_component_index + 1 .. new_path.len];
-                std.mem.copy([]u8, data[remove_component_index..], rhd);
-            }
+            var rhd = data[remove_component_index..old_path.len];
+            std.mem.rotate([]u8, rhd, 1);
 
             // register the entity in the new archetype
             try new_archetype.archetype.rawRegisterEntity(entity, data[0..new_path.len]);
@@ -584,7 +579,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             };
             const path = self.archetype_paths.items[ref];
 
-            var hashes: [len]u64 = undefined;
+            var hashes: [submitted_components.len]u64 = undefined;
             for (path.indices[0..path.len]) |step, i| {
                 hashes[i] = self.component_hashes[step + i];
             }

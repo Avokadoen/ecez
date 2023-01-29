@@ -262,7 +262,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
             }
         }
 
-        /// Reassign a component value owned by entity
+        /// Remove a component owned by entity
         /// Parameters:
         ///     - entity:    the entity that should be assigned the component value
         ///     - component: the new component value
@@ -1426,4 +1426,92 @@ test "reproducer: Dispatcher does not include new components to systems previous
     // t2: t1 + 1 + 1 + 1 + 1
     // = 6
     try testing.expectEqual(@as(u32, 6), world.getSharedState(Tracker).count);
+}
+
+// this reproducer never had an issue filed, so no issue number
+test "reproducer: Removing component cause storage to become in invalid state for dispatch" {
+    const InstanceHandle = packed struct {
+        a: u16,
+        b: u32,
+        c: u16,
+    };
+    const Transform = struct {
+        mat: [4]@Vector(4, f32),
+    };
+    const Position = struct {
+        vec: @Vector(4, f32),
+    };
+    const Rotation = struct {
+        quat: @Vector(4, f32),
+    };
+    const Scale = struct {
+        vec: @Vector(4, f32),
+    };
+    const ObjectMetadata = struct {
+        a: Entity,
+        b: u8,
+        c: [64]u8,
+    };
+
+    const RepWorld = WorldBuilder().WithComponents(.{
+        ObjectMetadata,
+        Transform,
+        Position,
+        Rotation,
+        Scale,
+        InstanceHandle,
+    }).Build();
+
+    var world = try RepWorld.init(testing.allocator, .{});
+    defer world.deinit();
+
+    var instance_handle = InstanceHandle{ .a = 3, .b = 3, .c = 3 };
+    var transform = Transform{ .mat = .{
+        [4]f32{ 3, 3, 3, 3 },
+        [4]f32{ 3, 3, 3, 3 },
+        [4]f32{ 3, 3, 3, 3 },
+        [4]f32{ 3, 3, 3, 3 },
+    } };
+    var position = Position{ .vec = [4]f32{ 3, 3, 3, 3 } };
+    var rotation = Rotation{ .quat = [4]f32{ 3, 3, 3, 3 } };
+    var scale = Scale{ .vec = [4]f32{ 3, 3, 3, 3 } };
+    var obj = ObjectMetadata{ .a = Entity{ .id = 3 }, .b = 3, .c = undefined };
+
+    _ = try world.createEntity(.{
+        instance_handle,
+        transform,
+        position,
+        rotation,
+        scale,
+        obj,
+    });
+    const entity = try world.createEntity(.{
+        instance_handle,
+        transform,
+        position,
+        rotation,
+        scale,
+        obj,
+    });
+    _ = try world.createEntity(.{
+        instance_handle,
+        transform,
+        position,
+        rotation,
+        scale,
+        obj,
+    });
+
+    try testing.expectEqual(instance_handle, try world.getComponent(entity, InstanceHandle));
+    try testing.expectEqual(transform, try world.getComponent(entity, Transform));
+    try testing.expectEqual(position, try world.getComponent(entity, Position));
+    try testing.expectEqual(rotation, try world.getComponent(entity, Rotation));
+    try testing.expectEqual(scale, try world.getComponent(entity, Scale));
+
+    _ = try world.removeComponent(entity, Position);
+
+    try testing.expectEqual(instance_handle, try world.getComponent(entity, InstanceHandle));
+    try testing.expectEqual(transform, try world.getComponent(entity, Transform));
+    try testing.expectEqual(rotation, try world.getComponent(entity, Rotation));
+    try testing.expectEqual(scale, try world.getComponent(entity, Scale));
 }
