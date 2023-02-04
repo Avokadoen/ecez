@@ -28,9 +28,8 @@ pub fn link(b: *std.build.Builder, exe: *std.build.LibExeObjStep, enable_ztracy:
 
 /// Builds the project for testing and to run simple examples
 pub fn build(b: *std.build.Builder) void {
-    // Standard release options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
-    const mode = b.standardReleaseOptions();
+    const target = b.standardTargetOptions(.{});
+    const mode = b.standardOptimizeOption(.{});
 
     // initialize tracy
     const ztracy_enable = b.option(bool, "enable-tracy", "Enable Tracy profiler") orelse false;
@@ -43,27 +42,39 @@ pub fn build(b: *std.build.Builder) void {
         .dependencies = &[_]std.build.Pkg{ ztracy_pkg, zjobs.pkg },
     };
 
-    const lib = b.addStaticLibrary("ecez", "src/main.zig");
-    lib.setBuildMode(mode);
+    const lib = b.addStaticLibrary(.{
+        .name = "ecez",
+        .root_source_file = .{ .path = "src/main.zig" },
+        .optimize = mode,
+        .target = target,
+    });
     lib.addPackage(zjobs.pkg);
     lib.addPackage(ztracy_pkg);
     ztracy.link(lib, ztracy_options);
     lib.install();
 
+    // TODO: this is currently commented out as it seems bugged on the master branch
+    //       after the removal of addTestExe (fails to compile with missing main)
     // create a debuggable test executable
-    {
-        const main_tests = b.addTestExe("main_tests", "src/main.zig");
-        main_tests.setBuildMode(mode);
-        main_tests.addPackage(zjobs.pkg);
-        main_tests.addPackage(ztracy_pkg);
-        ztracy.link(main_tests, ztracy_options);
-        main_tests.linkLibrary(lib);
-        main_tests.install();
-    }
+    // {
+    //     const main_tests = b.addTest(.{
+    //         .name = "main_tests",
+    //         .root_source_file = .{ .path = "src/main.zig" },
+    //         .optimize = mode,
+    //         .kind = .exe,
+    //     });
+    //     main_tests.addPackage(zjobs.pkg);
+    //     main_tests.addPackage(ztracy_pkg);
+    //     ztracy.link(main_tests, ztracy_options);
+    //     main_tests.linkLibrary(lib);
+    //     main_tests.install();
+    // }
 
     // add library tests to the main tests
-    const main_tests_step = b.addTest("src/main.zig");
-    main_tests_step.setBuildMode(mode);
+    const main_tests_step = b.addTest(.{
+        .root_source_file = .{ .path = "src/main.zig" },
+        .optimize = mode,
+    });
     main_tests_step.addPackage(zjobs.pkg);
     main_tests_step.addPackage(ztracy_pkg);
     ztracy.link(main_tests_step, ztracy_options);
@@ -71,14 +82,16 @@ pub fn build(b: *std.build.Builder) void {
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&main_tests_step.step);
 
-    const target = b.standardTargetOptions(.{});
     inline for ([_]Example{.{
         .name = "game-of-life",
     }}) |example| {
         const path = "examples/" ++ example.name ++ "/main.zig";
-        var exe = b.addExecutable(example.name, path);
-        exe.setTarget(target);
-        exe.setBuildMode(mode);
+        var exe = b.addExecutable(.{
+            .name = example.name,
+            .root_source_file = .{ .path = path },
+            .target = target,
+            .optimize = mode,
+        });
 
         exe.addPackage(zjobs.pkg);
         exe.addPackage(ztracy_pkg);
@@ -94,8 +107,10 @@ pub fn build(b: *std.build.Builder) void {
         run_step.dependOn(&run_cmd.step);
 
         // add any tests that are define inside each example
-        const example_tests = b.addTest(path);
-        example_tests.setBuildMode(mode);
+        const example_tests = b.addTest(.{
+            .root_source_file = .{ .path = path },
+            .optimize = mode,
+        });
         example_tests.addPackage(ztracy_pkg);
         ztracy.link(example_tests, ztracy_options);
         test_step.dependOn(&example_tests.step);
