@@ -166,7 +166,7 @@ fn tickCell(pos: GridPos, health: *Health, render_target: ecez.SharedState(Rende
     const new_line_count = cell_y;
     const start = (cell_x + (cell_y * grid_dimensions)) * characters_per_cell + new_line_count + 1;
 
-    const up = -@intCast(i32, cell_y * grid_dimensions * characters_per_cell + 1);
+    const up = -@intCast(i32, grid_dimensions * characters_per_cell + 1);
     const down = -up;
     const left = -characters_per_cell;
     const right = characters_per_cell;
