@@ -1,14 +1,18 @@
 const std = @import("std");
 
-const zjobs = .{ .zig = thisDir() ++ "/src/zjobs.zig" };
-
-pub const pkg = std.build.Pkg{
-    .name = "zjobs",
-    .source = .{ .path = zjobs.zig },
+pub const Package = struct {
+    module: *std.Build.Module,
 };
 
-pub fn build(b: *std.build.Builder) void {
-    const build_mode = b.standardReleaseOptions();
+pub fn package(b: *std.Build, _: struct {}) Package {
+    const module = b.createModule(.{
+        .source_file = .{ .path = thisDir() ++ "/src/zjobs.zig" },
+    });
+    return .{ .module = module };
+}
+
+pub fn build(b: *std.Build) void {
+    const build_mode = b.standardOptimizeOption(.{});
     const target = b.standardTargetOptions(.{});
     const tests = buildTests(b, build_mode, target);
 
@@ -17,13 +21,15 @@ pub fn build(b: *std.build.Builder) void {
 }
 
 pub fn buildTests(
-    b: *std.build.Builder,
+    b: *std.Build,
     build_mode: std.builtin.Mode,
     target: std.zig.CrossTarget,
-) *std.build.LibExeObjStep {
-    const tests = b.addTest(zjobs.zig);
-    tests.setBuildMode(build_mode);
-    tests.setTarget(target);
+) *std.Build.CompileStep {
+    const tests = b.addTest(.{
+        .root_source_file = .{ .path = thisDir() ++ "/src/zjobs.zig" },
+        .target = target,
+        .optimize = build_mode,
+    });
     return tests;
 }
 
