@@ -8,12 +8,12 @@ const Example = struct {
 
 /// Links a project exe with ecez and optinally enable ztracy
 /// The exe may also link with tracy and zjobs by setting link_ecez_dependencies
-pub fn link(b: *std.Build, exe: *std.Build.LibExeObjStep, link_ecez_dependencies: bool, enable_ztracy: bool) void {
-    var ztracy_package = ztracy.package(b, .{ .enable_ztracy = enable_ztracy });
+pub fn link(b: *std.Build, exe: *std.Build.LibExeObjStep, link_ecez_dependencies: bool, enable_tracy: bool) void {
+    var ztracy_package = ztracy.package(b, .{ .options = .{ .enable_ztracy = enable_tracy } });
 
     var zjobs_package = zjobs.package(b, .{});
 
-    const ecez_module = b.createModule("ecez", std.Build.CreateModuleOptions{
+    const ecez_module = b.createModule(std.Build.CreateModuleOptions{
         .source_file = .{ .path = "src/main.zig" },
         .dependencies = &[_]std.Build.ModuleDependency{ .{
             .name = "ztracy",
@@ -30,7 +30,7 @@ pub fn link(b: *std.Build, exe: *std.Build.LibExeObjStep, link_ecez_dependencies
         exe.addModule("zjobs", zjobs_package.module);
     }
 
-    ztracy.link(exe, .{ .enable_ztracy = enable_ztracy });
+    ztracy.link(exe, .{ .enable_ztracy = enable_tracy });
 }
 
 /// Builds the project for testing and to run simple examples
