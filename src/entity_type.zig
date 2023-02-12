@@ -3,8 +3,13 @@ pub const Entity = struct {
     id: EntityId,
 };
 
+pub const EntityRefTag = enum(u1) {
+    void = 0,
+    type_index = 1,
+};
+
 /// used to retrieve a specific entity
-pub const EntityRef = union(enum) {
+pub const EntityRef = union(EntityRefTag) {
     void,
     type_index: u15,
 };
