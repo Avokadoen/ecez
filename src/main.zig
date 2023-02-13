@@ -24,4 +24,5 @@ test {
     _ = @import("query.zig");
     _ = @import("iterator.zig");
     _ = @import("OpaqueArchetype.zig");
+    _ = @import("ezby.zig");
 }
