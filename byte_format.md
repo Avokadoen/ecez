@@ -1,4 +1,4 @@
-# ECEZ byte formar - .ezby
+# ECEZ byte format - .ezby
 
 Ecez support a custom byte format called ezby (see issue [Implement serialize and deserialize #96](https://github.com/Avokadoen/ecez/issues/96)). This format define different [chunks](#chunk_sec) that contain structured bytes. This is inspired by the fantastic .vox format which is made by [ephtracy](https://github.com/ephtracy). 
 
@@ -14,9 +14,11 @@ This section contain each chunk defined by ezby and how they can be parsed.
 | *ezby major version*                | 1     | ezby major version of the current file                        |
 | *ezby minor version*                | 1     | ezby minor version of the current file                        |
 | *ezby patch version*                | 1     | ezby patch version of the current file                        |
+| *reserved_1*                        | 1     | reserved byte                                                 |
 | *EREF chunks*                       | 2     | how many EREF chunks one EREF<br>maps to one ezez instance    |
 | *COMP chunks*                       | 2     | how many COMP chunks                                          |
 | *ARCH chunks*                       | 2     | how many ARCH chunks                                          |
+| *reserved_2*                        | 2     | reserved 2 bytes                                              |
 
 
 ### EREF - Contain entity references
@@ -26,7 +28,8 @@ The reference can be used to get the component data from a given entity. TODO: e
 | <div style="width:155px">Data</div> | Bytes | <div style="width:300px">Description</div>                                     |
 |:------------------------------------|:-----:|:-------------------------------------------------------------------------------|
 | "EREF"                              | 4     | chunk identifier                                                               |
-| *number of references*              | 4     | how many references the chunk<br>contain (N)                                   |
+| *reserved_1*                        | 4     | reserved 4 bytes                                                               |
+| *number of references*              | 8     | how many references the chunk<br>contain (N)                                   |
 | *N entity references*               | N * 2 | references that can be used to look up <br>components for a given entity       |
 
 ### COMP - Metadata for each component type 
@@ -53,3 +56,6 @@ The reference can be used to get the component data from a given entity. TODO: e
 | \|- *component byte list <br>\|&nbsp;&nbsp;**size** M out of N<sup>2</sup>* | 4                | How many bytes are in the subsequent<br>list (M)      |
 | \|- *component byte list <br>\|&nbsp;&nbsp;M out of N<sup>2</sup>*          | 1 * M            | Component data as bytes                                |
 
+## <a name="data_types"></a>Data types
+
+TODO: some data types
