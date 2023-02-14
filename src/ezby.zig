@@ -119,7 +119,7 @@ pub const Chunk = struct {
 const testing = std.testing;
 const ez_testing = @import("Testing.zig");
 
-test "serializing then using parseEzbyChunk produce same ezby chunk" {
+test "serializing then using parseEzbyChunk produce same EZBY chunk" {
     const Serialize = Serializer(.{});
     var dummy_world = try Serialize.World.init(std.testing.allocator, .{});
     defer dummy_world.deinit();
@@ -140,7 +140,7 @@ test "serializing then using parseEzbyChunk produce same ezby chunk" {
     }, ezby.*);
 }
 
-test "serializing then using parseErefChunk produce same eref chunk" {
+test "serializing then using parseErefChunk produce expected EREF chunk" {
     const Serialize = Serializer(ez_testing.AllComponentsTuple);
     var dummy_world = try Serialize.World.init(std.testing.allocator, .{});
     defer dummy_world.deinit();
