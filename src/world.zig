@@ -598,9 +598,9 @@ test "init() + deinit() is idempotent" {
         .a = Testing.Component.A{},
     };
     const entity0 = try world.createEntity(initial_state);
-    try testing.expectEqual(entity0.id, 0);
+    try testing.expectEqual(entity0.id, 1);
     const entity1 = try world.createEntity(initial_state);
-    try testing.expectEqual(entity1.id, 1);
+    try testing.expectEqual(entity1.id, 2);
 }
 
 test "createEntity() can create empty entities" {
@@ -646,7 +646,7 @@ test "setComponent() component moves entity to correct archetype" {
     const stored_b = try world.getComponent(entity1, Testing.Component.B);
     try testing.expectEqual(b, stored_b);
 
-    try testing.expectEqual(@as(usize, 1), world.container.entity_references.items.len);
+    try testing.expectEqual(@as(usize, 2), world.container.entity_references.items.len);
 }
 
 test "setComponent() update entities component state" {

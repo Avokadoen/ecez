@@ -204,6 +204,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
     return struct {
         const ArcheContainer = @This();
 
+        const void_index = 0;
+
         // contains the indices to find a given archetype
         pub const ArchetypePath = struct {
             len: usize,
@@ -224,7 +226,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             try archetype_paths.append(ArchetypePath{ .len = 0, .indices = undefined });
             errdefer archetype_paths.deinit();
 
-            const root_node = try Node.init(allocator, submitted_components.len, 0);
+            var root_node = try Node.init(allocator, submitted_components.len, 0);
             errdefer root_node.deinit(allocator);
 
             comptime var component_hashes: [submitted_components.len]u64 = undefined;
@@ -234,10 +236,16 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 component_sizes[i] = @sizeOf(info.type);
             }
 
+            var entity_references = try ArrayList(EntityRef).initCapacity(allocator, 32);
+
+            // append a special "void" type does not need to be defined (index 0 indicate void)
+            std.debug.assert(entity_references.items.len == void_index);
+            entity_references.appendAssumeCapacity(undefined);
+
             return ArcheContainer{
                 .allocator = allocator,
                 .archetype_paths = archetype_paths,
-                .entity_references = ArrayList(EntityRef).init(allocator),
+                .entity_references = entity_references,
                 .root_node = root_node,
                 .component_hashes = component_hashes,
                 .component_sizes = component_sizes,
@@ -279,7 +287,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             // if no initial_state
             if (arche_struct_info.fields.len == 0) {
                 // register a void reference to able to locate empty entity
-                try self.entity_references.append(EntityRef.void);
+                try self.entity_references.append(void_index);
                 return CreateEntityResult{
                     .new_archetype_container = false,
                     .entity = entity,
@@ -423,9 +431,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                             try new_arche.archetype.rawRegisterEntity(entity, data[0..new_path.len]);
 
                             // update entity reference
-                            self.entity_references.items[entity.id] = EntityRef{
-                                .type_index = @intCast(u15, new_arche.path_index),
-                            };
+                            self.entity_references.items[entity.id] = @intCast(EntityRef, new_arche.path_index);
 
                             return new_archetype_created;
                         },
@@ -472,7 +478,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
             if (old_path.len <= 1) {
                 // update entity reference
-                self.entity_references.items[entity.id] = EntityRef.void;
+                self.entity_references.items[entity.id] = void_index;
                 return false;
             }
 
@@ -565,17 +571,15 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             try new_archetype.archetype.rawRegisterEntity(entity, data[0..new_path.len]);
 
             // update entity reference
-            self.entity_references.items[entity.id] = EntityRef{
-                .type_index = @intCast(u15, new_archetype.path_index),
-            };
+            self.entity_references.items[entity.id] = @intCast(EntityRef, new_archetype.path_index);
 
             return new_archetype_created;
         }
 
         pub inline fn getTypeHashes(self: ArcheContainer, entity: Entity) ?[]u64 {
             const ref = switch (self.entity_references.items[entity.id]) {
-                EntityRef.void => return null,
-                EntityRef.type_index => |index| index,
+                void_index => return null, // void type
+                else => |index| index,
             };
             const path = self.archetype_paths.items[ref];
 
@@ -778,9 +782,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             };
 
             // register a reference to able to locate entity
-            const new_ref = EntityRef{
-                .type_index = @intCast(u15, path_index),
-            };
+            const new_ref = @intCast(EntityRef, path_index);
             if (entity_ref_handling == .create_new_ref) {
                 try self.entity_references.append(new_ref);
             } else {
@@ -797,8 +799,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
         inline fn getArchetypeWithEntity(self: ArcheContainer, entity: Entity) ?*Node.Arch {
             const ref = switch (self.entity_references.items[entity.id]) {
-                EntityRef.void => return null,
-                EntityRef.type_index => |index| index,
+                void_index => return null, // void type
+                else => |index| index,
             };
             const path = self.archetype_paths.items[ref];
 
