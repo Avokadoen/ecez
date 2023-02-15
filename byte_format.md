@@ -4,6 +4,8 @@ Ecez support a custom byte format called ezby (see issue [Implement serialize an
 
 ## <a name="chunk_sec"></a>Chunks
 
+// TODO: describe some restrictions on chunk order
+
 This section contain each chunk defined by ezby and how they can be parsed.
 
 ### EZBY - File header metadata 
@@ -20,18 +22,6 @@ This section contain each chunk defined by ezby and how they can be parsed.
 | *ARCH chunks*                       | 2     | how many ARCH chunks                                          |
 | *reserved_2*                        | 2     | reserved 2 bytes                                              |
 
-
-### EREF - Contain entity references
-
-The reference can be used to get the component data from a given entity. TODO: explain mapping of entity to entity reference
-
-| <div style="width:155px">Data</div> | Bytes | <div style="width:300px">Description</div>                                     |
-|:------------------------------------|:-----:|:-------------------------------------------------------------------------------|
-| "EREF"                              | 4     | chunk identifier                                                               |
-| *reserved_1*                        | 4     | reserved 4 bytes                                                               |
-| *number of references*              | 8     | how many references the chunk<br>contain (N)                                   |
-| *N entity references*               | N * 2 | references that can be used to look up <br>components for a given entity       |
-
 ### COMP - Metadata for each component type 
 
 // TODO: is this chunk useless for ezez (components are mostly compile time, but maybe we can use this in the build script to generate components?)
@@ -40,9 +30,8 @@ The reference can be used to get the component data from a given entity. TODO: e
 |:------------------------------------|:-----:|:------------------------------------------------------ |
 | "COMP"                              | 4     | chunk identifier                                       |
 | *number of<br>components*           | 4     | how many compoents that are stored in<br>the chunk (N) |
-| *Component:*                        | 8 * N | Component RTTI (Run-Time Type Info)<br>for a component |
-| \|- *type hash*                     | 4     | Component type hash identifier                         |
-| \|- *byte size*                     | 4     | Component byte size                                    |
+| *component_hash*                    | 8 * N | Component type hash identifier                         |
+| *component_size*                    | 8 * N | Component byte size                                    |
 
 
 ### ARCH - All entities and component data for an archetype
