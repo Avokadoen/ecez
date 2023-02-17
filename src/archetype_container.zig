@@ -80,10 +80,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
         archetypes: []?Arch,
         children: []?Self,
-        // index to current node's path
-        path_index: usize,
 
-        pub fn init(allocator: Allocator, count: usize, path_index: usize) error{OutOfMemory}!Self {
+        pub fn init(allocator: Allocator, count: usize) error{OutOfMemory}!Self {
             std.debug.assert(submitted_components.len >= count);
 
             var archetypes = try allocator.alloc(?Arch, count);
@@ -97,7 +95,6 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             return Self{
                 .archetypes = archetypes,
                 .children = children,
-                .path_index = path_index,
             };
         }
 
@@ -226,7 +223,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             try archetype_paths.append(ArchetypePath{ .len = 0, .indices = undefined });
             errdefer archetype_paths.deinit();
 
-            var root_node = try Node.init(allocator, submitted_components.len, 0);
+            var root_node = try Node.init(allocator, submitted_components.len);
             errdefer root_node.deinit(allocator);
 
             comptime var component_hashes: [submitted_components.len]u64 = undefined;
@@ -359,7 +356,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                             const new_arche: *Node.Arch = blk1: {
                                 var arche_node = blk: {
                                     var current_node: *Node = &self.root_node;
-                                    for (new_path.indices[0 .. new_path.len - 1]) |step, depth| {
+                                    for (new_path.indices[0 .. new_path.len - 1]) |step| {
                                         if (current_node.children[step]) |*some| {
                                             current_node = some;
                                         } else {
@@ -367,19 +364,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                                             current_node.children[step] = try Node.init(
                                                 self.allocator,
                                                 current_node.children.len - 1,
-                                                self.archetype_paths.items.len,
                                             );
                                             current_node = &current_node.children[step].?;
-
-                                            // register new node path
-                                            var archetype_path = ArchetypePath{
-                                                .len = depth + 1,
-                                                .indices = undefined,
-                                            };
-                                            for (new_path.indices[0..archetype_path.len]) |sub_path, i| {
-                                                archetype_path.indices[i] = sub_path;
-                                            }
-                                            try self.archetype_paths.append(archetype_path);
                                         }
                                     }
                                     break :blk current_node;
@@ -508,7 +494,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
             var arche_node = blk: {
                 var current_node: Node = self.root_node;
-                for (new_path.indices[0 .. new_path.len - 1]) |step, depth| {
+                for (new_path.indices[0 .. new_path.len - 1]) |step| {
                     if (current_node.children[step]) |some| {
                         current_node = some;
                     } else {
@@ -516,19 +502,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                         current_node.children[step] = try Node.init(
                             self.allocator,
                             current_node.children.len - 1,
-                            self.archetype_paths.items.len,
                         );
                         current_node = current_node.children[step].?;
-
-                        // register new node path
-                        var archetype_path = ArchetypePath{
-                            .len = depth + 1,
-                            .indices = undefined,
-                        };
-                        for (new_path.indices[0..archetype_path.len]) |sub_path, i| {
-                            archetype_path.indices[i] = sub_path;
-                        }
-                        try self.archetype_paths.append(archetype_path);
                     }
                 }
                 break :blk current_node;
@@ -705,19 +680,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                         current_node.children[index] = try Node.init(
                             self.allocator,
                             current_node.children.len - 1,
-                            self.archetype_paths.items.len,
                         );
                         current_node = &(current_node.children[index].?);
-
-                        // register new node path
-                        var archetype_path = ArchetypePath{
-                            .len = depth + 1,
-                            .indices = undefined,
-                        };
-                        for (index_path[0..archetype_path.len]) |sub_path, i| {
-                            archetype_path.indices[i] = sub_path.component_index - @intCast(u15, i);
-                        }
-                        try self.archetype_paths.append(archetype_path);
                     }
                 }
                 break :blk current_node;
