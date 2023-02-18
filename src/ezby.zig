@@ -2,6 +2,10 @@ const std = @import("std");
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
+const ztracy = @import("ztracy");
+
+const Color = @import("misc.zig").Color;
+
 const world = @import("world.zig");
 const entity_type = @import("entity_type.zig");
 const EntityRef = entity_type.EntityRef;
@@ -29,6 +33,9 @@ pub fn Serializer(comptime components: anytype) type {
         // TODO: heavily hint that arena allocator should be used?
         /// Serialize a world instance to a byte array. The caller owns the returned memory
         pub fn serialize(allocator: Allocator, initial_byte_size: usize, world_to_serialize: *const World) ![]const u8 {
+            const zone = ztracy.ZoneNC(@src(), "Ezby serialize", Color.serializer);
+            defer zone.End();
+
             const inital_written_size = @max(@sizeOf(Chunk.Ezby), initial_byte_size);
             var written_bytes = try ByteList.initCapacity(allocator, inital_written_size);
 
@@ -213,6 +220,9 @@ pub const Chunk = struct {
 
 /// parse EZBY chunk from bytes and return remaining bytes
 fn parseEzbyChunk(bytes: []const u8, chunk: **const Chunk.Ezby) []const u8 {
+    const zone = ztracy.ZoneNC(@src(), "Parse EZBY chunk", Color.serializer);
+    defer zone.End();
+
     std.debug.assert(bytes.len >= @sizeOf(Chunk.Ezby));
     std.debug.assert(mem.eql(u8, bytes[0..4], "EZBY"));
 
@@ -247,6 +257,9 @@ fn parseCompChunk(
     hash_list: *Chunk.Comp.HashList,
     size_list: *Chunk.Comp.SizeList,
 ) []const u8 {
+    const zone = ztracy.ZoneNC(@src(), "Parse COMP chunk", Color.serializer);
+    defer zone.End();
+
     std.debug.assert(bytes.len >= @sizeOf(Chunk.Comp));
     std.debug.assert(mem.eql(u8, bytes[0..4], "COMP"));
 
@@ -333,6 +346,9 @@ fn parseArchChunk(
     entity_map_list: *Chunk.Arch.EntityMapList,
     component_bytes: *[*]const u8,
 ) []const u8 {
+    const zone = ztracy.ZoneNC(@src(), "Parse ARCH chunk", Color.serializer);
+    defer zone.End();
+
     std.debug.assert(bytes.len >= @sizeOf(Chunk.Arch));
     std.debug.assert(mem.eql(u8, bytes[0..4], "ARCH"));
 

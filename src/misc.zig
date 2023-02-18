@@ -4,6 +4,7 @@ pub const Color = struct {
     pub const opaque_archetype = Light.blue;
     pub const arche_container = Light.green;
     pub const entity_builder = Light.purple;
+    pub const serializer = Light.brown;
 
     pub const Light = struct {
         pub const red = 0xeb_80_7b;
@@ -13,5 +14,6 @@ pub const Color = struct {
         pub const turquoise = 0x81_fa_fa;
         pub const blue = 0x5d_88_de;
         pub const purple = 0xed_81_fa;
+        pub const brown = 0x9e_76_48;
     };
 };
