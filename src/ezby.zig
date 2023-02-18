@@ -404,11 +404,22 @@ test "serializing then using parseArchChunk produce expected ARCH chunk" {
     var rtti_list: Chunk.Arch.RttiList = undefined;
     var entity_map_list: Chunk.Arch.EntityMapList = undefined;
     var component_bytes: [*]const u8 = undefined;
-
     _ = parseArchChunk(arch_bytes, &arch, &rtti_list, &entity_map_list, &component_bytes);
 
     try testing.expectEqual(Chunk.Arch{
         .number_of_components = 2,
         .number_of_entities = entities_to_create,
     }, arch.*);
+
+    // TODO: this depend on hashing algo, and which type is hashed to a lower value ...
+    //       find a more robust way of checking this
+    const expected_rtti_list = [2]Chunk.Arch.Rtti{
+        .{ .hash = query.hashType(ez_testing.Component.A), .size = @sizeOf(ez_testing.Component.A) },
+        .{ .hash = query.hashType(ez_testing.Component.B), .size = @sizeOf(ez_testing.Component.B) },
+    };
+    try testing.expectEqualSlices(
+        Chunk.Arch.Rtti,
+        &expected_rtti_list,
+        rtti_list[0..arch.*.number_of_components],
+    );
 }
