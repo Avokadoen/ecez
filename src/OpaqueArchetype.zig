@@ -85,6 +85,16 @@ pub fn deinit(self: *OpaqueArchetype) void {
     self.allocator.free(self.component_storage);
 }
 
+pub fn clearRetainingCapacity(self: *OpaqueArchetype) void {
+    const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype clear", Color.opaque_archetype);
+    defer zone.End();
+    self.entities.clearRetainingCapacity();
+
+    for (self.component_storage) |*component_buffer| {
+        component_buffer.clearRetainingCapacity();
+    }
+}
+
 pub fn hasComponent(self: OpaqueArchetype, comptime T: type) bool {
     return self.rawHasComponent(comptime hashType(T));
 }

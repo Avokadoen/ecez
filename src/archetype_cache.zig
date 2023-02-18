@@ -103,6 +103,11 @@ pub fn ArchetypeCacheStorage(comptime storage_count: comptime_int) type {
             }
         }
 
+        pub inline fn clear(self: *Self) void {
+            self.deinit();
+            self.initialized_mask = @as(InitializeMask, 0);
+        }
+
         pub inline fn assignCacheEntry(self: *Self, allocator: Allocator, comptime system_index: comptime_int, archetypes: []*OpaqueArchetype) void {
             if ((self.initialized_mask & (1 << system_index)) != 0) {
                 allocator.free(self.cache[system_index]);

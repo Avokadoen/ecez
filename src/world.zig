@@ -234,6 +234,23 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
             self.container.deinit();
         }
 
+        /// Clear world memory for reuse. All entities will become invalid.
+        pub fn clearRetainingCapacity(self: *World) void {
+            const zone = ztracy.ZoneNC(@src(), "World clear", Color.world);
+            defer zone.End();
+
+            // make sure there are no running jobs
+            for (events) |event| {
+                self.waitEvent(event);
+            }
+
+            const event_cache_storages_info = @typeInfo(EventCacheStorages).Struct;
+            inline for (event_cache_storages_info.fields) |_, i| {
+                self.event_cache_storages[i].clear();
+            }
+            self.container.clearRetainingCapacity();
+        }
+
         /// Create an entity and returns the entity handle
         /// Parameters:
         ///     - entity_state: the components that the new entity should be assigned
@@ -741,6 +758,47 @@ test "getComponent() retrieve component value" {
     _ = try world.createEntity(initial_state);
 
     try testing.expectEqual(entity_initial_state.a, try world.getComponent(entity, Testing.Component.A));
+}
+
+test "clearRetainingCapacity() allow world reuse" {
+    var world = try WorldStub.init(testing.allocator, .{});
+    defer world.deinit();
+
+    var first_entity: Entity = undefined;
+
+    const entity_initial_state = AEntityType{
+        .a = Testing.Component.A{ .value = 123 },
+    };
+    var entity: Entity = undefined;
+
+    var i: usize = 0;
+    while (i < 100) : (i += 1) {
+        world.clearRetainingCapacity();
+
+        var initial_state = AEntityType{
+            .a = Testing.Component.A{ .value = 0 },
+        };
+        _ = try world.createEntity(initial_state);
+        initial_state.a = Testing.Component.A{ .value = 1 };
+        _ = try world.createEntity(initial_state);
+        initial_state.a = Testing.Component.A{ .value = 2 };
+        _ = try world.createEntity(initial_state);
+
+        if (i == 0) {
+            first_entity = try world.createEntity(entity_initial_state);
+        } else {
+            entity = try world.createEntity(entity_initial_state);
+        }
+
+        initial_state.a = Testing.Component.A{ .value = 3 };
+        _ = try world.createEntity(initial_state);
+        initial_state.a = Testing.Component.A{ .value = 4 };
+        _ = try world.createEntity(initial_state);
+    }
+
+    try testing.expectEqual(first_entity, entity);
+    const entity_a = try world.getComponent(entity, Testing.Component.A);
+    try testing.expectEqual(entity_initial_state.a, entity_a);
 }
 
 test "getSharedState retrieve state" {

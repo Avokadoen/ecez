@@ -107,13 +107,27 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             }
             allocator.free(self.children);
 
-            for (self.archetypes) |maybe_arche| {
-                var m_arche: ?Arch = maybe_arche;
-                if (m_arche) |*some| {
-                    some.archetype.deinit();
+            for (self.archetypes) |*maybe_arche| {
+                if (maybe_arche.*) |*arche| {
+                    arche.archetype.deinit();
                 }
             }
             allocator.free(self.archetypes);
+        }
+
+        pub fn clearRetainingCapacity(self: *Self) void {
+            for (self.children) |maybe_child| {
+                var m_child: ?Self = maybe_child;
+                if (m_child) |*child| {
+                    child.clearRetainingCapacity();
+                }
+            }
+
+            for (self.archetypes) |*maybe_arche| {
+                if (maybe_arche.*) |*arche| {
+                    arche.archetype.clearRetainingCapacity();
+                }
+            }
         }
 
         /// retrieve all archetype interfaces that are at the path destination and all children of the destination
@@ -254,6 +268,20 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             self.archetype_paths.deinit();
             self.entity_references.deinit();
             self.root_node.deinit(self.allocator);
+        }
+
+        pub inline fn clearRetainingCapacity(self: *ArcheContainer) void {
+            const zone = ztracy.ZoneNC(@src(), "Container clear", Color.arche_container);
+            defer zone.End();
+
+            // paths are kept
+            // self.archetype_paths.clearRetainingCapacity();
+            // self.archetype_paths.appendAssumeCapacity(ArchetypePath{ .len = 0, .indices = undefined });
+
+            self.entity_references.clearRetainingCapacity();
+            self.entity_references.appendAssumeCapacity(undefined);
+
+            self.root_node.clearRetainingCapacity();
         }
 
         pub const CreateEntityResult = struct {
