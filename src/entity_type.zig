@@ -1,5 +1,5 @@
 pub const EntityId = u32;
-pub const Entity = struct {
+pub const Entity = packed struct {
     id: EntityId,
 };
 
