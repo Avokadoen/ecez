@@ -19,158 +19,158 @@ const ez_testing = @import("Testing.zig");
 
 // TODO: option to use stack instead of heap
 
+pub const version_major = 0;
+pub const version_minor = 1;
+pub const version_patch = 0;
+
+pub const SerializeError = error{
+    OutOfMemory,
+};
+
+pub const DeserializeError = error{
+    OutOfMemory,
+    /// The intial bytes had unexpected content, probably not an ezby file
+    UnexpectedEzbyIdentifier,
+    /// Missing one or more component types from the serializer type
+    UnknownComponentType,
+};
+
 /// Generate an ecby serializer. The type needs the components used which will be used to get a world type
 pub fn Serializer(comptime components: anytype) type {
     return struct {
-        const version_major = 0;
-        const version_minor = 1;
-        const version_patch = 0;
-
         const World = world.WorldBuilder().WithComponents(components).Build();
         const ByteList = std.ArrayList(u8);
 
         // TODO: option to use stack instead of heap
         // TODO: heavily hint that arena allocator should be used?
         /// Serialize a world instance to a byte array. The caller owns the returned memory
-        pub fn serialize(allocator: Allocator, initial_byte_size: usize, world_to_serialize: *const World) ![]const u8 {
+        pub fn serialize(allocator: Allocator, initial_byte_size: usize, world_to_serialize: *const World) SerializeError![]const u8 {
             const zone = ztracy.ZoneNC(@src(), "Ezby serialize", Color.serializer);
             defer zone.End();
 
             const inital_written_size = @max(@sizeOf(Chunk.Ezby), initial_byte_size);
             var written_bytes = try ByteList.initCapacity(allocator, inital_written_size);
+            errdefer written_bytes.deinit();
 
-            var comp_chunk_count: u8 = 0;
-            var arch_chunk_count: u8 = 0;
+            const ezby_chunk = Chunk.Ezby{
+                .version_major = version_major,
+                .version_minor = version_minor,
+                .version_patch = version_patch,
+                .comp_chunks = 1,
+                .arch_chunks = @intCast(
+                    u16,
+                    world_to_serialize.container.archetype_paths.items.len - 1,
+                ),
+            };
+            // append partially complete ezby chunk to ensure these bytes are used by the ezby chunk
+            written_bytes.appendSliceAssumeCapacity(mem.asBytes(&ezby_chunk));
 
-            var owned_slize = blk: {
-                errdefer written_bytes.deinit();
-
-                const ezby_chunk = Chunk.Ezby{
-                    .version_major = version_major,
-                    .version_minor = version_minor,
-                    .version_patch = version_patch,
-                    .comp_chunks = 0,
-                    .arch_chunks = 0,
+            // append comp data
+            {
+                const comp_chunk = Chunk.Comp{
+                    .number_of_components = @intCast(u32, world_to_serialize.container.component_hashes.len),
                 };
-                // append partially complete ezby chunk to ensure these bytes are used by the ezby chunk
-                written_bytes.appendSliceAssumeCapacity(mem.asBytes(&ezby_chunk));
+                try written_bytes.appendSlice(mem.asBytes(&comp_chunk));
+                try written_bytes.appendSlice(
+                    @ptrCast(
+                        [*]const u8,
+                        &world_to_serialize.container.component_hashes,
+                    )[0 .. comp_chunk.number_of_components * @sizeOf(Chunk.Comp.Rtti)],
+                );
+                try written_bytes.appendSlice(
+                    @ptrCast(
+                        [*]const u8,
+                        &world_to_serialize.container.component_sizes,
+                    )[0 .. comp_chunk.number_of_components * @sizeOf(Chunk.Comp.Rtti)],
+                );
+            }
 
-                // append comp data
-                {
-                    const comp_chunk = Chunk.Comp{
-                        .number_of_components = @intCast(u32, world_to_serialize.container.component_hashes.len),
-                    };
-                    try written_bytes.appendSlice(mem.asBytes(&comp_chunk));
-                    try written_bytes.appendSlice(
-                        @ptrCast(
-                            [*]const u8,
-                            &world_to_serialize.container.component_hashes,
-                        )[0 .. comp_chunk.number_of_components * @sizeOf(Chunk.Comp.Rtti)],
-                    );
-                    try written_bytes.appendSlice(
-                        @ptrCast(
-                            [*]const u8,
-                            &world_to_serialize.container.component_sizes,
-                        )[0 .. comp_chunk.number_of_components * @sizeOf(Chunk.Comp.Rtti)],
-                    );
-
-                    comp_chunk_count += 1;
-                }
-
-                // step through the archetype tree and serialize each archetype
-                path_iter: for (world_to_serialize.container.archetype_paths.items[1..]) |path| {
-                    const archetype: *OpaqueArchetype = blk1: {
-                        // step through the path to find the current archetype
-                        if (path.len > 0 and path.indices.len > 0) {
-                            var current_node = &world_to_serialize.container.root_node;
-                            for (path.indices[0 .. path.len - 1]) |step| {
-                                current_node = &current_node.children[step].?;
-                            }
-
-                            // get the archetype of the path
-                            break :blk1 &current_node.archetypes[path.indices[path.len - 1]].?.archetype;
+            // step through the archetype tree and serialize each archetype
+            path_iter: for (world_to_serialize.container.archetype_paths.items[1..]) |path| {
+                const archetype: *OpaqueArchetype = blk1: {
+                    // step through the path to find the current archetype
+                    if (path.len > 0 and path.indices.len > 0) {
+                        var current_node = &world_to_serialize.container.root_node;
+                        for (path.indices[0 .. path.len - 1]) |step| {
+                            current_node = &current_node.children[step].?;
                         }
-                        continue :path_iter;
+
+                        // get the archetype of the path
+                        break :blk1 &current_node.archetypes[path.indices[path.len - 1]].?.archetype;
+                    }
+                    continue :path_iter;
+                };
+
+                const entity_count = archetype.entities.count();
+                const type_count = archetype.type_info.count();
+                std.debug.assert(archetype.component_storage.len == type_count);
+
+                // calculate arch chunk size
+                const arch_chunk_size = blk1: {
+                    const entity_map_size = blk2: {
+                        const kv_info = @typeInfo(EntityMap.KV).Struct;
+
+                        const entity_map_key_size = @sizeOf(kv_info.fields[0].type);
+                        const entity_map_value_size = @sizeOf(kv_info.fields[1].type);
+
+                        break :blk2 entity_count * (entity_map_key_size + entity_map_value_size);
                     };
 
-                    const entity_count = archetype.entities.count();
-                    const type_count = archetype.type_info.count();
-                    std.debug.assert(archetype.component_storage.len == type_count);
+                    const type_map_size = type_count * @sizeOf(u64) * 2;
 
-                    // calculate arch chunk size
-                    const arch_chunk_size = blk1: {
-                        const entity_map_size = blk2: {
-                            const kv_info = @typeInfo(EntityMap.KV).Struct;
-
-                            const entity_map_key_size = @sizeOf(kv_info.fields[0].type);
-                            const entity_map_value_size = @sizeOf(kv_info.fields[1].type);
-
-                            break :blk2 entity_count * (entity_map_key_size + entity_map_value_size);
-                        };
-
-                        const type_map_size = type_count * @sizeOf(u64) * 2;
-
-                        const component_bytes_size = blk2: {
-                            var type_info_iter = archetype.type_info.iterator();
-
-                            var size: usize = 0;
-                            for (archetype.component_storage) |component_bytes| {
-                                const type_info = type_info_iter.next() orelse unreachable;
-                                size = component_bytes.items.len * type_info.value_ptr.size;
-                            }
-                            break :blk2 @intCast(u64, size);
-                        };
-
-                        break :blk1 @sizeOf(Chunk.Arch) + type_map_size + entity_map_size + component_bytes_size;
-                    };
-
-                    // ensure we will have enough capacity for the ARCH chunk
-                    try written_bytes.ensureUnusedCapacity(arch_chunk_size);
-                    {
-                        const arch_chunk = Chunk.Arch{
-                            .number_of_components = @intCast(u32, type_count),
-                            .number_of_entities = @intCast(u64, entity_count),
-                        };
-                        written_bytes.appendSliceAssumeCapacity(mem.asBytes(&arch_chunk));
-
-                        // serialize Arch.RttiList
+                    const component_bytes_size = blk2: {
                         var type_info_iter = archetype.type_info.iterator();
-                        while (type_info_iter.next()) |type_info| {
-                            written_bytes.appendSliceAssumeCapacity(mem.asBytes(type_info.key_ptr));
-                            const type_size = @intCast(u64, type_info.value_ptr.size);
-                            written_bytes.appendSliceAssumeCapacity(mem.asBytes(&type_size));
-                        }
 
-                        // serialize Arch.EntityMapList
-                        const padding: u32 = 0;
-                        var entity_iter = archetype.entities.iterator();
-                        while (entity_iter.next()) |entry| {
-                            // entity key
-                            written_bytes.appendSliceAssumeCapacity(mem.asBytes(entry.key_ptr));
-                            written_bytes.appendSliceAssumeCapacity(mem.asBytes(&padding));
-                            // component index
-                            written_bytes.appendSliceAssumeCapacity(mem.asBytes(entry.value_ptr));
-                        }
-
-                        // append component bytes
+                        var size: usize = 0;
                         for (archetype.component_storage) |component_bytes| {
-                            written_bytes.appendSliceAssumeCapacity(component_bytes.items);
+                            const type_info = type_info_iter.next() orelse unreachable;
+                            size = component_bytes.items.len * type_info.value_ptr.size;
                         }
+                        break :blk2 @intCast(u64, size);
+                    };
+
+                    break :blk1 @sizeOf(Chunk.Arch) + type_map_size + entity_map_size + component_bytes_size;
+                };
+
+                // ensure we will have enough capacity for the ARCH chunk
+                try written_bytes.ensureUnusedCapacity(arch_chunk_size);
+                {
+                    const arch_chunk = Chunk.Arch{
+                        .number_of_components = @intCast(u32, type_count),
+                        .number_of_entities = @intCast(u64, entity_count),
+                    };
+                    written_bytes.appendSliceAssumeCapacity(mem.asBytes(&arch_chunk));
+
+                    // serialize Arch.RttiList
+                    var type_info_iter = archetype.type_info.iterator();
+                    while (type_info_iter.next()) |type_info| {
+                        written_bytes.appendSliceAssumeCapacity(mem.asBytes(type_info.key_ptr));
+                        const type_size = @intCast(u64, type_info.value_ptr.size);
+                        written_bytes.appendSliceAssumeCapacity(mem.asBytes(&type_size));
+                    }
+
+                    // serialize Arch.EntityMapList
+                    const padding: u32 = 0;
+                    var entity_iter = archetype.entities.iterator();
+                    while (entity_iter.next()) |entry| {
+                        // entity key
+                        written_bytes.appendSliceAssumeCapacity(mem.asBytes(entry.key_ptr));
+                        written_bytes.appendSliceAssumeCapacity(mem.asBytes(&padding));
+                        // component index
+                        written_bytes.appendSliceAssumeCapacity(mem.asBytes(entry.value_ptr));
+                    }
+
+                    // append component bytes
+                    for (archetype.component_storage) |component_bytes| {
+                        written_bytes.appendSliceAssumeCapacity(component_bytes.items);
                     }
                 }
+            }
 
-                break :blk try written_bytes.toOwnedSlice();
-            };
-            errdefer allocator.free(owned_slize);
-
-            // write chunk counts, when we finally know how many chunks we have
-            owned_slize[@offsetOf(Chunk.Ezby, "comp_chunks")] = comp_chunk_count;
-            owned_slize[@offsetOf(Chunk.Ezby, "arch_chunks")] = arch_chunk_count;
-
-            return owned_slize;
+            return written_bytes.toOwnedSlice();
         }
 
-        // pub fn deserialize(allocator: Allocator, ezby_bytes: []const u8) !World {}
+        // pub fn deserialize(world: *World, ezby_bytes: []const u8) DeserializeError!void {}
     };
 }
 
@@ -242,9 +242,9 @@ test "serializing then using parseEzbyChunk produce expected EZBY chunk" {
     _ = parseEzbyChunk(bytes, &ezby);
 
     try testing.expectEqual(Chunk.Ezby{
-        .version_major = Serialize.version_major,
-        .version_minor = Serialize.version_minor,
-        .version_patch = Serialize.version_patch,
+        .version_major = version_major,
+        .version_minor = version_minor,
+        .version_patch = version_patch,
         .comp_chunks = 1,
         .arch_chunks = 0,
     }, ezby.*);
