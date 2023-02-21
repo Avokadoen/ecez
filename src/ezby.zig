@@ -560,9 +560,11 @@ test "serialize and deserialize is idempotent" {
     while (i < test_data_count) : (i += 1) {
         try testing.expectEqual(a_as[i], try dummy_world.getComponent(a_entities[i], ez_testing.Component.A));
         try testing.expectError(error.ComponentMissing, dummy_world.getComponent(a_entities[i], ez_testing.Component.B));
+        try testing.expectError(error.ComponentMissing, dummy_world.getComponent(a_entities[i], ez_testing.Component.C));
 
         try testing.expectEqual(ab_as[i], try dummy_world.getComponent(ab_entities[i], ez_testing.Component.A));
         try testing.expectEqual(ab_bs[i], try dummy_world.getComponent(ab_entities[i], ez_testing.Component.B));
+        try testing.expectError(error.ComponentMissing, dummy_world.getComponent(ab_entities[i], ez_testing.Component.C));
 
         try testing.expectEqual(abc_as[i], try dummy_world.getComponent(abc_entities[i], ez_testing.Component.A));
         try testing.expectEqual(abc_bs[i], try dummy_world.getComponent(abc_entities[i], ez_testing.Component.B));
