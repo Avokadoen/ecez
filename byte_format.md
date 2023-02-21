@@ -10,17 +10,12 @@ This section contain each chunk defined by ezby and how they can be parsed.
 
 ### EZBY - File header metadata 
 
-// TODO: remove *ezby patch version*, *reserved_1*, *COMP chunks*, *ARCH chunks*: (they are not really needed)                       
-
-| <div style="width:155px">Data</div> | Bytes | <div style="width:300px">Description</div>                    |
-|:------------------------------------|:-----:|:--------------------------------------------------------------|
-| "EZBY"                              | 4     | chunk identifier                                              |
-| *ezby major version*                | 1     | ezby major version of the current file                        |
-| *ezby minor version*                | 1     | ezby minor version of the current file                        |
-| *ezby patch version*                | 1     | ezby patch version of the current file                        |
-| *reserved_1*                        | 1     | reserved byte                                                 |
-| *COMP chunks*                       | 2     | how many COMP chunks                                          |
-| *ARCH chunks*                       | 2     | how many ARCH chunks                                          |
+| <div style="width:155px">Data</div> | Bytes | <div style="width:300px">Description</div> |
+|:------------------------------------|:-----:|:-------------------------------------------|
+| "EZBY"                              | 4     | chunk identifier                           |
+| *ezby major version*                | 1     | ezby major version of the current file     |
+| *ezby minor version*                | 1     | ezby minor version of the current file     |
+| *reserved*                          | 2     | reserved bytes                             |
 
 ### COMP - Metadata for each component type 
 
@@ -33,6 +28,16 @@ This section contain each chunk defined by ezby and how they can be parsed.
 | *component_hash*                    | 8 * N | Component type hash identifier                         |
 | *component_size*                    | 8 * N | Component byte size                                    |
 
+### SHAR - SharedState chunk (TODO)
+
+One SHAR(e) chunk contain one shareable entry. This include the byte hash and size of the shared state and the bytes for the state.
+
+| <div style="width:155px">Data</div> |     Bytes        | <div style="width:200px">Description</div> |
+|:------------------------------------|:----------------:|:-------------------------------------------|
+| "SHAR"                              | 4                | chunk identifier                           |
+| *RTTI hash*                         | 8                | Shared state type hash                     |
+| *RTTI size*                         | 8                | Shared state type size                     |
+| *component bytes list*              | 1 * *RTTI size*  | Shared state data as bytes.                |
 
 ### ARCH - All entities and component data for an archetype
 
@@ -49,6 +54,7 @@ This section contain each chunk defined by ezby and how they can be parsed.
 | *N<sup>2</sup> type RTTI*                                                   | (8 + 8) * N<sup>2</sup>| First 8 bytes are the type hash, the subsequent 8 are the size |
 | *N<sup>1</sup> entity map*                                                  | (4 + 4 + 8) * N<sup>1</sup>| First 4 bytes are the entity followed by 4 bytes of<br>padding and the subsequent 8 are the index in the<br>component list(s) |
 | \|- *component byte list <br>\|&nbsp;&nbsp;M out of N<sup>2</sup>*          | 1 * size         | Component data as bytes.<br>Byte count can be deduced from the type RTTI |
+
 
 ## <a name="data_types"></a>Data types
 
