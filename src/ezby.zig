@@ -162,7 +162,7 @@ pub fn Serializer(comptime components: anytype) type {
             return written_bytes.toOwnedSlice();
         }
 
-        /// Desrialize the supplied bytes and insert them into the world. This function will
+        /// Deserialize the supplied bytes and insert them into the world. This function will
         /// clear the world memory which means that all that currently in the world will be
         /// wiped.
         pub fn deserialize(dest_world: *World, ezby_bytes: []const u8) DeserializeError!void {
@@ -307,23 +307,6 @@ fn parseEzbyChunk(bytes: []const u8, chunk: **const Chunk.Ezby) error{Unexpected
     return bytes[@sizeOf(Chunk.Ezby)..];
 }
 
-test "serializing then using parseEzbyChunk produce expected EZBY chunk" {
-    const Serialize = Serializer(.{});
-    var dummy_world = try Serialize.World.init(std.testing.allocator, .{});
-    defer dummy_world.deinit();
-
-    const bytes = try Serialize.serialize(testing.allocator, 516, dummy_world);
-    defer testing.allocator.free(bytes);
-
-    var ezby: *Chunk.Ezby = undefined;
-    _ = try parseEzbyChunk(bytes, &ezby);
-
-    try testing.expectEqual(Chunk.Ezby{
-        .version_major = version_major,
-        .version_minor = version_minor,
-    }, ezby.*);
-}
-
 /// parse COMP chunk from bytes and return remaining bytes
 fn parseCompChunk(
     bytes: []const u8,
@@ -355,6 +338,68 @@ fn parseCompChunk(
     // TODO: verify that components we used to initialize world with are in one of these chunks
     const next_byte = @sizeOf(Chunk.Comp) + list_size * 2;
     return bytes[next_byte..];
+}
+
+fn parseArchChunk(
+    bytes: []const u8,
+    chunk: **const Chunk.Arch,
+    rtti_list: *Chunk.Arch.RttiList,
+    entity_map_list: *Chunk.Arch.EntityMapList,
+    component_bytes: *[*]const u8,
+) []const u8 {
+    const zone = ztracy.ZoneNC(@src(), "Parse ARCH chunk", Color.serializer);
+    defer zone.End();
+
+    std.debug.assert(bytes.len >= @sizeOf(Chunk.Arch));
+    std.debug.assert(mem.eql(u8, bytes[0..4], "ARCH"));
+
+    chunk.* = @ptrCast(
+        *const Chunk.Arch,
+        @alignCast(@alignOf(Chunk.Arch), bytes.ptr),
+    );
+
+    rtti_list.* = @ptrCast(
+        Chunk.Arch.RttiList,
+        @alignCast(@alignOf(Chunk.Arch.RttiList), bytes[@sizeOf(Chunk.Arch)..].ptr),
+    );
+    const rtti_list_size = chunk.*.number_of_components * @sizeOf(Chunk.Arch.Rtti);
+
+    const entity_map_list_offset = @sizeOf(Chunk.Arch) + rtti_list_size;
+    entity_map_list.* = @ptrCast(
+        Chunk.Arch.EntityMapList,
+        @alignCast(@alignOf(Chunk.Arch.EntityMapList), bytes[entity_map_list_offset..].ptr),
+    );
+    const entity_map_size = chunk.*.number_of_entities * @sizeOf(Chunk.Arch.EntityMap);
+
+    const component_bytes_offset = entity_map_list_offset + entity_map_size;
+    component_bytes.* = bytes[component_bytes_offset..].ptr;
+
+    const remaining_bytes_offset = blk: {
+        var component_byte_size: u64 = 0;
+        for (rtti_list.*[0..chunk.*.number_of_components]) |component_rtti| {
+            component_byte_size += component_rtti.size * chunk.*.number_of_entities;
+        }
+        break :blk component_bytes_offset + component_byte_size;
+    };
+
+    return bytes[remaining_bytes_offset..];
+}
+
+test "serializing then using parseEzbyChunk produce expected EZBY chunk" {
+    const Serialize = Serializer(.{});
+    var dummy_world = try Serialize.World.init(std.testing.allocator, .{});
+    defer dummy_world.deinit();
+
+    const bytes = try Serialize.serialize(testing.allocator, 516, dummy_world);
+    defer testing.allocator.free(bytes);
+
+    var ezby: *Chunk.Ezby = undefined;
+    _ = try parseEzbyChunk(bytes, &ezby);
+
+    try testing.expectEqual(Chunk.Ezby{
+        .version_major = version_major,
+        .version_minor = version_minor,
+    }, ezby.*);
 }
 
 test "serializing then using parseCompChunk produce expected COMP chunk" {
@@ -406,51 +451,6 @@ test "serializing then using parseCompChunk produce expected COMP chunk" {
         @as(u64, @sizeOf(ez_testing.Component.B)),
         size_list[1],
     );
-}
-
-fn parseArchChunk(
-    bytes: []const u8,
-    chunk: **const Chunk.Arch,
-    rtti_list: *Chunk.Arch.RttiList,
-    entity_map_list: *Chunk.Arch.EntityMapList,
-    component_bytes: *[*]const u8,
-) []const u8 {
-    const zone = ztracy.ZoneNC(@src(), "Parse ARCH chunk", Color.serializer);
-    defer zone.End();
-
-    std.debug.assert(bytes.len >= @sizeOf(Chunk.Arch));
-    std.debug.assert(mem.eql(u8, bytes[0..4], "ARCH"));
-
-    chunk.* = @ptrCast(
-        *const Chunk.Arch,
-        @alignCast(@alignOf(Chunk.Arch), bytes.ptr),
-    );
-
-    rtti_list.* = @ptrCast(
-        Chunk.Arch.RttiList,
-        @alignCast(@alignOf(Chunk.Arch.RttiList), bytes[@sizeOf(Chunk.Arch)..].ptr),
-    );
-    const rtti_list_size = chunk.*.number_of_components * @sizeOf(Chunk.Arch.Rtti);
-
-    const entity_map_list_offset = @sizeOf(Chunk.Arch) + rtti_list_size;
-    entity_map_list.* = @ptrCast(
-        Chunk.Arch.EntityMapList,
-        @alignCast(@alignOf(Chunk.Arch.EntityMapList), bytes[entity_map_list_offset..].ptr),
-    );
-    const entity_map_size = chunk.*.number_of_entities * @sizeOf(Chunk.Arch.EntityMap);
-
-    const component_bytes_offset = entity_map_list_offset + entity_map_size;
-    component_bytes.* = bytes[component_bytes_offset..].ptr;
-
-    const remaining_bytes_offset = blk: {
-        var component_byte_size: u64 = 0;
-        for (rtti_list.*[0..chunk.*.number_of_components]) |component_rtti| {
-            component_byte_size += component_rtti.size * chunk.*.number_of_entities;
-        }
-        break :blk component_bytes_offset + component_byte_size;
-    };
-
-    return bytes[remaining_bytes_offset..];
 }
 
 test "serializing then using parseArchChunk produce expected ARCH chunk" {
