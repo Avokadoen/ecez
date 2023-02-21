@@ -38,9 +38,9 @@ pub const DeserializeError = error{
 };
 
 /// Generate an ecby serializer. The type needs the components used which will be used to get a world type
-pub fn Serializer(comptime components: anytype) type {
+pub fn Serializer(comptime components: anytype, comptime shared_state: anytype, comptime events: anytype) type {
     return struct {
-        const World = world.WorldBuilder().WithComponents(components).Build();
+        pub const World = world.WorldBuilder().WithComponents(components).WithSharedState(shared_state).WithEvents(events).Build();
         const ByteList = std.ArrayList(u8);
 
         // TODO: option to use stack instead of heap
@@ -386,7 +386,7 @@ fn parseArchChunk(
 }
 
 test "serializing then using parseEzbyChunk produce expected EZBY chunk" {
-    const Serialize = Serializer(.{});
+    const Serialize = Serializer(.{}, .{}, .{});
     var dummy_world = try Serialize.World.init(std.testing.allocator, .{});
     defer dummy_world.deinit();
 
@@ -406,7 +406,7 @@ test "serializing then using parseCompChunk produce expected COMP chunk" {
     const Serialize = Serializer(.{
         ez_testing.Component.A,
         ez_testing.Component.B,
-    });
+    }, .{}, .{});
     var dummy_world = try Serialize.World.init(std.testing.allocator, .{});
     defer dummy_world.deinit();
 
@@ -457,7 +457,7 @@ test "serializing then using parseArchChunk produce expected ARCH chunk" {
     const Serialize = Serializer(.{
         ez_testing.Component.A,
         ez_testing.Component.B,
-    });
+    }, .{}, .{});
     var dummy_world = try Serialize.World.init(std.testing.allocator, .{});
     defer dummy_world.deinit();
 
@@ -515,7 +515,7 @@ test "serialize and deserialize is idempotent" {
         ez_testing.Component.A,
         ez_testing.Component.B,
         ez_testing.Component.C,
-    });
+    }, .{}, .{});
     var dummy_world = try Serialize.World.init(std.testing.allocator, .{});
     defer dummy_world.deinit();
 
