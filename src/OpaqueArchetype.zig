@@ -114,9 +114,6 @@ pub fn getComponent(self: OpaqueArchetype, entity: Entity, comptime T: type) ece
 
 pub fn setComponent(self: *OpaqueArchetype, entity: Entity, component: anytype) ArchetypeError!void {
     const T = @TypeOf(component);
-    if (@sizeOf(T) == 0) {
-        return; // TODO: check if we have component?
-    }
     const bytes = std.mem.asBytes(&component);
     try self.rawSetComponent(entity, comptime hashType(T), bytes);
 }
@@ -163,6 +160,10 @@ pub fn rawSetComponent(self: *OpaqueArchetype, entity: Entity, type_hash: u64, c
     const entity_index = self.entities.get(entity) orelse {
         return ArchetypeError.EntityMissing; // Entity not part of archetype
     };
+
+    if (component.len == 0) {
+        return;
+    }
 
     const bytes_from = entity_index * component_info.size;
 

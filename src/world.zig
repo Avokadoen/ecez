@@ -11,6 +11,7 @@ const JobId = zjobs.JobId;
 const meta = @import("meta.zig");
 const archetype_container = @import("archetype_container.zig");
 const archetype_cache = @import("archetype_cache.zig");
+const ecez_error = @import("error.zig");
 const Entity = @import("entity_type.zig").Entity;
 const EntityRef = @import("entity_type.zig").EntityRef;
 const Color = @import("misc.zig").Color;
@@ -306,7 +307,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
         /// Parameters:
         ///     - entity:    the entity to retrieve Component from
         ///     - Component: the type of the component to retrieve
-        pub fn getComponent(self: *World, entity: Entity, comptime Component: type) !Component {
+        pub fn getComponent(self: *World, entity: Entity, comptime Component: type) ecez_error.ArchetypeError!Component {
             const zone = ztracy.ZoneNC(@src(), "World getComponent", Color.world);
             defer zone.End();
             return self.container.getComponent(entity, Component);
@@ -681,6 +682,22 @@ test "setComponent() update entities component state" {
 
     const stored_a = try world.getComponent(entity, Testing.Component.A);
     try testing.expectEqual(a, stored_a);
+}
+
+test "setComponent() with empty component moves entity" {
+    var world = try WorldStub.init(testing.allocator, .{});
+    defer world.deinit();
+
+    const initial_state = AbEntityType{
+        .a = Testing.Component.A{},
+        .b = Testing.Component.B{},
+    };
+    const entity = try world.createEntity(initial_state);
+
+    const c = Testing.Component.C{};
+    try world.setComponent(entity, c);
+
+    try testing.expectEqual(true, world.hasComponent(entity, Testing.Component.C));
 }
 
 test "removeComponent() removes the component as expected" {
