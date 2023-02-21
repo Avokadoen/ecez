@@ -26,7 +26,7 @@ pub fn ArchetypeCacheMask(comptime components: []const type) type {
         pub inline fn isCoherent(self: Self, comptime other_components: []const type) bool {
             const other_comp_positions = comptime blk: {
                 var positions: [other_components.len]usize = undefined;
-                for (other_components) |OtherComponent, pos_index| {
+                for (other_components, 0..) |OtherComponent, pos_index| {
                     positions[pos_index] = offsetOf(OtherComponent);
                 }
                 break :blk positions;
@@ -48,7 +48,7 @@ pub fn ArchetypeCacheMask(comptime components: []const type) type {
 
         pub inline fn setIncoherentBitWithTypeHashes(self: *Self, type_hashes: []const u64) void {
             outer: for (type_hashes) |hash| {
-                inline for (components) |Component, i| {
+                inline for (components, 0..) |Component, i| {
                     if (hash == query.hashType(Component)) {
                         self.mask |= (1 << i);
                         continue :outer;
@@ -63,7 +63,7 @@ pub fn ArchetypeCacheMask(comptime components: []const type) type {
         }
 
         inline fn offsetOf(comptime OtherComponent: type) comptime_int {
-            for (components) |Component, comp_location| {
+            for (components, 0..) |Component, comp_location| {
                 if (OtherComponent == Component) {
                     return comp_location;
                 }

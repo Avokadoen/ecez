@@ -218,7 +218,7 @@ pub fn Serializer(comptime components: anytype, comptime shared_state: anytype, 
                 while (entity_count < arch.number_of_entities) : (entity_count += 1) {
                     const entity = try dest_world.createEntity(.{});
 
-                    for (rtti_list[0..arch.number_of_components]) |rtti, rtti_index| {
+                    for (rtti_list[0..arch.number_of_components], 0..) |rtti, rtti_index| {
                         inline for (components) |Component| {
                             if (query.hashType(Component) == rtti.hash) {
                                 // offset bytes by how many bytes in current offset we are

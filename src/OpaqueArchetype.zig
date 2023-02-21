@@ -51,7 +51,7 @@ pub fn init(allocator: Allocator, type_hashes: []const u64, type_sizes: []const 
     errdefer type_info.deinit();
 
     try type_info.ensureTotalCapacity(type_hashes.len);
-    for (type_hashes) |hash, i| {
+    for (type_hashes, 0..) |hash, i| {
         type_info.putAssumeCapacity(hash, TypeInfo{
             .storage_index = i,
             .size = type_sizes[i],
@@ -194,7 +194,7 @@ pub fn rawRegisterEntity(self: *OpaqueArchetype, entity: Entity, data: []const [
     }
 
     const type_infos = self.type_info.values();
-    for (data) |component_bytes, i| {
+    for (data, 0..) |component_bytes, i| {
         if (data.len > 0) {
             // this might change in the future, which will mean we will need to update this code
             std.debug.assert(type_infos[i].storage_index == i);
@@ -266,7 +266,7 @@ pub fn rawGetStorageData(self: *OpaqueArchetype, component_hashes: []const u64, 
     while (iter.next()) |info| {
         const iter_hash = info.key_ptr.*;
         const iter_size = info.value_ptr.size;
-        for (component_hashes) |hash, hash_index| {
+        for (component_hashes, 0..) |hash, hash_index| {
             if (iter_hash == hash) {
                 if (iter_size > 0) {
                     storage.outer[hash_index] = self.component_storage[iter_count].items;

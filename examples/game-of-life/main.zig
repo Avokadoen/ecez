@@ -127,12 +127,12 @@ fn renderCell(pos: GridPos, health: Health, render_target: *ecez.SharedState(Ren
 
     if (health.alive) {
         const output = "[X]";
-        inline for (output) |o, i| {
+        inline for (output, 0..) |o, i| {
             render_target.output_buffer[start + i] = o;
         }
     } else {
         const output = "[ ]";
-        inline for (output) |o, i| {
+        inline for (output, 0..) |o, i| {
             render_target.output_buffer[start + i] = o;
         }
     }

@@ -41,7 +41,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
     const component_info: [submitted_components.len]ComponentInfo = blk: {
         comptime var info: [submitted_components.len]ComponentInfo = undefined;
         comptime var sort: [submitted_components.len]Sort = undefined;
-        for (submitted_components) |Component, i| {
+        for (submitted_components, 0..) |Component, i| {
             const component_size = @sizeOf(Component);
             if (component_size > biggest_component_size) {
                 biggest_component_size = component_size;
@@ -59,8 +59,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             sort[i] = .{ .hash = info[i].hash };
         }
         comptime ecez_query.sort(Sort, &sort);
-        for (sort) |s, j| {
-            for (info) |inf, k| {
+        for (sort, 0..) |s, j| {
+            for (info, 0..) |inf, k| {
                 if (s.hash == inf.hash) {
                     std.mem.swap(ComponentInfo, &info[j], &info[k]);
                 }
@@ -142,7 +142,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                         return;
                     }
 
-                    for (self.children) |maybe_child, i| {
+                    for (self.children, 0..) |maybe_child, i| {
                         if (maybe_child) |child| {
                             // if the path index is the current loop index
                             const on_path = (some_path[0] - depth) == i;
@@ -172,7 +172,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                     };
 
                     if (skip_searching_siblings) {
-                        for (self.children) |maybe_child, i| {
+                        for (self.children, 0..) |maybe_child, i| {
                             if (maybe_child) |child| {
                                 if (i == arche_index) {
                                     // record all defined archetypes in the child as well since they also only have suitable archetypes
@@ -181,7 +181,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                             }
                         }
                     } else {
-                        for (self.children) |maybe_child, i| {
+                        for (self.children, 0..) |maybe_child, i| {
                             if (maybe_child) |child| {
                                 if (i == arche_index) {
                                     // record all defined archetypes in the child as well since they also only have suitable archetypes
@@ -242,7 +242,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
             comptime var component_hashes: [submitted_components.len]u64 = undefined;
             comptime var component_sizes: [submitted_components.len]usize = undefined;
-            inline for (component_info) |info, i| {
+            inline for (component_info, 0..) |info, i| {
                 component_hashes[i] = info.hash;
                 component_sizes[i] = @sizeOf(info.type);
             }
@@ -361,7 +361,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
                                 // loop old path and find the correct order to insert the new component
                                 new_component_index = blk2: {
-                                    for (path.indices[0..old_path.len]) |step, depth| {
+                                    for (path.indices[0..old_path.len], 0..) |step, depth| {
                                         const existing_component_index = step + depth;
                                         if (existing_component_index > component_index) {
                                             break :blk2 depth;
@@ -372,7 +372,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                                 };
 
                                 path.indices[new_component_index] = @intCast(u15, component_index - new_component_index);
-                                for (old_path.indices[new_component_index..old_path.len]) |step, i| {
+                                for (old_path.indices[new_component_index..old_path.len], 0..) |step, i| {
                                     const index = new_component_index + i + 1;
                                     path.indices[index] = step - 1;
                                 }
@@ -406,7 +406,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                                 } else {
                                     var type_hashes: [submitted_components.len]u64 = undefined;
                                     var type_sizes: [submitted_components.len]usize = undefined;
-                                    for (new_path.indices[0..new_path.len]) |step, i| {
+                                    for (new_path.indices[0..new_path.len], 0..) |step, i| {
                                         type_hashes[i] = self.component_hashes[step + i];
                                         type_sizes[i] = self.component_sizes[step + i];
                                     }
@@ -429,7 +429,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                             };
 
                             var data: [submitted_components.len][]u8 = undefined;
-                            inline for (component_info) |_, i| {
+                            inline for (component_info, 0..) |_, i| {
                                 var buf: [biggest_component_size]u8 = undefined;
                                 data[i] = &buf;
                             }
@@ -483,7 +483,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             const old_path = self.archetype_paths.items[old_arche.path_index];
 
             var data: [submitted_components.len][]u8 = undefined;
-            inline for (component_info) |_, i| {
+            inline for (component_info, 0..) |_, i| {
                 var buf: [biggest_component_size]u8 = undefined;
                 data[i] = &buf;
             }
@@ -506,7 +506,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 };
 
                 var removed_step: bool = false;
-                for (old_path.indices[0..old_path.len]) |step, i| {
+                for (old_path.indices[0..old_path.len], 0..) |step, i| {
                     const component_index = step + i;
                     if (self.component_hashes[component_index] != component_hash) {
                         path.indices[path.len] = if (removed_step) step + 1 else step;
@@ -546,7 +546,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 } else {
                     var type_hashes: [submitted_components.len]u64 = undefined;
                     var type_sizes: [submitted_components.len]usize = undefined;
-                    for (new_path.indices[0..new_path.len]) |step, i| {
+                    for (new_path.indices[0..new_path.len], 0..) |step, i| {
                         type_hashes[i] = self.component_hashes[step + i];
                         type_sizes[i] = self.component_sizes[step + i];
                     }
@@ -587,7 +587,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             const path = self.archetype_paths.items[ref];
 
             var hashes: [submitted_components.len]u64 = undefined;
-            for (path.indices[0..path.len]) |step, i| {
+            for (path.indices[0..path.len], 0..) |step, i| {
                 hashes[i] = self.component_hashes[step + i];
             }
 
@@ -607,9 +607,9 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         /// caller own the returned memory
         pub inline fn getArchetypesWithComponents(self: ArcheContainer, allocator: Allocator, component_hashes: []const u64) error{OutOfMemory}![]*OpaqueArchetype {
             var path: [submitted_components.len]u16 = undefined;
-            for (component_hashes) |requested_hash, i| {
+            for (component_hashes, 0..) |requested_hash, i| {
                 path[i] = blk: {
-                    for (self.component_hashes[i..]) |stored_hash, step| {
+                    for (self.component_hashes[i..], 0..) |stored_hash, step| {
                         if (requested_hash == stored_hash) {
                             break :blk @intCast(u15, step + i);
                         }
@@ -661,10 +661,10 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             const index_path = comptime blk1: {
                 var path: [arche_struct_info.fields.len]TypeMap = undefined;
                 var sort: [arche_struct_info.fields.len]Sort = undefined;
-                inline for (arche_struct_info.fields) |field, i| {
+                inline for (arche_struct_info.fields, 0..) |field, i| {
                     // find index of field in outer component array
                     const component_index = blk2: {
-                        inline for (component_info) |component, j| {
+                        inline for (component_info, 0..) |component, j| {
                             if (field.type == component.type) {
                                 break :blk2 @intCast(u15, j);
                             }
@@ -683,8 +683,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 ecez_query.sort(Sort, &sort);
 
                 // sort path based on hash
-                for (sort) |s, j| {
-                    for (path) |p, k| {
+                for (sort, 0..) |s, j| {
+                    for (path, 0..) |p, k| {
                         if (s.hash == p.hash) {
                             std.mem.swap(TypeMap, &path[j], &path[k]);
                         }
@@ -697,7 +697,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             // get the node that will store the new entity
             var entity_node: *Node = blk: {
                 var current_node = &self.root_node;
-                for (index_path[0 .. index_path.len - 1]) |path, depth| {
+                for (index_path[0 .. index_path.len - 1], 0..) |path, depth| {
                     const index = path.component_index - depth;
                     // see if our new node exist
                     if (current_node.children[index]) |*child| {
@@ -718,7 +718,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             // create a component byte data view
             const fields = @typeInfo(ArchetypeStruct).Struct.fields;
             var data: [arche_struct_info.fields.len][]const u8 = undefined;
-            inline for (index_path) |path, i| {
+            inline for (index_path, 0..) |path, i| {
                 if (@sizeOf(fields[path.state_index].type) > 0) {
                     const field = &@field(initial_state, fields[path.state_index].name);
                     data[i] = std.mem.asBytes(field);
@@ -743,7 +743,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                             .len = index_path.len,
                             .indices = undefined,
                         };
-                        for (index_path) |sub_path, i| {
+                        for (index_path, 0..) |sub_path, i| {
                             archetype_path.indices[i] = sub_path.component_index - @intCast(u15, i);
                         }
                         try self.archetype_paths.append(archetype_path);
@@ -752,7 +752,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
                     comptime var type_hashes: [index_path.len]u64 = undefined;
                     comptime var type_sizes: [index_path.len]usize = undefined;
-                    inline for (index_path) |path, i| {
+                    inline for (index_path, 0..) |path, i| {
                         const Component = fields[path.state_index].type;
                         type_hashes[i] = comptime ecez_query.hashType(Component);
                         type_sizes[i] = @sizeOf(Component);
@@ -813,7 +813,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         }
 
         inline fn componentIndex(comptime Component: type) comptime_int {
-            inline for (component_info) |info, i| {
+            inline for (component_info, 0..) |info, i| {
                 if (Component == info.type) {
                     return i;
                 }

@@ -72,7 +72,7 @@ pub const SystemMetadata = struct {
         var component_params_count: usize = 0;
         var parsing_state = ParsingState.component_parsing;
         var params: [fn_info.params.len]Arg = undefined;
-        inline for (fn_info.params) |param, i| {
+        inline for (fn_info.params, 0..) |param, i| {
             const T = param.type orelse {
                 const err_msg = std.fmt.comptimePrint("system {s} argument {d} is missing type", .{
                     function_name,
@@ -207,7 +207,7 @@ pub const SystemMetadata = struct {
     /// This function will extrapolate interior types from pointers
     pub fn componentQueryArgTypes(comptime self: SystemMetadata) [self.component_params_count]type {
         comptime var params: [self.component_params_count]type = undefined;
-        inline for (self.fn_info.params) |arg, i| {
+        inline for (self.fn_info.params, 0..) |arg, i| {
             if (self.component_params_count == i) {
                 break;
             }
@@ -228,7 +228,7 @@ pub const SystemMetadata = struct {
     /// This function will include pointer types
     pub fn paramArgTypes(comptime self: SystemMetadata) [self.params.len]type {
         comptime var params: [self.fn_info.params.len]type = undefined;
-        inline for (self.fn_info.params) |arg, i| {
+        inline for (self.fn_info.params, 0..) |arg, i| {
             params[i] = arg.type.?;
         }
         return params;
@@ -295,7 +295,7 @@ pub fn countAndVerifyEvents(comptime events: anytype) comptime_int {
     const fields_info = events_type_info.Struct.fields;
     comptime var event_count = 0;
     // start by counting events registered
-    inline for (fields_info) |field_info, i| {
+    inline for (fields_info, 0..) |field_info, i| {
         switch (@typeInfo(field_info.type)) {
             .Type => {
                 switch (@typeInfo(events[i])) {
@@ -334,7 +334,7 @@ pub fn GenerateEventsEnum(comptime event_count: comptime_int, comptime events: a
     const fields_info = events_type_info.Struct.fields;
 
     var enum_fields: [event_count]Type.EnumField = undefined;
-    inline for (fields_info) |_, i| {
+    inline for (fields_info, 0..) |_, i| {
         enum_fields[i] = Type.EnumField{
             .name = events[i].name,
             .value = i,
@@ -362,7 +362,7 @@ pub fn countAndVerifySystems(comptime systems: anytype) comptime_int {
     const fields_info = systems_type_info.Struct.fields;
     comptime var systems_count = 0;
     // start by counting systems registered
-    inline for (fields_info) |field_info, i| {
+    inline for (fields_info, 0..) |field_info, i| {
         switch (@typeInfo(field_info.type)) {
             .Fn => systems_count += 1,
             .Type => {
@@ -442,7 +442,7 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
     systems_info.depend_on_indices_used = 0;
     {
         comptime var i: usize = 0;
-        inline for (fields_info) |field_info, j| {
+        inline for (fields_info, 0..) |field_info, j| {
             switch (@typeInfo(field_info.type)) {
                 .Fn => |func| {
                     systems_info.metadata[i] = SystemMetadata.init(null, field_info.type, func);
@@ -542,7 +542,7 @@ pub fn indexOfFunctionInSystems(comptime function: anytype, comptime stop_at: us
 
     {
         comptime var i: usize = 0;
-        inline for (fields_info) |field_info, j| {
+        inline for (fields_info, 0..) |field_info, j| {
             switch (@typeInfo(field_info.type)) {
                 .Fn => {
                     if (@TypeOf(systems[j]) == @TypeOf(function) and systems[j] == function) {
@@ -604,7 +604,7 @@ pub fn indexOfFunctionInSystems(comptime function: anytype, comptime stop_at: us
 /// Generate an archetype's SOA component storage
 pub fn ComponentStorage(comptime types: []const type) type {
     var struct_fields: [types.len]Type.StructField = undefined;
-    inline for (types) |T, i| {
+    inline for (types, 0..) |T, i| {
         const ArrT = std.ArrayList(T);
         var num_buf: [8]u8 = undefined;
         struct_fields[i] = .{
@@ -659,7 +659,7 @@ pub fn indexOfStructuresContainingTs(
 ) [countRelevantStructuresContainingTs(structures, t)]usize {
     comptime var indices: [countRelevantStructuresContainingTs(structures, t)]usize = undefined;
     comptime var i: usize = 0;
-    inline for (structures) |S, j| {
+    inline for (structures, 0..) |S, j| {
         const s_info = @typeInfo(S);
         if (s_info != .Struct) {
             @compileError("countRelevantStructuresContainingTs recieved non struct structure");
@@ -700,7 +700,7 @@ pub fn countTypeMapIndices(comptime type_tuple: anytype, comptime runtime_tuple_
     };
 
     var counter = 0;
-    outer: inline for (type_tuple_info.fields) |_, i| {
+    outer: inline for (type_tuple_info.fields, 0..) |_, i| {
         if (@TypeOf(type_tuple[i]) != type) {
             @compileError("expected type tuple to only have types");
         }
@@ -724,8 +724,8 @@ pub fn typeMap(comptime type_tuple: anytype, comptime runtime_tuple_type: type) 
     const rtr_array_size = countTypeMapIndices(type_tuple, runtime_tuple_type);
 
     var map: [rtr_array_size]comptime_int = undefined;
-    inline for (type_tuple_info.fields) |_, i| {
-        inline for (runtime_struct_info.fields) |runtime_field, j| {
+    inline for (type_tuple_info.fields, 0..) |_, i| {
+        inline for (runtime_struct_info.fields, 0..) |runtime_field, j| {
             if (type_tuple[i] == runtime_field.type) {
                 map[i] = j;
             }
@@ -784,7 +784,7 @@ pub fn SharedStateStorage(comptime shared_state: anytype) type {
 
     // var used_types: [shared_info.fields.len]type = undefined;
     var storage_fields: [shared_info.fields.len]Type.StructField = undefined;
-    inline for (shared_info.fields) |field, i| {
+    inline for (shared_info.fields, 0..) |field, i| {
         // // TODO: uncomment this when it does not crash compiler :)
         // for (used_types[0..i]) |used_type| {
         //     if (used_type == shared_state[i]) {
@@ -828,7 +828,7 @@ pub fn SharedState(comptime State: type) type {
     };
 
     var shared_state_fields: [state_info.fields.len + 1]Type.StructField = undefined;
-    inline for (state_info.fields) |field, i| {
+    inline for (state_info.fields, 0..) |field, i| {
         shared_state_fields[i] = field;
     }
 
@@ -860,7 +860,7 @@ pub fn EventArgument(comptime Argument: type) type {
     };
 
     var shared_state_fields: [state_info.fields.len + 1]Type.StructField = undefined;
-    inline for (state_info.fields) |field, i| {
+    inline for (state_info.fields, 0..) |field, i| {
         shared_state_fields[i] = field;
     }
 

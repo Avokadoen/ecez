@@ -39,7 +39,7 @@ pub fn FromTypes(comptime types: []const type, comptime result_count: comptime_i
             // grab next item
             var item: Item = undefined;
             const storage = self.iterate_data[self.outer_cursor].storage;
-            inline for (types) |T, i| {
+            inline for (types, 0..) |T, i| {
                 if (@sizeOf(T) > 0) {
                     // TODO: support AOS
                     item[i] = storage[i].items[self.inner_cursor];

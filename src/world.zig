@@ -86,7 +86,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
             @compileError("components was not a tuple of types");
         }
         var types: [components_info.Struct.fields.len]type = undefined;
-        for (components_info.Struct.fields) |_, i| {
+        for (components_info.Struct.fields, 0..) |_, i| {
             types[i] = components[i];
             if (@typeInfo(types[i]) != .Struct) {
                 @compileError("expected " ++ @typeName(types[i]) ++ " component type to be a struct");
@@ -104,7 +104,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
         // TODO: move to meta
         const Type = std.builtin.Type;
         var fields: [event_count]Type.StructField = undefined;
-        for (fields) |*field, i| {
+        for (&fields, 0..) |*field, i| {
             const event_system_count = events[i].system_count;
             const EventCacheStorage = archetype_cache.ArchetypeCacheStorage(event_system_count);
 
@@ -129,7 +129,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
         // TODO: move to meta
         const Type = std.builtin.Type;
         var fields: [event_count]Type.StructField = undefined;
-        for (fields) |*field, i| {
+        for (&fields, 0..) |*field, i| {
             const event_system_count = events[i].system_count;
             var num_buf: [8]u8 = undefined;
             field.* = Type.StructField{
@@ -177,7 +177,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
 
             var actual_shared_state: SharedStateStorage = undefined;
             const shared_state_map = meta.typeMap(shared_state_types, @TypeOf(shared_state));
-            inline for (shared_state_map) |index, i| {
+            inline for (shared_state_map, 0..) |index, i| {
                 const shared_info = @typeInfo(@TypeOf(shared_state[index]));
                 // copy all data except the added magic field
                 inline for (shared_info.Struct.fields) |field| {
@@ -186,14 +186,14 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
             }
 
             var event_cache_masks: [event_count]CacheMask = undefined;
-            for (event_cache_masks) |*mask| {
+            for (&event_cache_masks) |*mask| {
                 mask.* = CacheMask.init();
             }
 
             var event_cache_storages: EventCacheStorages = undefined;
             {
                 const event_cache_storages_info = @typeInfo(EventCacheStorages).Struct;
-                inline for (event_cache_storages_info.fields) |field, i| {
+                inline for (event_cache_storages_info.fields, 0..) |field, i| {
                     event_cache_storages[i] = field.type.init();
                 }
             }
@@ -207,7 +207,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
             var event_jobs_in_flight: EventJobsInFlight = undefined;
             {
                 const event_jobs_in_flight_info = @typeInfo(EventJobsInFlight).Struct;
-                inline for (event_jobs_in_flight_info.fields) |_, i| {
+                inline for (event_jobs_in_flight_info.fields, 0..) |_, i| {
                     event_jobs_in_flight[i] = [_]JobId{JobId.none} ** events[i].system_count;
                 }
             }
@@ -230,7 +230,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
             self.execution_job_queue.deinit();
 
             const event_cache_storages_info = @typeInfo(EventCacheStorages).Struct;
-            inline for (event_cache_storages_info.fields) |_, i| {
+            inline for (event_cache_storages_info.fields, 0..) |_, i| {
                 self.event_cache_storages[i].deinit(self.allocator);
             }
 
@@ -248,7 +248,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
             }
 
             const event_cache_storages_info = @typeInfo(EventCacheStorages).Struct;
-            inline for (event_cache_storages_info.fields) |_, i| {
+            inline for (event_cache_storages_info.fields, 0..) |_, i| {
                 self.event_cache_storages[i].clear();
             }
             self.container.clearRetainingCapacity();
@@ -343,12 +343,12 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                 }
             }
 
-            inline for (triggered_event.systems_info.metadata) |metadata, system_index| {
+            inline for (triggered_event.systems_info.metadata, 0..) |metadata, system_index| {
                 const component_query_types = comptime metadata.componentQueryArgTypes();
 
                 const component_hashes: [component_query_types.len]u64 = comptime blk: {
                     var hashes: [component_query_types.len]u64 = undefined;
-                    inline for (component_query_types) |T, i| {
+                    inline for (component_query_types, 0..) |T, i| {
                         hashes[i] = query.hashType(T);
                     }
                     break :blk hashes;
@@ -406,7 +406,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
 
                 if (dependency_job_indices) |indices| {
                     var jobs: [indices.len]JobId = undefined;
-                    for (indices) |index, i| {
+                    for (indices, 0..) |index, i| {
                         jobs[i] = event_jobs_in_flight[index];
                     }
 
@@ -493,7 +493,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
 
         fn indexOfSharedType(comptime Shared: type) comptime_int {
             const shared_storage_fields = @typeInfo(SharedStateStorage).Struct.fields;
-            inline for (shared_storage_fields) |field, i| {
+            inline for (shared_storage_fields, 0..) |field, i| {
                 if (field.type == Shared) {
                     return i;
                 }
@@ -503,7 +503,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
 
         inline fn markAllCacheMasks(self: *World, entity: Entity) void {
             if (self.container.getTypeHashes(entity)) |type_hashes| {
-                for (self.event_cache_masks) |*mask| {
+                for (&self.event_cache_masks) |*mask| {
                     mask.setIncoherentBitWithTypeHashes(type_hashes);
                 }
             }
@@ -537,7 +537,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                         var i: usize = 0;
                         while (i < storage.inner_len) : (i += 1) {
                             var arguments: std.meta.Tuple(&param_types) = undefined;
-                            inline for (param_types) |Param, j| {
+                            inline for (param_types, 0..) |Param, j| {
                                 switch (metadata.params[j]) {
                                     .component_value => {
                                         // get size of the parameter type
@@ -1306,7 +1306,7 @@ test "DependOn makes a events race free" {
         .a = .{ .value = 3 },
         .b = .{ .value = 2 },
     };
-    for (entities) |*entity| {
+    for (&entities) |*entity| {
         entity.* = try world.createEntity(inital_state);
     }
 
@@ -1359,7 +1359,7 @@ test "Event DependOn events can have multiple dependencies" {
         .a = .{ .value = 3 },
         .b = .{ .value = 2 },
     };
-    for (entities) |*entity| {
+    for (&entities) |*entity| {
         entity.* = try world.createEntity(inital_state);
     }
 

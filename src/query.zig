@@ -27,7 +27,7 @@ pub fn sortTypes(comptime Ts: []const type) [Ts.len]type {
         hash: u64,
     };
     var sort_target: [Ts.len]TypeSortElem = undefined;
-    inline for (Ts) |T, i| {
+    inline for (Ts, 0..) |T, i| {
         sort_target[i] = TypeSortElem{
             .original_index = i,
             .hash = hashType(T),
@@ -35,7 +35,7 @@ pub fn sortTypes(comptime Ts: []const type) [Ts.len]type {
     }
     sort(TypeSortElem, &sort_target);
     var types: [Ts.len]type = undefined;
-    for (sort_target) |s, i| {
+    for (sort_target, 0..) |s, i| {
         types[i] = Ts[s.original_index];
     }
     return types;
@@ -66,7 +66,7 @@ test "sortTypes() sorts" {
     const sorted_types1 = comptime sortTypes(&types1);
     const sorted_types2 = comptime sortTypes(&types2);
 
-    inline for (sorted_types1) |T, i| {
+    inline for (sorted_types1, 0..) |T, i| {
         try testing.expect(T == sorted_types2[i]);
     }
 }
