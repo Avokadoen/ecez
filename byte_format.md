@@ -10,6 +10,8 @@ This section contain each chunk defined by ezby and how they can be parsed.
 
 ### EZBY - File header metadata 
 
+// TODO: remove *ezby patch version*, *reserved_1*, *COMP chunks*, *ARCH chunks*: (they are not really needed)                       
+
 | <div style="width:155px">Data</div> | Bytes | <div style="width:300px">Description</div>                    |
 |:------------------------------------|:-----:|:--------------------------------------------------------------|
 | "EZBY"                              | 4     | chunk identifier                                              |
@@ -34,13 +36,18 @@ This section contain each chunk defined by ezby and how they can be parsed.
 
 ### ARCH - All entities and component data for an archetype
 
+// TODO: should not have type RTTI, but indices to the type RTTI. 
+// This will introduce some minor complexity to ecez     
+// TODO: Number of entities should be 32 since a entity is a 32b handle
+
+
 | <div style="width:155px">Data</div>                                         |     Bytes        | <div style="width:300px">Description</div>             |
 |:----------------------------------------------------------------------------|:----------------:|:-------------------------------------------------------|
 | "ARCH"                                                                      | 4                | chunk identifier                                       |
 | *number of component<br>types*                                              | 4                | How many lists of component bytes (N<sup>2</sup>)      |
 | *number of entities*                                                        | 8                | How many entities in this archetype (N<sup>1</sup>)    |
 | *N<sup>2</sup> type RTTI*                                                   | (8 + 8) * N<sup>2</sup>| First 8 bytes are the type hash, the subsequent 8 are the size |
-| *N<sup>1</sup> entity map*                                                  | (4 + 4 + 8) * N<sup>1</sup>| First 4 bytes are the entity followed by 4 bytes of<br>padding and the subsequent 4 are the index in the<br>component list(s) |
+| *N<sup>1</sup> entity map*                                                  | (4 + 4 + 8) * N<sup>1</sup>| First 4 bytes are the entity followed by 4 bytes of<br>padding and the subsequent 8 are the index in the<br>component list(s) |
 | \|- *component byte list <br>\|&nbsp;&nbsp;M out of N<sup>2</sup>*          | 1 * size         | Component data as bytes.<br>Byte count can be deduced from the type RTTI |
 
 ## <a name="data_types"></a>Data types

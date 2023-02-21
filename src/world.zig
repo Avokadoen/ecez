@@ -254,7 +254,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
         /// Create an entity and returns the entity handle
         /// Parameters:
         ///     - entity_state: the components that the new entity should be assigned
-        pub fn createEntity(self: *World, entity_state: anytype) !Entity {
+        pub fn createEntity(self: *World, entity_state: anytype) error{OutOfMemory}!Entity {
             const zone = ztracy.ZoneNC(@src(), "World createEntity", Color.world);
             defer zone.End();
 
@@ -269,7 +269,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
         /// Parameters:
         ///     - entity:    the entity that should be assigned the component value
         ///     - component: the new component value
-        pub fn setComponent(self: *World, entity: Entity, component: anytype) !void {
+        pub fn setComponent(self: *World, entity: Entity, component: anytype) error{ EntityMissing, OutOfMemory }!void {
             const zone = ztracy.ZoneNC(@src(), "World setComponent", Color.world);
             defer zone.End();
 

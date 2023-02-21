@@ -31,6 +31,8 @@ pub const DeserializeError = error{
     OutOfMemory,
     /// The intial bytes had unexpected content, probably not an ezby file
     UnexpectedEzbyIdentifier,
+    /// major, or minor version was not the same
+    VersionMismatch,
     /// Missing one or more component types from the serializer type
     UnknownComponentType,
 };
@@ -44,7 +46,7 @@ pub fn Serializer(comptime components: anytype) type {
         // TODO: option to use stack instead of heap
         // TODO: heavily hint that arena allocator should be used?
         /// Serialize a world instance to a byte array. The caller owns the returned memory
-        pub fn serialize(allocator: Allocator, initial_byte_size: usize, world_to_serialize: *const World) SerializeError![]const u8 {
+        pub fn serialize(allocator: Allocator, initial_byte_size: usize, world_to_serialize: World) SerializeError![]const u8 {
             const zone = ztracy.ZoneNC(@src(), "Ezby serialize", Color.serializer);
             defer zone.End();
 
@@ -112,23 +114,19 @@ pub fn Serializer(comptime components: anytype) type {
 
                         const entity_map_key_size = @sizeOf(kv_info.fields[0].type);
                         const entity_map_value_size = @sizeOf(kv_info.fields[1].type);
-
-                        break :blk2 entity_count * (entity_map_key_size + entity_map_value_size);
+                        const pad_size = 4;
+                        break :blk2 entity_count * (entity_map_key_size + entity_map_value_size + pad_size);
                     };
 
                     const type_map_size = type_count * @sizeOf(u64) * 2;
 
                     const component_bytes_size = blk2: {
-                        var type_info_iter = archetype.type_info.iterator();
-
                         var size: usize = 0;
                         for (archetype.component_storage) |component_bytes| {
-                            const type_info = type_info_iter.next() orelse unreachable;
-                            size = component_bytes.items.len * type_info.value_ptr.size;
+                            size += component_bytes.items.len;
                         }
                         break :blk2 @intCast(u64, size);
                     };
-
                     break :blk1 @sizeOf(Chunk.Arch) + type_map_size + entity_map_size + component_bytes_size;
                 };
 
@@ -170,7 +168,91 @@ pub fn Serializer(comptime components: anytype) type {
             return written_bytes.toOwnedSlice();
         }
 
-        // pub fn deserialize(world: *World, ezby_bytes: []const u8) DeserializeError!void {}
+        /// Desrialize the supplied bytes and insert them into the world. This function will
+        /// clear the world memory which means that all that currently in the world will be
+        /// wiped.
+        pub fn deserialize(dest_world: *World, ezby_bytes: []const u8) DeserializeError!void {
+            // parse and validate ezby header
+            var ezby_chunk: *Chunk.Ezby = undefined;
+            const eref_bytes = try parseEzbyChunk(ezby_bytes, &ezby_chunk);
+
+            // We currently do no handle multiple chunks
+            std.debug.assert(ezby_chunk.comp_chunks == 1);
+
+            if (ezby_chunk.version_major != version_major or ezby_chunk.version_minor != version_minor) {
+                return DeserializeError.VersionMismatch;
+            }
+
+            // parse and validate component RTTI
+            var arch_bytes = blk: {
+                var comp: *Chunk.Comp = undefined;
+                var hash_list: Chunk.Comp.HashList = undefined;
+                var size_list: Chunk.Comp.SizeList = undefined;
+                const rem_bytes = parseCompChunk(eref_bytes, &comp, &hash_list, &size_list);
+                for (hash_list[0..comp.number_of_components]) |type_hash| {
+                    var hash_found = false;
+                    search: inline for (components) |Component| {
+                        if (query.hashType(Component) == type_hash) {
+                            hash_found = true;
+                            break :search;
+                        }
+                    }
+
+                    if (hash_found == false) {
+                        // this content contain invalid component type(s) and the serializer is
+                        // therefore missing static information needed to utilize the component
+                        // data related to this/these types.
+                        return DeserializeError.UnknownComponentType;
+                    }
+                }
+
+                break :blk rem_bytes;
+            };
+
+            // clear the world before inserting the byte content into the world
+            dest_world.clearRetainingCapacity();
+
+            // loop all archetype chunks and insert them into the world
+            var arch_count: u16 = 0;
+            while (arch_count < ezby_chunk.arch_chunks) : (arch_count += 1) {
+                var arch: *Chunk.Arch = undefined;
+                var rtti_list: Chunk.Arch.RttiList = undefined;
+                var entity_map_list: Chunk.Arch.EntityMapList = undefined;
+                var component_bytes: [*]const u8 = undefined;
+                arch_bytes = parseArchChunk(arch_bytes, &arch, &rtti_list, &entity_map_list, &component_bytes);
+
+                // TODO: This is the worst case use of the ecez api where we add one and one component
+                //       which forces a lot of moves of data. We must find an alternative way of loading
+                //       this data. Also this code is just hot garbage :/
+                var entity_count: u64 = 0;
+                while (entity_count < arch.number_of_entities) : (entity_count += 1) {
+                    const entity = try dest_world.createEntity(.{});
+
+                    for (rtti_list[0..arch.number_of_components]) |rtti, rtti_index| {
+                        inline for (components) |Component| {
+                            if (query.hashType(Component) == rtti.hash) {
+                                // offset bytes by how many bytes in current offset we are
+                                var byte_offset: u64 = rtti.size * entity_count;
+                                for (rtti_list[0..rtti_index]) |prev_rtti| {
+                                    // offset bytes by how many bytes were in the previous types
+                                    byte_offset += prev_rtti.size * arch.number_of_entities;
+                                }
+
+                                const component = @ptrCast(*const Component, @alignCast(
+                                    @alignOf(Component),
+                                    component_bytes[byte_offset .. byte_offset + rtti.size].ptr,
+                                ));
+
+                                dest_world.setComponent(entity, component.*) catch |err| switch (err) {
+                                    error.EntityMissing => unreachable,
+                                    error.OutOfMemory => |oom_err| return oom_err,
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+        }
     };
 }
 
@@ -219,12 +301,15 @@ pub const Chunk = struct {
 };
 
 /// parse EZBY chunk from bytes and return remaining bytes
-fn parseEzbyChunk(bytes: []const u8, chunk: **const Chunk.Ezby) []const u8 {
+fn parseEzbyChunk(bytes: []const u8, chunk: **const Chunk.Ezby) error{UnexpectedEzbyIdentifier}![]const u8 {
     const zone = ztracy.ZoneNC(@src(), "Parse EZBY chunk", Color.serializer);
     defer zone.End();
 
     std.debug.assert(bytes.len >= @sizeOf(Chunk.Ezby));
-    std.debug.assert(mem.eql(u8, bytes[0..4], "EZBY"));
+
+    if (mem.eql(u8, bytes[0..4], "EZBY") == false) {
+        return error.UnexpectedEzbyIdentifier;
+    }
 
     chunk.* = @ptrCast(*const Chunk.Ezby, @alignCast(@alignOf(Chunk.Ezby), bytes.ptr));
     return bytes[@sizeOf(Chunk.Ezby)..];
@@ -235,11 +320,11 @@ test "serializing then using parseEzbyChunk produce expected EZBY chunk" {
     var dummy_world = try Serialize.World.init(std.testing.allocator, .{});
     defer dummy_world.deinit();
 
-    const bytes = try Serialize.serialize(testing.allocator, 516, &dummy_world);
+    const bytes = try Serialize.serialize(testing.allocator, 516, dummy_world);
     defer testing.allocator.free(bytes);
 
     var ezby: *Chunk.Ezby = undefined;
-    _ = parseEzbyChunk(bytes, &ezby);
+    _ = try parseEzbyChunk(bytes, &ezby);
 
     try testing.expectEqual(Chunk.Ezby{
         .version_major = version_major,
@@ -295,12 +380,12 @@ test "serializing then using parseCompChunk produce expected COMP chunk" {
     var b = ez_testing.Component.B{};
     _ = try dummy_world.createEntity(.{ a, b });
 
-    const bytes = try Serialize.serialize(testing.allocator, 516, &dummy_world);
+    const bytes = try Serialize.serialize(testing.allocator, 516, dummy_world);
     defer testing.allocator.free(bytes);
 
     // parse ezby header to get to eref bytes
     var ezby: *Chunk.Ezby = undefined;
-    const eref_bytes = parseEzbyChunk(bytes, &ezby);
+    const eref_bytes = try parseEzbyChunk(bytes, &ezby);
 
     try testing.expectEqual(
         @as(u16, 1),
@@ -368,8 +453,9 @@ fn parseArchChunk(
         Chunk.Arch.EntityMapList,
         @alignCast(@alignOf(Chunk.Arch.EntityMapList), bytes[entity_map_list_offset..].ptr),
     );
+    const entity_map_size = chunk.*.number_of_entities * @sizeOf(Chunk.Arch.EntityMap);
 
-    const component_bytes_offset = entity_map_list_offset + chunk.*.number_of_components * @sizeOf(Chunk.Arch.EntityMap);
+    const component_bytes_offset = entity_map_list_offset + entity_map_size;
     component_bytes.* = bytes[component_bytes_offset..].ptr;
 
     const remaining_bytes_offset = blk: {
@@ -402,13 +488,13 @@ test "serializing then using parseArchChunk produce expected ARCH chunk" {
         }
     }
 
-    const bytes = try Serialize.serialize(testing.allocator, 516, &dummy_world);
+    const bytes = try Serialize.serialize(testing.allocator, 516, dummy_world);
     defer testing.allocator.free(bytes);
 
     const arch_bytes = blk: {
         // parse ezby header to get to eref bytes
         var ezby: *Chunk.Ezby = undefined;
-        const eref_bytes = parseEzbyChunk(bytes, &ezby);
+        const eref_bytes = try parseEzbyChunk(bytes, &ezby);
 
         var comp: *Chunk.Comp = undefined;
         var hash_list: Chunk.Comp.HashList = undefined;
@@ -438,4 +524,38 @@ test "serializing then using parseArchChunk produce expected ARCH chunk" {
         &expected_rtti_list,
         rtti_list[0..arch.*.number_of_components],
     );
+}
+
+test "serialize and deserialize is idempotent" {
+    const Serialize = Serializer(.{
+        ez_testing.Component.A,
+        ez_testing.Component.B,
+    });
+    var dummy_world = try Serialize.World.init(std.testing.allocator, .{});
+    defer dummy_world.deinit();
+
+    const test_data_count = 1;
+    var org_as: [test_data_count]ez_testing.Component.A = undefined;
+    var org_bs: [test_data_count]ez_testing.Component.B = undefined;
+    var org_entities: [test_data_count]Entity = undefined;
+
+    var i: usize = 0;
+    while (i < test_data_count) : (i += 1) {
+        org_as[i] = ez_testing.Component.A{ .value = @intCast(u32, i) };
+        org_bs[i] = ez_testing.Component.B{ .value = @intCast(u8, i) };
+        org_entities[i] = try dummy_world.createEntity(.{ org_as[i], org_bs[i] });
+    }
+
+    const bytes = try Serialize.serialize(testing.allocator, 2048, dummy_world);
+    defer testing.allocator.free(bytes);
+
+    // explicitly clear to ensure
+    dummy_world.clearRetainingCapacity();
+    try Serialize.deserialize(&dummy_world, bytes);
+
+    i = 0;
+    while (i < test_data_count) : (i += 1) {
+        try testing.expectEqual(org_as[i], try dummy_world.getComponent(org_entities[i], ez_testing.Component.A));
+        try testing.expectEqual(org_bs[i], try dummy_world.getComponent(org_entities[i], ez_testing.Component.B));
+    }
 }

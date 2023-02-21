@@ -293,7 +293,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         ///     - inital_state: the initial components of the entity
         ///
         /// Returns: A bool indicating if a new archetype has been made, and the entity
-        pub inline fn createEntity(self: *ArcheContainer, initial_state: anytype) StorageError!CreateEntityResult {
+        pub inline fn createEntity(self: *ArcheContainer, initial_state: anytype) error{OutOfMemory}!CreateEntityResult {
             const zone = ztracy.ZoneNC(@src(), "Container createEntity", Color.arche_container);
             defer zone.End();
 
@@ -333,7 +333,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         ///     - OutOfMemory: if OOM
         /// Return:
         ///     True if a new archetype was created for this operation
-        pub inline fn setComponent(self: *ArcheContainer, entity: Entity, component: anytype) StorageError!bool {
+        pub inline fn setComponent(self: *ArcheContainer, entity: Entity, component: anytype) error{ EntityMissing, OutOfMemory }!bool {
             const zone = ztracy.ZoneNC(@src(), "Container setComponent", Color.arche_container);
             defer zone.End();
 
@@ -635,7 +635,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             reassign_existing_ref,
         };
         /// This function can initialize the storage for
-        inline fn initializeEntityStorage(self: *ArcheContainer, entity: Entity, entity_ref_handling: RefHandling, initial_state: anytype) StorageError!bool {
+        inline fn initializeEntityStorage(self: *ArcheContainer, entity: Entity, entity_ref_handling: RefHandling, initial_state: anytype) error{OutOfMemory}!bool {
             const zone = ztracy.ZoneNC(@src(), "Container createEntity", Color.arche_container);
             defer zone.End();
 
