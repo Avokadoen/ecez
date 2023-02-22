@@ -448,12 +448,12 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
         }
 
         // blocked by: https://github.com/ziglang/zig/issues/5497
-        // /// set a shared state using the shared state's inner type
-        // pub fn setSharedState(self: World, state: anytype) void {
-        //     const ActualType = meta.SharedState(@TypeOf(state));
-        //     const index = indexOfSharedType(ActualType);
-        //     self.shared_state[index] = @bitCast(ActualType, state);
-        // }
+        /// set a shared state using the shared state's inner type
+        pub fn setSharedState(self: *World, state: anytype) void {
+            const ActualType = meta.SharedState(@TypeOf(state));
+            const index = indexOfSharedType(ActualType);
+            self.shared_state[index] = @ptrCast(*const ActualType, &state).*;
+        }
 
         /// given a shared state type T retrieve it's pointer
         pub fn getSharedStatePtrWithSharedStateType(self: *World, comptime PtrT: type) PtrT {
@@ -846,13 +846,21 @@ test "getSharedState retrieve state" {
     try testing.expectEqual(@as(u8, 2), world.getSharedState(Testing.Component.B).value);
 }
 
-// blocked by: https://github.com/ziglang/zig/issues/5497
-// test "setSharedState retrieve state" {
-//     var world = try WorldStub.WithSharedState(.{ Testing.Component.A, Testing.Component.B }).init(testing.allocator, .{
-//         Testing.Component.A{ .value = 0 },
-//         Testing.Component.B{ .value = 0 },
-//     });
-//     defer world.deinit();
+test "setSharedState retrieve state" {
+    var world = try WorldStub.WithSharedState(.{ Testing.Component.A, Testing.Component.B }).init(testing.allocator, .{
+        Testing.Component.A{ .value = 0 },
+        Testing.Component.B{ .value = 0 },
+    });
+    defer world.deinit();
+
+    const new_shared_a = Testing.Component.A{ .value = 42 };
+    world.setSharedState(new_shared_a);
+
+    try testing.expectEqual(
+        new_shared_a,
+        @ptrCast(*Testing.Component.A, world.getSharedStatePtrWithSharedStateType(*meta.SharedState(Testing.Component.A))).*,
+    );
+}
 
 test "event can mutate components" {
     const SystemStruct = struct {
