@@ -242,10 +242,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
             const zone = ztracy.ZoneNC(@src(), "World clear", Color.world);
             defer zone.End();
 
-            // make sure there are no running jobs
-            inline for (0..events.len) |i| {
-                self.waitEvent(@intToEnum(EventsEnum, i));
-            }
+            self.waitIdle();
 
             const event_cache_storages_info = @typeInfo(EventCacheStorages).Struct;
             inline for (event_cache_storages_info.fields, 0..) |_, i| {
@@ -316,7 +313,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
         }
 
         pub fn triggerEvent(self: *World, comptime event: EventsEnum, event_extra_argument: anytype) error{OutOfMemory}!void {
-            const tracy_zone_name = std.fmt.comptimePrint("World trigger {any}", .{event});
+            const tracy_zone_name = std.fmt.comptimePrint("World trigger {s}", .{@tagName(event)});
             const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.world);
             defer zone.End();
 
@@ -431,8 +428,22 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
         /// Wait for all jobs from a triggerEvent to finish by blocking the calling thread
         /// should only be called from the triggerEvent thread
         pub fn waitEvent(self: *World, comptime event: EventsEnum) void {
+            const tracy_zone_name = std.fmt.comptimePrint("World wait event {s}", .{@tagName(event)});
+            const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.world);
+            defer zone.End();
+
             for (self.event_jobs_in_flight[@enumToInt(event)]) |job_in_flight| {
                 self.execution_job_queue.wait(job_in_flight);
+            }
+        }
+
+        /// Force the world to flush all current in flight jobs before continuing
+        pub fn waitIdle(self: *World) void {
+            const zone = ztracy.ZoneNC(@src(), "World wait idle", Color.world);
+            defer zone.End();
+
+            inline for (0..events.len) |i| {
+                self.waitEvent(@intToEnum(EventsEnum, i));
             }
         }
 
