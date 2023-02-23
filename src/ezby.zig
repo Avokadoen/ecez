@@ -214,21 +214,22 @@ pub fn Serializer(comptime components: anytype, comptime shared_state: anytype, 
                 // TODO: This is the worst case use of the ecez api where we add one and one component
                 //       which forces a lot of moves of data. We must find an alternative way of loading
                 //       this data. Also this code is just hot garbage :/
-                var entity_count: u64 = 0;
-                while (entity_count < arch.number_of_entities) : (entity_count += 1) {
+                for (0..arch.number_of_entities) |nth_entity| {
                     const entity = try dest_world.createEntity(.{});
 
                     for (rtti_list[0..arch.number_of_components], 0..) |rtti, rtti_index| {
                         inline for (components) |Component| {
                             if (query.hashType(Component) == rtti.hash) {
-                                // offset bytes by how many bytes in current offset we are
-                                var byte_offset: u64 = rtti.size * entity_count;
+                                std.debug.assert(rtti.size == @sizeOf(Component));
+
+                                // offset bytes by how many bytes in current component type offset we are
+                                var byte_offset: u64 = rtti.size * nth_entity;
                                 for (rtti_list[0..rtti_index]) |prev_rtti| {
                                     // offset bytes by how many bytes were in the previous types
                                     byte_offset += prev_rtti.size * arch.number_of_entities;
                                 }
 
-                                const zero = Component{};
+                                const zero = [0]u8{};
 
                                 const component = if (@alignOf(Component) > 0)
                                     @ptrCast(*const Component, @alignCast(
@@ -236,7 +237,7 @@ pub fn Serializer(comptime components: anytype, comptime shared_state: anytype, 
                                         component_bytes[byte_offset .. byte_offset + rtti.size].ptr,
                                     ))
                                 else
-                                    &zero;
+                                    @ptrCast(*const Component, &zero);
 
                                 dest_world.setComponent(entity, component.*) catch |err| switch (err) {
                                     error.EntityMissing => unreachable,
@@ -465,11 +466,8 @@ test "serializing then using parseArchChunk produce expected ARCH chunk" {
     var b = ez_testing.Component.B{};
 
     const entities_to_create = 10;
-    {
-        var i: usize = 0;
-        while (i < entities_to_create) : (i += 1) {
-            _ = try dummy_world.createEntity(.{ a, b });
-        }
+    for (0..entities_to_create) |_| {
+        _ = try dummy_world.createEntity(.{ a, b });
     }
 
     const bytes = try Serialize.serialize(testing.allocator, 516, dummy_world);
@@ -522,31 +520,29 @@ test "serialize and deserialize is idempotent" {
     const test_data_count = 128;
     var a_as: [test_data_count]ez_testing.Component.A = undefined;
     var a_entities: [test_data_count]Entity = undefined;
-    var i: usize = 0;
-    while (i < test_data_count) : (i += 1) {
-        a_as[i] = ez_testing.Component.A{ .value = @intCast(u32, i) };
-        a_entities[i] = try dummy_world.createEntity(.{a_as[i]});
+
+    for (0..test_data_count) |index| {
+        a_as[index] = ez_testing.Component.A{ .value = @intCast(u32, index) };
+        a_entities[index] = try dummy_world.createEntity(.{a_as[index]});
     }
 
     var ab_as: [test_data_count]ez_testing.Component.A = undefined;
     var ab_bs: [test_data_count]ez_testing.Component.B = undefined;
     var ab_entities: [test_data_count]Entity = undefined;
-    i = 0;
-    while (i < test_data_count) : (i += 1) {
-        ab_as[i] = ez_testing.Component.A{ .value = @intCast(u32, i) };
-        ab_bs[i] = ez_testing.Component.B{ .value = @intCast(u8, i) };
-        ab_entities[i] = try dummy_world.createEntity(.{ ab_as[i], ab_bs[i] });
+    for (0..test_data_count) |index| {
+        ab_as[index] = ez_testing.Component.A{ .value = @intCast(u32, index) };
+        ab_bs[index] = ez_testing.Component.B{ .value = @intCast(u8, index) };
+        ab_entities[index] = try dummy_world.createEntity(.{ ab_as[index], ab_bs[index] });
     }
 
     var abc_as: [test_data_count]ez_testing.Component.A = undefined;
     var abc_bs: [test_data_count]ez_testing.Component.B = undefined;
     var abc_cs: ez_testing.Component.C = .{};
     var abc_entities: [test_data_count]Entity = undefined;
-    i = 0;
-    while (i < test_data_count) : (i += 1) {
-        abc_as[i] = ez_testing.Component.A{ .value = @intCast(u32, i) };
-        abc_bs[i] = ez_testing.Component.B{ .value = @intCast(u8, i) };
-        abc_entities[i] = try dummy_world.createEntity(.{ abc_as[i], abc_bs[i], abc_cs });
+    for (0..test_data_count) |index| {
+        abc_as[index] = ez_testing.Component.A{ .value = @intCast(u32, index) };
+        abc_bs[index] = ez_testing.Component.B{ .value = @intCast(u8, index) };
+        abc_entities[index] = try dummy_world.createEntity(.{ abc_as[index], abc_bs[index], abc_cs });
     }
 
     const bytes = try Serialize.serialize(testing.allocator, 2048, dummy_world);
@@ -556,18 +552,17 @@ test "serialize and deserialize is idempotent" {
     dummy_world.clearRetainingCapacity();
     try Serialize.deserialize(&dummy_world, bytes);
 
-    i = 0;
-    while (i < test_data_count) : (i += 1) {
-        try testing.expectEqual(a_as[i], try dummy_world.getComponent(a_entities[i], ez_testing.Component.A));
-        try testing.expectError(error.ComponentMissing, dummy_world.getComponent(a_entities[i], ez_testing.Component.B));
-        try testing.expectError(error.ComponentMissing, dummy_world.getComponent(a_entities[i], ez_testing.Component.C));
+    for (0..test_data_count) |index| {
+        try testing.expectEqual(a_as[index], try dummy_world.getComponent(a_entities[index], ez_testing.Component.A));
+        try testing.expectError(error.ComponentMissing, dummy_world.getComponent(a_entities[index], ez_testing.Component.B));
+        try testing.expectError(error.ComponentMissing, dummy_world.getComponent(a_entities[index], ez_testing.Component.C));
 
-        try testing.expectEqual(ab_as[i], try dummy_world.getComponent(ab_entities[i], ez_testing.Component.A));
-        try testing.expectEqual(ab_bs[i], try dummy_world.getComponent(ab_entities[i], ez_testing.Component.B));
-        try testing.expectError(error.ComponentMissing, dummy_world.getComponent(ab_entities[i], ez_testing.Component.C));
+        try testing.expectEqual(ab_as[index], try dummy_world.getComponent(ab_entities[index], ez_testing.Component.A));
+        try testing.expectEqual(ab_bs[index], try dummy_world.getComponent(ab_entities[index], ez_testing.Component.B));
+        try testing.expectError(error.ComponentMissing, dummy_world.getComponent(ab_entities[index], ez_testing.Component.C));
 
-        try testing.expectEqual(abc_as[i], try dummy_world.getComponent(abc_entities[i], ez_testing.Component.A));
-        try testing.expectEqual(abc_bs[i], try dummy_world.getComponent(abc_entities[i], ez_testing.Component.B));
-        try testing.expectEqual(abc_cs, try dummy_world.getComponent(abc_entities[i], ez_testing.Component.C));
+        try testing.expectEqual(abc_as[index], try dummy_world.getComponent(abc_entities[index], ez_testing.Component.A));
+        try testing.expectEqual(abc_bs[index], try dummy_world.getComponent(abc_entities[index], ez_testing.Component.B));
+        try testing.expectEqual(abc_cs, try dummy_world.getComponent(abc_entities[index], ez_testing.Component.C));
     }
 }

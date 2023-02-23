@@ -95,16 +95,15 @@ pub fn ArchetypeCacheStorage(comptime storage_count: comptime_int) type {
         }
 
         pub inline fn deinit(self: Self, allocator: Allocator) void {
-            comptime var i = 0;
-            inline while (i < storage_count) : (i += 1) {
-                if ((self.initialized_mask & (1 << i)) != 0) {
-                    allocator.free(self.cache[i]);
+            inline for (0..storage_count) |cache_index| {
+                if ((self.initialized_mask & (1 << cache_index)) != 0) {
+                    allocator.free(self.cache[cache_index]);
                 }
             }
         }
 
-        pub inline fn clear(self: *Self) void {
-            self.deinit();
+        pub inline fn clear(self: *Self, allocator: Allocator) void {
+            self.deinit(allocator);
             self.initialized_mask = @as(InitializeMask, 0);
         }
 

@@ -87,29 +87,28 @@ test "simple iterating works" {
         test_data[1].storage[0].deinit();
         test_data[1].storage[1].deinit();
     }
-    var i: u32 = 0;
-    while (i < elem_len) : (i += 1) {
-        try test_data[0].storage[0].append(Testing.Component.A{ .value = i });
+    for (0..elem_len) |i| {
+        try test_data[0].storage[0].append(Testing.Component.A{ .value = @intCast(u32, i) });
         try test_data[0].storage[1].append(Testing.Component.B{ .value = @intCast(u8, i) });
     }
-    i = 0;
-    while (i < elem_len / 2) : (i += 1) {
-        try test_data[1].storage[0].append(Testing.Component.A{ .value = elem_len + i });
+    for (0..elem_len) |i| {
+        try test_data[1].storage[0].append(Testing.Component.A{ .value = elem_len + @intCast(u32, i) });
         try test_data[1].storage[1].append(Testing.Component.B{ .value = @intCast(u8, elem_len + i) });
     }
 
     const Iter = FromTypes(TypeComposition, 2);
 
-    i = 0;
-    var iter = Iter.init(test_data);
-    while (iter.next()) |item| {
-        try testing.expectEqual(Testing.Component.A{ .value = i }, item[0]);
-        try testing.expectEqual(Testing.Component.B{ .value = @intCast(u8, i) }, item[1]);
-        try testing.expectEqual(Testing.Component.C{}, item[2]);
-        i += 1;
+    {
+        var i: u32 = 0;
+        var iter = Iter.init(test_data);
+        while (iter.next()) |item| {
+            try testing.expectEqual(Testing.Component.A{ .value = i }, item[0]);
+            try testing.expectEqual(Testing.Component.B{ .value = @intCast(u8, i) }, item[1]);
+            try testing.expectEqual(Testing.Component.C{}, item[2]);
+            i += 1;
+        }
+        try testing.expectEqual(iter.next(), null);
+        try testing.expectEqual(iter.next(), null);
+        try testing.expectEqual(iter.next(), null);
     }
-
-    try testing.expectEqual(iter.next(), null);
-    try testing.expectEqual(iter.next(), null);
-    try testing.expectEqual(iter.next(), null);
 }

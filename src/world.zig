@@ -243,13 +243,13 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
             defer zone.End();
 
             // make sure there are no running jobs
-            for (events) |event| {
-                self.waitEvent(event);
+            inline for (0..events.len) |i| {
+                self.waitEvent(@intToEnum(EventsEnum, i));
             }
 
             const event_cache_storages_info = @typeInfo(EventCacheStorages).Struct;
             inline for (event_cache_storages_info.fields, 0..) |_, i| {
-                self.event_cache_storages[i].clear();
+                self.event_cache_storages[i].clear(self.allocator);
             }
             self.container.clearRetainingCapacity();
         }
@@ -534,8 +534,8 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                     for (self_job.opaque_archetypes) |opaque_archetype| {
                         // TODO: try
                         opaque_archetype.rawGetStorageData(component_hashes, &storage) catch unreachable;
-                        var i: usize = 0;
-                        while (i < storage.inner_len) : (i += 1) {
+
+                        for (0..storage.inner_len) |inner_index| {
                             var arguments: std.meta.Tuple(&param_types) = undefined;
                             inline for (param_types, 0..) |Param, j| {
                                 switch (metadata.params[j]) {
@@ -543,7 +543,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                                         // get size of the parameter type
                                         const param_size = @sizeOf(Param);
                                         if (param_size > 0) {
-                                            const from = i * param_size;
+                                            const from = inner_index * param_size;
                                             const to = from + param_size;
                                             const bytes = storage.outer[j][from..to];
                                             arguments[j] = @ptrCast(*Param, @alignCast(@alignOf(Param), bytes.ptr)).*;
@@ -555,7 +555,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                                         // get size of the type the pointer is pointing to
                                         const param_size = @sizeOf(component_query_types[j]);
                                         if (param_size > 0) {
-                                            const from = i * param_size;
+                                            const from = inner_index * param_size;
                                             const to = from + param_size;
                                             const bytes = storage.outer[j][from..to];
                                             arguments[j] = @ptrCast(Param, @alignCast(@alignOf(component_query_types[j]), bytes.ptr));
@@ -805,8 +805,7 @@ test "clearRetainingCapacity() allow world reuse" {
     };
     var entity: Entity = undefined;
 
-    var i: usize = 0;
-    while (i < 100) : (i += 1) {
+    for (0..100) |i| {
         world.clearRetainingCapacity();
 
         var initial_state = AEntityType{
@@ -1266,8 +1265,7 @@ test "Event with no archetypes does not crash" {
     }).init(testing.allocator, .{});
     defer world.deinit();
 
-    var i: usize = 0;
-    while (i < 100) : (i += 1) {
+    for (0..100) |_| {
         try world.triggerEvent(.onEvent1, .{});
         world.waitEvent(.onEvent1);
     }

@@ -461,8 +461,7 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                 const depend_on_range = blk: {
                                     const from = systems_info.depend_on_indices_used;
 
-                                    comptime var depend_on_index = 0;
-                                    inline while (depend_on_index < system_depend_on_count) : (depend_on_index += 1) {
+                                    inline for (0..system_depend_on_count) |depend_on_index| {
                                         const dependency_func = dependency_functions[depend_on_index];
 
                                         const previous_system_info_index: usize = indexOfFunctionInSystems(dependency_func, j, systems) orelse {

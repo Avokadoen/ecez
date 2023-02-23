@@ -312,8 +312,7 @@ test "getComponent returns expected values" {
     var archetype = try OpaqueArchetype.init(testing.allocator, &hashes, &sizes);
     defer archetype.deinit();
 
-    var i: usize = 0;
-    while (i < 100) : (i += 1) {
+    for (0..100) |i| {
         const a = A{ .value = @intCast(u32, i) };
         const b = B{ .value = @intCast(u8, i) };
         var data: [3][]const u8 = undefined;
@@ -351,8 +350,7 @@ test "rawGetComponent retrieves correct component" {
     var archetype = try OpaqueArchetype.init(testing.allocator, &hashes, &sizes);
     defer archetype.deinit();
 
-    var i: usize = 0;
-    while (i < 100) : (i += 1) {
+    for (0..100) |i| {
         const a = A{ .value = @intCast(u32, i) };
         const b = B{ .value = @intCast(u8, i) };
         var data: [3][]const u8 = undefined;
@@ -403,18 +401,15 @@ test "rawSwapRemoveEntity removes entity and components" {
     defer archetype.deinit();
 
     var buffer: [3][]u8 = undefined;
-    {
-        var i: u32 = 0;
-        while (i < 100) : (i += 1) {
-            const mock_entity = Entity{ .id = i };
-            var a = A{ .value = i };
-            buffer[0] = std.mem.asBytes(&a);
-            var b = B{ .value = @intCast(u8, i) };
-            buffer[1] = std.mem.asBytes(&b);
-            buffer[2] = &[0]u8{};
+    for (0..100) |i| {
+        const mock_entity = Entity{ .id = @intCast(u32, i) };
+        var a = A{ .value = @intCast(u32, i) };
+        buffer[0] = std.mem.asBytes(&a);
+        var b = B{ .value = @intCast(u8, i) };
+        buffer[1] = std.mem.asBytes(&b);
+        buffer[2] = &[0]u8{};
 
-            try archetype.rawRegisterEntity(mock_entity, &buffer);
-        }
+        try archetype.rawRegisterEntity(mock_entity, &buffer);
     }
 
     var buf_0: [@sizeOf(A)]u8 = undefined;
@@ -475,11 +470,10 @@ test "rawGetStorageData retrieves components view" {
     defer archetype.deinit();
 
     {
-        var i: u32 = 0;
         var buffer: [3][]u8 = undefined;
-        while (i < 100) : (i += 1) {
-            const mock_entity = Entity{ .id = i };
-            var a = A{ .value = i };
+        for (0..100) |i| {
+            const mock_entity = Entity{ .id = @intCast(u32, i) };
+            var a = A{ .value = @intCast(u32, i) };
             buffer[0] = std.mem.asBytes(&a);
             var b = B{ .value = @intCast(u8, i) };
             buffer[1] = std.mem.asBytes(&b);
@@ -499,37 +493,34 @@ test "rawGetStorageData retrieves components view" {
 
         try testing.expectEqual(@as(usize, 100), storage.inner_len);
         {
-            var i: u32 = 0;
-            while (i < 100) : (i += 1) {
+            for (0..100) |i| {
                 const from = i * @sizeOf(Testing.Component.A);
                 const to = from + @sizeOf(Testing.Component.A);
                 const bytes = storage.outer[0][from..to];
                 const a = @ptrCast(*const Testing.Component.A, @alignCast(@alignOf(Testing.Component.A), bytes)).*;
-                try testing.expectEqual(Testing.Component.A{ .value = i }, a);
+                try testing.expectEqual(Testing.Component.A{ .value = @intCast(u32, i) }, a);
             }
         }
     }
 
     try archetype.rawGetStorageData(&[_]u64{ hashType(Testing.Component.A), hashType(Testing.Component.B) }, &storage);
     try testing.expectEqual(@as(usize, 100), storage.inner_len);
-    {
-        var i: u32 = 0;
-        while (i < 100) : (i += 1) {
-            {
-                const from = i * @sizeOf(Testing.Component.A);
-                const to = from + @sizeOf(Testing.Component.A);
-                const bytes = storage.outer[0][from..to];
-                const a = @ptrCast(*const Testing.Component.A, @alignCast(@alignOf(Testing.Component.A), bytes)).*;
-                try testing.expectEqual(Testing.Component.A{ .value = i }, a);
-            }
 
-            {
-                const from = i * @sizeOf(Testing.Component.B);
-                const to = from + @sizeOf(Testing.Component.B);
-                const bytes = storage.outer[1][from..to];
-                const b = @ptrCast(*const Testing.Component.B, @alignCast(@alignOf(Testing.Component.B), bytes)).*;
-                try testing.expectEqual(Testing.Component.B{ .value = @intCast(u8, i) }, b);
-            }
+    for (0..100) |i| {
+        {
+            const from = i * @sizeOf(Testing.Component.A);
+            const to = from + @sizeOf(Testing.Component.A);
+            const bytes = storage.outer[0][from..to];
+            const a = @ptrCast(*const Testing.Component.A, @alignCast(@alignOf(Testing.Component.A), bytes)).*;
+            try testing.expectEqual(Testing.Component.A{ .value = @intCast(u32, i) }, a);
+        }
+
+        {
+            const from = i * @sizeOf(Testing.Component.B);
+            const to = from + @sizeOf(Testing.Component.B);
+            const bytes = storage.outer[1][from..to];
+            const b = @ptrCast(*const Testing.Component.B, @alignCast(@alignOf(Testing.Component.B), bytes)).*;
+            try testing.expectEqual(Testing.Component.B{ .value = @intCast(u8, i) }, b);
         }
     }
 }
