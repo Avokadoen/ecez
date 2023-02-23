@@ -248,6 +248,11 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
             inline for (event_cache_storages_info.fields, 0..) |_, i| {
                 self.event_cache_storages[i].clear(self.allocator);
             }
+
+            for (&self.event_cache_masks) |*mask| {
+                mask.clear();
+            }
+
             self.container.clearRetainingCapacity();
         }
 

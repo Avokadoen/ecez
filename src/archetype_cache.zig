@@ -4,6 +4,7 @@ const query = @import("query.zig");
 const OpaqueArchetype = @import("OpaqueArchetype.zig");
 
 // TODO: reduce system_count by checking which has identitcal arguments
+
 /// Create a cache which utilize a bitmask to check for incoherence
 pub fn ArchetypeCacheMask(comptime components: []const type) type {
     const BitMask = @Type(std.builtin.Type{ .Int = .{
@@ -21,6 +22,11 @@ pub fn ArchetypeCacheMask(comptime components: []const type) type {
                 // set all bits to 1 (incoherent)
                 .mask = ~@as(BitMask, 0),
             };
+        }
+
+        pub inline fn clear(self: *Self) void {
+            // set all bits to 1 (incoherent)
+            self.mask = ~@as(BitMask, 0);
         }
 
         pub inline fn isCoherent(self: Self, comptime other_components: []const type) bool {
