@@ -242,9 +242,9 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
             comptime var component_hashes: [submitted_components.len]u64 = undefined;
             comptime var component_sizes: [submitted_components.len]usize = undefined;
-            inline for (component_info, 0..) |info, i| {
-                component_hashes[i] = info.hash;
-                component_sizes[i] = @sizeOf(info.type);
+            inline for (component_info, &component_hashes, &component_sizes) |info, *hash, *size| {
+                hash.* = info.hash;
+                size.* = @sizeOf(info.type);
             }
 
             var entity_references = try ArrayList(EntityRef).initCapacity(allocator, 32);

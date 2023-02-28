@@ -37,7 +37,7 @@ One SHAR(e) chunk contain one shareable entry. This include the byte hash and si
 | "SHAR"                              | 4                | chunk identifier                           |
 | *RTTI hash*                         | 8                | Shared state type hash                     |
 | *RTTI size*                         | 8                | Shared state type size                     |
-| *component bytes list*              | 1 * *RTTI size*  | Shared state data as bytes.                |
+| *Data bytes list*              | 1 * *RTTI size*  | Shared state data as bytes. This list<br>must follow the [alignment](#alignment_req) requirements |
 
 ### ARCH - All entities and component data for an archetype
 
@@ -53,9 +53,10 @@ One SHAR(e) chunk contain one shareable entry. This include the byte hash and si
 | *number of entities*                                                        | 8                | How many entities in this archetype (N<sup>1</sup>)    |
 | *N<sup>2</sup> type RTTI*                                                   | (8 + 8) * N<sup>2</sup>| First 8 bytes are the type hash, the subsequent 8 are the size |
 | *N<sup>1</sup> entity map*                                                  | (4 + 4 + 8) * N<sup>1</sup>| First 4 bytes are the entity followed by 4 bytes of<br>padding and the subsequent 8 are the index in the<br>component list(s) |
-| \|- *component byte list <br>\|&nbsp;&nbsp;M out of N<sup>2</sup>*          | 1 * size         | Component data as bytes.<br>Byte count can be deduced from the type RTTI |
+| \|- *component byte list <br>\|&nbsp;&nbsp;M out of N<sup>2</sup>*          | 1 * size         | Component data as bytes. Byte count can be deduced from the<br>type RTTI. All list in a given chunk must be aligned to the<br>*biggest alignment*. This does not mean that each entry in the list<br>must be aligned, only the total list content of a individual list. |
 
 
 ## <a name="data_types"></a>Data types
 
 TODO: some data types
+

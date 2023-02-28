@@ -295,12 +295,9 @@ test "init() + deinit() is idempotent" {
 }
 
 test "hasComponent returns expected values" {
-    var archetype = try OpaqueArchetype.init(
-        testing.allocator,
-        &[_]u64{hashType(A)},
-        &[_]usize{@sizeOf(A)},
-    );
+    var archetype = try OpaqueArchetype.init(testing.allocator, &[_]u64{hashType(A)}, &[_]usize{@sizeOf(A)});
     defer archetype.deinit();
+
     try testing.expectEqual(true, archetype.hasComponent(Testing.Component.A));
     try testing.expectEqual(false, archetype.hasComponent(Testing.Component.B));
 }
@@ -338,6 +335,7 @@ test "getComponent returns expected values" {
 test "rawHasComponent identify existing components" {
     var archetype = try OpaqueArchetype.init(testing.allocator, &[_]u64{ 0, 1 }, &[_]usize{ 0, 1 });
     defer archetype.deinit();
+
     try testing.expectEqual(true, archetype.rawHasComponent(0));
     try testing.expectEqual(true, archetype.rawHasComponent(1));
     try testing.expectEqual(false, archetype.rawHasComponent(2));

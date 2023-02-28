@@ -29,7 +29,7 @@ pub fn ArchetypeCacheMask(comptime components: []const type) type {
             self.mask = ~@as(BitMask, 0);
         }
 
-        pub inline fn isCoherent(self: Self, comptime other_components: []const type) bool {
+        pub fn isCoherent(self: Self, comptime other_components: []const type) bool {
             const other_comp_positions = comptime blk: {
                 var positions: [other_components.len]usize = undefined;
                 for (other_components, 0..) |OtherComponent, pos_index| {
@@ -52,7 +52,7 @@ pub fn ArchetypeCacheMask(comptime components: []const type) type {
             self.mask |= (1 << offsetOf(Component));
         }
 
-        pub inline fn setIncoherentBitWithTypeHashes(self: *Self, type_hashes: []const u64) void {
+        pub fn setIncoherentBitWithTypeHashes(self: *Self, type_hashes: []const u64) void {
             outer: for (type_hashes) |hash| {
                 inline for (components, 0..) |Component, i| {
                     if (hash == query.hashType(Component)) {
@@ -100,7 +100,7 @@ pub fn ArchetypeCacheStorage(comptime storage_count: comptime_int) type {
             };
         }
 
-        pub inline fn deinit(self: Self, allocator: Allocator) void {
+        pub fn deinit(self: Self, allocator: Allocator) void {
             inline for (0..storage_count) |cache_index| {
                 if ((self.initialized_mask & (1 << cache_index)) != 0) {
                     allocator.free(self.cache[cache_index]);
@@ -108,12 +108,12 @@ pub fn ArchetypeCacheStorage(comptime storage_count: comptime_int) type {
             }
         }
 
-        pub inline fn clear(self: *Self, allocator: Allocator) void {
+        pub fn clear(self: *Self, allocator: Allocator) void {
             self.deinit(allocator);
             self.initialized_mask = @as(InitializeMask, 0);
         }
 
-        pub inline fn assignCacheEntry(self: *Self, allocator: Allocator, comptime system_index: comptime_int, archetypes: []*OpaqueArchetype) void {
+        pub fn assignCacheEntry(self: *Self, allocator: Allocator, comptime system_index: comptime_int, archetypes: []*OpaqueArchetype) void {
             if ((self.initialized_mask & (1 << system_index)) != 0) {
                 allocator.free(self.cache[system_index]);
             }
