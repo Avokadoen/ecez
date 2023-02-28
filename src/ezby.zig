@@ -22,6 +22,7 @@ const ez_testing = @import("Testing.zig");
 pub const version_major = 0;
 pub const version_minor = 1;
 pub const version_patch = 0;
+pub const alignment = 8;
 
 pub const SerializeError = error{
     OutOfMemory,
@@ -117,9 +118,9 @@ pub fn Serializer(comptime components: anytype, comptime shared_state: anytype, 
                     const component_bytes_size = blk2: {
                         var size: usize = 0;
                         for (archetype.component_storage) |component_bytes| {
-                            size += component_bytes.items.len;
+                            size += pow2Align(usize, component_bytes.items.len, alignment);
                         }
-                        break :blk2 @intCast(u64, size);
+                        break :blk2 size;
                     };
                     break :blk1 @sizeOf(Chunk.Arch) + type_map_size + entity_map_size + component_bytes_size;
                 };
@@ -155,6 +156,9 @@ pub fn Serializer(comptime components: anytype, comptime shared_state: anytype, 
                     // append component bytes
                     for (archetype.component_storage) |component_bytes| {
                         written_bytes.appendSliceAssumeCapacity(component_bytes.items);
+
+                        const align_padding = pow2Align(usize, component_bytes.items.len, alignment) - component_bytes.items.len;
+                        written_bytes.appendNTimesAssumeCapacity(0, align_padding);
                     }
                 }
             }
@@ -209,7 +213,8 @@ pub fn Serializer(comptime components: anytype, comptime shared_state: anytype, 
                 var rtti_list: Chunk.Arch.RttiList = undefined;
                 var entity_map_list: Chunk.Arch.EntityMapList = undefined;
                 var component_bytes: [*]const u8 = undefined;
-                bytes_pos = parseArchChunk(bytes_pos, &arch, &rtti_list, &entity_map_list, &component_bytes);
+                const new_bytes_pos = parseArchChunk(bytes_pos, &arch, &rtti_list, &entity_map_list, &component_bytes);
+                defer bytes_pos = new_bytes_pos;
 
                 // TODO: This is the worst case use of the ecez api where we add one and one component
                 //       which forces a lot of moves of data. We must find an alternative way of loading
@@ -226,18 +231,24 @@ pub fn Serializer(comptime components: anytype, comptime shared_state: anytype, 
                                 var byte_offset: u64 = rtti.size * nth_entity;
                                 for (rtti_list[0..rtti_index]) |prev_rtti| {
                                     // offset bytes by how many bytes were in the previous types
-                                    byte_offset += prev_rtti.size * arch.number_of_entities;
+                                    byte_offset += pow2Align(usize, prev_rtti.size * arch.number_of_entities, alignment);
                                 }
 
-                                const zero = [0]u8{};
-
-                                const component = if (@alignOf(Component) > 0)
-                                    @ptrCast(*const Component, @alignCast(
+                                const component = switch (@alignOf(Component)) {
+                                    0 => @ptrCast(*const Component, &[0]u8{}),
+                                    1...alignment => @ptrCast(*const Component, @alignCast(
                                         @alignOf(Component),
                                         component_bytes[byte_offset .. byte_offset + rtti.size].ptr,
-                                    ))
-                                else
-                                    @ptrCast(*const Component, &zero);
+                                    )),
+                                    else => blk: {
+                                        // We work around potential issues caused by increased alignment by moving
+                                        // the byte slice to a static array (which moves the memory on the stack),
+                                        // and then converting the array data to a Component pointer
+                                        var arr_bytes: [@sizeOf(Component)]u8 = undefined;
+                                        std.mem.copy(u8, &arr_bytes, component_bytes[byte_offset .. byte_offset + rtti.size]);
+                                        break :blk std.mem.bytesAsValue(Component, &arr_bytes);
+                                    },
+                                };
 
                                 dest_world.setComponent(entity, component.*) catch |err| switch (err) {
                                     error.EntityMissing => unreachable,
@@ -378,12 +389,17 @@ fn parseArchChunk(
     const remaining_bytes_offset = blk: {
         var component_byte_size: u64 = 0;
         for (rtti_list.*[0..chunk.*.number_of_components]) |component_rtti| {
-            component_byte_size += component_rtti.size * chunk.*.number_of_entities;
+            component_byte_size += pow2Align(usize, component_rtti.size * chunk.*.number_of_entities, alignment);
         }
         break :blk component_bytes_offset + component_byte_size;
     };
 
     return bytes[remaining_bytes_offset..];
+}
+
+// TODO: share with src\device_memory.zig
+fn pow2Align(comptime T: type, num: T, @"align": T) T {
+    return (num + @"align" - 1) & ~(@"align" - 1);
 }
 
 test "serializing then using parseEzbyChunk produce expected EZBY chunk" {
@@ -564,5 +580,21 @@ test "serialize and deserialize is idempotent" {
         try testing.expectEqual(abc_as[index], try dummy_world.getComponent(abc_entities[index], ez_testing.Component.A));
         try testing.expectEqual(abc_bs[index], try dummy_world.getComponent(abc_entities[index], ez_testing.Component.B));
         try testing.expectEqual(abc_cs, try dummy_world.getComponent(abc_entities[index], ez_testing.Component.C));
+    }
+}
+
+test "pow2Align return value aligned with 8" {
+    try testing.expectEqual(@as(usize, 0), pow2Align(usize, 0, 8));
+    for (1..9) |i| {
+        try testing.expectEqual(@as(usize, 8), pow2Align(usize, i, 8));
+    }
+    for (9..17) |i| {
+        try testing.expectEqual(@as(usize, 16), pow2Align(usize, i, 8));
+    }
+    for (17..25) |i| {
+        try testing.expectEqual(@as(usize, 24), pow2Align(usize, i, 8));
+    }
+    for (25..33) |i| {
+        try testing.expectEqual(@as(usize, 32), pow2Align(usize, i, 8));
     }
 }
