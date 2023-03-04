@@ -317,6 +317,20 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
             return self.container.getComponent(entity, Component);
         }
 
+        /// Trigger an event asynchronously. The caller must make sure to call waitEvent with matching enum identifier
+        /// Before relying on the result of a trigger.
+        /// Parameters:
+        ///     - event:                The event enum identifier. When registering an event on Wolrd creation a identifier is
+        ///                             submitted.
+        ///     - event_extra_argument: An event specific argument. Keep in mind that if you submit a pointer as argument data
+        ///                             then the lifetime of the argument must ourlive the execution of the event.
+        ///
+        /// Example:
+        /// ```
+        /// const World = WorldBuilder.WithEvents(.{Event("onMouse", .{onMouseSystem}, .{MouseArg})}
+        /// // ... world creation etc ...
+        /// try world.triggerEvent(.onMouse, mouse);
+        /// ```
         pub fn triggerEvent(self: *World, comptime event: EventsEnum, event_extra_argument: anytype) error{OutOfMemory}!void {
             const tracy_zone_name = std.fmt.comptimePrint("World trigger {s}", .{@tagName(event)});
             const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.world);
@@ -533,6 +547,15 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
             comptime component_hashes: []const u64,
             comptime ExtraArgumentType: type,
         ) type {
+            // in the case where the extra argument is a pointer we get the pointer child type
+            const extra_argument_child_type = blk: {
+                const extra_argument_info = @typeInfo(ExtraArgumentType);
+                if (extra_argument_info == .Pointer) {
+                    break :blk extra_argument_info.Pointer.child;
+                }
+                break :blk ExtraArgumentType;
+            };
+
             return struct {
                 world: *World,
                 opaque_archetypes: []*OpaqueArchetype,
@@ -580,6 +603,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                                         }
                                     },
                                     .event_argument_value => arguments[j] = @ptrCast(*meta.EventArgument(ExtraArgumentType), &self_job.extra_argument).*,
+                                    .event_argument_ptr => arguments[j] = @ptrCast(*meta.EventArgument(extra_argument_child_type), self_job.extra_argument),
                                     .shared_state_value => arguments[j] = self_job.world.getSharedStateWithSharedStateType(Param),
                                     .shared_state_ptr => arguments[j] = self_job.world.getSharedStatePtrWithSharedStateType(Param),
                                     .view => @compileError("view not implemented yet"),
@@ -1191,6 +1215,34 @@ test "events can accepts event related data" {
         Testing.Component.A{ .value = 42 },
         try world.getComponent(entity, Testing.Component.A),
     );
+}
+
+test "Event can mutate event extra argument" {
+    const SystemStruct = struct {
+        pub fn eventSystem(a: *Testing.Component.A, a_value: *EventArgument(Testing.Component.A)) void {
+            a_value.value = a.value;
+        }
+    };
+
+    var world = try WorldStub.WithEvents(.{
+        Event("onFoo", .{SystemStruct.eventSystem}, .{Testing.Component.A}),
+    }).init(testing.allocator, .{});
+    defer world.deinit();
+
+    const initial_state = AEntityType{
+        .a = Testing.Component.A{ .value = 42 },
+    };
+    _ = try world.createEntity(initial_state);
+
+    var event_a = Testing.Component.A{ .value = 0 };
+
+    // make sure test is not modified in an illegal manner
+    try testing.expect(initial_state.a.value != event_a.value);
+
+    try world.triggerEvent(.onFoo, &event_a);
+    world.waitEvent(.onFoo);
+
+    try testing.expectEqual(initial_state.a, event_a);
 }
 
 test "event cache works" {

@@ -20,7 +20,7 @@ pub const SystemMetadata = struct {
     pub const Arg = enum {
         component_ptr,
         component_value,
-        // event_argument_ptr, // not supported
+        event_argument_ptr,
         event_argument_value,
         shared_state_ptr,
         shared_state_value,
@@ -102,7 +102,8 @@ pub const SystemMetadata = struct {
                         } else if (@hasField(pointer.child, view_secret_field)) {
                             @compileError("view argument can't be pointers");
                         } else if (@hasField(pointer.child, event_argument_secret_field)) {
-                            @compileError("event argument can't be pointers");
+                            parsing_state = .not_component_parsing;
+                            params[i] = Arg.event_argument_ptr;
                         } else {
                             component_params_count = i + 1;
                             params[i] = Arg.component_ptr;
@@ -228,8 +229,8 @@ pub const SystemMetadata = struct {
     /// This function will include pointer types
     pub fn paramArgTypes(comptime self: SystemMetadata) [self.params.len]type {
         comptime var params: [self.fn_info.params.len]type = undefined;
-        inline for (self.fn_info.params, 0..) |arg, i| {
-            params[i] = arg.type.?;
+        inline for (self.fn_info.params, &params) |arg, *param| {
+            param.* = arg.type.?;
         }
         return params;
     }
@@ -850,7 +851,7 @@ pub fn SharedState(comptime State: type) type {
 
 /// This function will mark a type as event data
 pub fn EventArgument(comptime Argument: type) type {
-    const state_info = blk: {
+    const argument_info = blk: {
         const info = @typeInfo(Argument);
         if (info != .Struct) {
             @compileError("event argument must be of type struct");
@@ -858,13 +859,13 @@ pub fn EventArgument(comptime Argument: type) type {
         break :blk info.Struct;
     };
 
-    var shared_state_fields: [state_info.fields.len + 1]Type.StructField = undefined;
-    inline for (state_info.fields, 0..) |field, i| {
-        shared_state_fields[i] = field;
+    var event_fields: [argument_info.fields.len + 1]Type.StructField = undefined;
+    inline for (argument_info.fields, 0..) |field, i| {
+        event_fields[i] = field;
     }
 
     const default_value: u8 = 0;
-    shared_state_fields[state_info.fields.len] = Type.StructField{
+    event_fields[argument_info.fields.len] = Type.StructField{
         .name = event_argument_secret_field,
         .type = u8,
         .default_value = @ptrCast(?*const anyopaque, &default_value),
@@ -873,10 +874,10 @@ pub fn EventArgument(comptime Argument: type) type {
     };
 
     return @Type(Type{ .Struct = .{
-        .layout = state_info.layout,
-        .fields = &shared_state_fields,
-        .decls = state_info.decls,
-        .is_tuple = state_info.is_tuple,
+        .layout = argument_info.layout,
+        .fields = &event_fields,
+        .decls = argument_info.decls,
+        .is_tuple = argument_info.is_tuple,
     } });
 }
 
