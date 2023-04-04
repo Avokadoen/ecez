@@ -46,7 +46,6 @@ pub fn build(b: *std.Build) void {
             .name = "main_tests",
             .root_source_file = .{ .path = "src/main.zig" },
             .optimize = mode,
-            .kind = .test_exe,
         });
 
         main_tests.addModule("ztracy", ztracy_package.module);
@@ -57,18 +56,19 @@ pub fn build(b: *std.Build) void {
     }
 
     // add library tests to the main tests
-    const main_tests_step = b.addTest(.{
+    const main_tests = b.addTest(.{
         .root_source_file = .{ .path = "src/main.zig" },
         .optimize = mode,
     });
 
-    main_tests_step.addModule("ztracy", ztracy_package.module);
-    ztracy.link(main_tests_step, .{ .enable_ztracy = enable_tracy });
-    main_tests_step.addModule("zjobs", zjobs_package.module);
+    main_tests.addModule("ztracy", ztracy_package.module);
+    ztracy.link(main_tests, .{ .enable_ztracy = enable_tracy });
+    main_tests.addModule("zjobs", zjobs_package.module);
 
     // main_tests_step.linkLibrary(lib);
     const test_step = b.step("test", "Run all tests");
-    test_step.dependOn(&main_tests_step.step);
+    const main_tests_run = b.addRunArtifact(main_tests);
+    test_step.dependOn(&main_tests_run.step);
 
     var ecez_module = b.createModule(std.Build.CreateModuleOptions{
         .source_file = .{ .path = "src/main.zig" },
@@ -105,7 +105,7 @@ pub fn build(b: *std.Build) void {
         exe.install();
 
         const run_step = b.step("run-" ++ example.name, "Run '" ++ example.name ++ "' demo");
-        const run_cmd = exe.run();
+        const run_cmd = b.addRunArtifact(exe);
         run_cmd.step.dependOn(b.getInstallStep());
         run_step.dependOn(&run_cmd.step);
 
