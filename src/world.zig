@@ -47,21 +47,21 @@ fn WorldIntermediate(comptime prev_components: anytype, comptime prev_shared_sta
     return struct {
         const Self = @This();
 
-        /// define application components
+        /// define world components
         /// Parameters:
-        ///     - components: structures of components that will used by the application
+        ///     - components: structures of components that will used by the worls
         pub fn WithComponents(comptime components: anytype) type {
             return WorldIntermediate(components, prev_shared_state, prev_events);
         }
 
-        /// define application shared state
+        /// define world shared state
         /// Parameters:
-        ///     - archetypes: structures of archetypes that will used by the application
+        ///     - shared_state: structures of shared state(s) that will used by systems
         pub fn WithSharedState(comptime shared_state: anytype) type {
             return WorldIntermediate(prev_components, shared_state, prev_events);
         }
 
-        /// define application events that can be triggered programmatically
+        /// define world events that can be triggered programmatically
         ///     - events: a tuple of events created using the ecez.Event function
         pub fn WithEvents(comptime events: anytype) type {
             return WorldIntermediate(prev_components, prev_shared_state, events);
