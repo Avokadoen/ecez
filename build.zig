@@ -52,7 +52,7 @@ pub fn build(b: *std.Build) void {
         ztracy.link(main_tests, .{ .enable_ztracy = enable_tracy });
         main_tests.addModule("zjobs", zjobs_package.module);
 
-        main_tests.install();
+        b.installArtifact(main_tests);
     }
 
     // add library tests to the main tests
@@ -102,7 +102,7 @@ pub fn build(b: *std.Build) void {
         ztracy.link(exe, .{ .enable_ztracy = enable_tracy });
         exe.addModule("zjobs", zjobs_package.module);
 
-        exe.install();
+        b.installArtifact(exe);
 
         const run_step = b.step("run-" ++ example.name, "Run '" ++ example.name ++ "' demo");
         const run_cmd = b.addRunArtifact(exe);
