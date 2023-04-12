@@ -1403,13 +1403,13 @@ test "DependOn makes a events race free" {
 test "Event DependOn events can have multiple dependencies" {
     const SystemStruct = struct {
         pub fn addStuff1(a: *Testing.Component.A) void {
-            std.time.sleep(std.time.ns_per_us * 2);
+            std.time.sleep(std.time.ns_per_us);
             a.value += 1;
         }
 
-        pub fn addStuff2(a: *Testing.Component.A, b: Testing.Component.B) void {
+        pub fn addStuff2(b: *Testing.Component.B) void {
             std.time.sleep(std.time.ns_per_us);
-            a.value += b.value;
+            b.value += 1;
         }
 
         pub fn multiplyStuff(a: *Testing.Component.A, b: Testing.Component.B) void {
@@ -1444,10 +1444,10 @@ test "Event DependOn events can have multiple dependencies" {
     world.waitEvent(.onFoo);
 
     for (entities) |entity| {
-        // (3  + 1 + 2) * 2 = 12
-        // (12 + 1 + 2) * 2 = 30
+        // (3 + 1) * (2 + 1) = 12
+        // (12 + 1) * (3 + 1) = 52
         try testing.expectEqual(
-            Testing.Component.A{ .value = 30 },
+            Testing.Component.A{ .value = 52 },
             try world.getComponent(entity, Testing.Component.A),
         );
     }
