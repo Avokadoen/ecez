@@ -332,7 +332,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
         /// try world.triggerEvent(.onMouse, mouse);
         /// ```
         pub fn triggerEvent(self: *World, comptime event: EventsEnum, event_extra_argument: anytype) error{OutOfMemory}!void {
-            const tracy_zone_name = std.fmt.comptimePrint("World trigger {s}", .{@tagName(event)});
+            const tracy_zone_name = comptime std.fmt.comptimePrint("World trigger {s}", .{@tagName(event)});
             const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.world);
             defer zone.End();
 
@@ -447,7 +447,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
         /// Wait for all jobs from a triggerEvent to finish by blocking the calling thread
         /// should only be called from the triggerEvent thread
         pub fn waitEvent(self: *World, comptime event: EventsEnum) void {
-            const tracy_zone_name = std.fmt.comptimePrint("World wait event {s}", .{@tagName(event)});
+            const tracy_zone_name = comptime std.fmt.comptimePrint("World wait event {s}", .{@tagName(event)});
             const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.world);
             defer zone.End();
 
