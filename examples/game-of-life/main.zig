@@ -16,7 +16,7 @@ pub fn main() anyerror!void {
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer {
-        if (gpa.deinit()) {
+        if (gpa.deinit() == .leak) {
             std.log.err("leak detected", .{});
         }
     }
