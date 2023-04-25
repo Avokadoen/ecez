@@ -12,7 +12,6 @@ const OpaqueArchetype = @import("OpaqueArchetype.zig");
 const entity_type = @import("entity_type.zig");
 const Entity = entity_type.Entity;
 const EntityRef = entity_type.EntityRef;
-const iterator = @import("iterator.zig");
 
 const ecez_query = @import("query.zig");
 const QueryBuilder = ecez_query.QueryBuilder;
@@ -130,29 +129,52 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             }
         }
 
+        // TODO: this function should be shorter. Should not be too hard to make more concise ...
         /// retrieve all archetype interfaces that are at the path destination and all children of the destination
-        pub fn getIArchetypesWithComponents(self: Self, path: ?[]u16, result: *ArrayList(*OpaqueArchetype), depth: usize) error{OutOfMemory}!void {
-            // if we have not found nodes with our requirements
-            if (path) |some_path| {
-                std.debug.assert(some_path.len > 0);
+        pub fn getArchetypesWithComponents(self: Self, include_path: ?[]u16, exclude_path: []u16, result: *ArrayList(*OpaqueArchetype), depth: usize) error{OutOfMemory}!void {
+            const exclude_step: usize = exclude_blk: {
+                var index: usize = 0;
+                while (index < exclude_path.len) {
+                    if (exclude_path[index] >= depth) {
+                        break :exclude_blk exclude_path[index];
+                    }
+                    index += 1;
+                }
 
-                if (some_path.len > 1) {
+                // if we do not have any exclude next then we need to make sure any step does always not equal exclude step
+                break :exclude_blk std.math.maxInt(usize);
+            };
+
+            // if we have not found nodes with our requirements
+            if (include_path) |some_include_path| {
+                std.debug.assert(some_include_path.len > 0);
+
+                if (some_include_path.len > 1) {
                     // if desired path contains a step that is not part of the next step
-                    if (some_path[0] < depth) {
+                    if (some_include_path[0] < depth) {
                         return;
                     }
 
-                    for (self.children, 0..) |maybe_child, i| {
+                    child_loop: for (self.children, 0..) |maybe_child, i| {
+                        const depth_normalized_i = i + depth;
+
+                        // make sure we are not stepping in an excluded path
+                        for (exclude_path) |loop_exclude_step| {
+                            if ((loop_exclude_step == depth_normalized_i)) continue :child_loop;
+                        }
+
                         if (maybe_child) |child| {
+                            const next_exclude_path = if (depth_normalized_i > exclude_step) exclude_path[1..] else exclude_path;
+
                             // if the path index is the current loop index
-                            const on_path = (some_path[0] - depth) == i;
+                            const on_path = some_include_path[0] == depth_normalized_i;
 
                             const from: usize = if (on_path) 1 else 0;
-                            try child.getIArchetypesWithComponents(some_path[from..], result, depth + 1);
+                            try child.getArchetypesWithComponents(some_include_path[from..], next_exclude_path, result, depth + 1);
                         }
                     }
                 } else {
-                    const arche_index = some_path[0] - depth;
+                    const arche_index = some_include_path[0] - depth;
                     // store the initial archetype meeting our requirement
                     if (self.archetypes[arche_index]) |*arche| {
                         try result.append(&arche.archetype);
@@ -163,7 +185,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                     // if any of the steps are less than the depth then it means we are in a
                     // branch that does not contain any matches
                     const skip_searching_siblings = blk: {
-                        for (some_path) |step| {
+                        for (some_include_path) |step| {
                             if (step < next_depth) {
                                 break :blk true;
                             }
@@ -172,40 +194,74 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                     };
 
                     if (skip_searching_siblings) {
-                        for (self.children, 0..) |maybe_child, i| {
+                        child_loop: for (self.children, 0..) |maybe_child, i| {
                             if (maybe_child) |child| {
                                 if (i == arche_index) {
+                                    const depth_normalized_i = i + depth;
+
+                                    // make sure we are not stepping in an excluded path
+                                    for (exclude_path) |loop_exclude_step| {
+                                        if ((loop_exclude_step == depth_normalized_i)) continue :child_loop;
+                                    }
+
+                                    const next_exclude_path = if (depth_normalized_i > exclude_step) exclude_path[1..] else exclude_path;
+
                                     // record all defined archetypes in the child as well since they also only have suitable archetypes
-                                    try child.getIArchetypesWithComponents(null, result, next_depth);
+                                    try child.getArchetypesWithComponents(null, next_exclude_path, result, next_depth);
                                 }
                             }
                         }
                     } else {
-                        for (self.children, 0..) |maybe_child, i| {
+                        child_loop: for (self.children, 0..) |maybe_child, i| {
                             if (maybe_child) |child| {
+                                const depth_normalized_i = i + depth;
+
+                                // make sure we are not stepping in an excluded path
+                                for (exclude_path) |loop_exclude_step| {
+                                    if ((loop_exclude_step == depth_normalized_i)) continue :child_loop;
+                                }
+
+                                const next_exclude_path = if (depth_normalized_i > exclude_step) exclude_path[1..] else exclude_path;
+
                                 if (i == arche_index) {
                                     // record all defined archetypes in the child as well since they also only have suitable archetypes
-                                    try child.getIArchetypesWithComponents(null, result, next_depth);
+                                    try child.getArchetypesWithComponents(null, next_exclude_path, result, next_depth);
                                 } else {
                                     // look for matching component in the other children
-                                    try child.getIArchetypesWithComponents(some_path, result, next_depth);
+                                    try child.getArchetypesWithComponents(some_include_path, next_exclude_path, result, next_depth);
                                 }
                             }
                         }
                     }
                 }
             } else {
-                // all archetypes should be fitting our requirement
-                for (self.archetypes) |*maybe_arche| {
+                // all archetypes except any exclude should be fitting our requirement
+                sibling_loop: for (self.archetypes, 0..) |*maybe_arche, i| {
                     if (maybe_arche.*) |*arche| {
+                        const depth_normalized_i = i + depth;
+
+                        // make sure we are not stepping in an excluded path
+                        for (exclude_path) |loop_exclude_step| {
+                            if ((loop_exclude_step == depth_normalized_i)) continue :sibling_loop;
+                        }
+
                         try result.append(&arche.archetype);
                     }
                 }
 
                 // record all defined archetypes in the children as well since they also only have suitable archetypes
-                for (self.children) |maybe_child| {
+                child_loop: for (self.children, 0..) |maybe_child, i| {
                     if (maybe_child) |child| {
-                        try child.getIArchetypesWithComponents(null, result, depth + 1);
+                        const depth_normalized_i = i + depth;
+
+                        // make sure we are not stepping in an excluded path
+                        for (exclude_path) |loop_exclude_step| {
+                            if ((loop_exclude_step == depth_normalized_i)) continue :child_loop;
+                        }
+
+                        const next_exclude_path = if (depth_normalized_i > exclude_step) exclude_path[1..] else exclude_path;
+
+                        try child.getArchetypesWithComponents(null, next_exclude_path, result, depth + 1);
                     }
                 }
             }
@@ -605,20 +661,43 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
         /// Query archetypes containing all components listed in component_hashes
         /// caller own the returned memory
-        pub inline fn getArchetypesWithComponents(self: ArcheContainer, allocator: Allocator, component_hashes: []const u64) error{OutOfMemory}![]*OpaqueArchetype {
-            var path: [submitted_components.len]u16 = undefined;
-            for (component_hashes, 0..) |requested_hash, i| {
-                path[i] = blk: {
+        pub fn getArchetypesWithComponents(
+            self: ArcheContainer,
+            allocator: Allocator,
+            include_component_hashes: []const u64,
+            exclude_component_hashes: []const u64,
+        ) error{OutOfMemory}![]*OpaqueArchetype {
+            var include_path: [submitted_components.len]u16 = undefined;
+            for (include_component_hashes, 0..) |include_hash, i| {
+                include_path[i] = blk: {
                     for (self.component_hashes[i..], 0..) |stored_hash, step| {
-                        if (requested_hash == stored_hash) {
+                        if (include_hash == stored_hash) {
                             break :blk @intCast(u15, step + i);
                         }
                     }
                     unreachable; // should be compile type guards before we reach this point ...
                 };
             }
+
+            var exclude_path: [submitted_components.len]u16 = undefined;
+            for (exclude_component_hashes, 0..) |exclude_hash, i| {
+                exclude_path[i] = blk: {
+                    for (self.component_hashes[i..], 0..) |stored_hash, step| {
+                        if (exclude_hash == stored_hash) {
+                            break :blk @intCast(u15, step + i);
+                        }
+                    }
+                    unreachable; // should be compile type guards before we reach this point ...
+                };
+            }
+
             var resulting_archetypes = ArrayList(*OpaqueArchetype).init(allocator);
-            try self.root_node.getIArchetypesWithComponents(path[0..component_hashes.len], &resulting_archetypes, 0);
+            try self.root_node.getArchetypesWithComponents(
+                include_path[0..include_component_hashes.len],
+                exclude_path[0..exclude_component_hashes.len],
+                &resulting_archetypes,
+                0,
+            );
 
             return resulting_archetypes.toOwnedSlice();
         }
@@ -825,20 +904,6 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
 const TestContainer = FromComponents(&Testing.AllComponentsArr);
 
-// TODO: we cant use tuples here becuase of https://github.com/ziglang/zig/issues/12963
-const AbcEntityType = struct {
-    a: Testing.Component.A,
-    b: Testing.Component.B,
-    c: Testing.Component.C,
-};
-const AcEntityType = struct {
-    a: Testing.Component.A,
-    c: Testing.Component.C,
-};
-const CEntityType = struct {
-    c: Testing.Component.C,
-};
-
 test "ArcheContainer init + deinit is idempotent" {
     var container = try TestContainer.init(testing.allocator);
     container.deinit();
@@ -848,7 +913,7 @@ test "ArcheContainer createEntity & getComponent works" {
     var container = try TestContainer.init(testing.allocator);
     defer container.deinit();
 
-    const initial_state = AbcEntityType{
+    const initial_state = Testing.Archetype.ABC{
         .a = Testing.Component.A{ .value = 1 },
         .b = Testing.Component.B{ .value = 2 },
         .c = Testing.Component.C{},
@@ -866,7 +931,7 @@ test "ArcheContainer setComponent & getComponent works" {
     var container = try TestContainer.init(testing.allocator);
     defer container.deinit();
 
-    const initial_state = AcEntityType{
+    const initial_state = Testing.Archetype.AC{
         .a = Testing.Component.A{ .value = 1 },
         .c = Testing.Component.C{},
     };
@@ -885,7 +950,7 @@ test "ArcheContainer getTypeHashes works" {
     var container = try TestContainer.init(testing.allocator);
     defer container.deinit();
 
-    const initial_state = AcEntityType{
+    const initial_state = Testing.Archetype.AC{
         .a = Testing.Component.A{ .value = 1 },
         .c = Testing.Component.C{},
     };
@@ -902,7 +967,7 @@ test "ArcheContainer hasComponent works" {
     var container = try TestContainer.init(testing.allocator);
     defer container.deinit();
 
-    const initial_state = AcEntityType{
+    const initial_state = Testing.Archetype.AC{
         .a = Testing.Component.A{ .value = 1 },
         .c = Testing.Component.C{},
     };
@@ -927,56 +992,92 @@ test "ArcheContainer getArchetypesWithComponents returns matching archetypes" {
         @compileError("hash function give unexpected result");
     }
 
-    const initial_state = CEntityType{
+    const initial_state = Testing.Archetype.C{
         .c = Testing.Component.C{},
     };
     const entity = (try container.createEntity(initial_state)).entity;
     {
-        const arch = try container.getArchetypesWithComponents(testing.allocator, &[_]u64{c_hash});
+        const arch = try container.getArchetypesWithComponents(
+            testing.allocator,
+            &[_]u64{c_hash},
+            &[0]u64{},
+        );
         defer testing.allocator.free(arch);
         try testing.expectEqual(@as(usize, 1), arch.len);
     }
     {
-        const arch = try container.getArchetypesWithComponents(testing.allocator, &[_]u64{b_hash});
+        const arch = try container.getArchetypesWithComponents(
+            testing.allocator,
+            &[_]u64{b_hash},
+            &[0]u64{},
+        );
         defer testing.allocator.free(arch);
         try testing.expectEqual(@as(usize, 0), arch.len);
     }
     {
-        const arch = try container.getArchetypesWithComponents(testing.allocator, &[_]u64{a_hash});
+        const arch = try container.getArchetypesWithComponents(
+            testing.allocator,
+            &[_]u64{a_hash},
+            &[0]u64{},
+        );
         defer testing.allocator.free(arch);
         try testing.expectEqual(@as(usize, 0), arch.len);
     }
 
     _ = try container.setComponent(entity, Testing.Component.A{});
     {
-        const arch = try container.getArchetypesWithComponents(testing.allocator, &[_]u64{c_hash});
+        const arch = try container.getArchetypesWithComponents(
+            testing.allocator,
+            &[_]u64{c_hash},
+            &[0]u64{},
+        );
         defer testing.allocator.free(arch);
         try testing.expectEqual(@as(usize, 2), arch.len);
     }
     {
-        const arch = try container.getArchetypesWithComponents(testing.allocator, &[_]u64{b_hash});
+        const arch = try container.getArchetypesWithComponents(
+            testing.allocator,
+            &[_]u64{b_hash},
+            &[0]u64{},
+        );
         defer testing.allocator.free(arch);
         try testing.expectEqual(@as(usize, 0), arch.len);
     }
     {
-        const arch = try container.getArchetypesWithComponents(testing.allocator, &[_]u64{a_hash});
+        const arch = try container.getArchetypesWithComponents(
+            testing.allocator,
+            &[_]u64{a_hash},
+            &[0]u64{},
+        );
         defer testing.allocator.free(arch);
         try testing.expectEqual(@as(usize, 1), arch.len);
     }
 
     _ = try container.setComponent(entity, Testing.Component.B{});
     {
-        const arch = try container.getArchetypesWithComponents(testing.allocator, &[_]u64{c_hash});
+        const arch = try container.getArchetypesWithComponents(
+            testing.allocator,
+            &[_]u64{c_hash},
+            &[0]u64{},
+        );
         defer testing.allocator.free(arch);
         try testing.expectEqual(@as(usize, 3), arch.len);
     }
     {
-        const arch = try container.getArchetypesWithComponents(testing.allocator, &[_]u64{b_hash});
+        const arch = try container.getArchetypesWithComponents(
+            testing.allocator,
+            &[_]u64{b_hash},
+            &[0]u64{},
+        );
         defer testing.allocator.free(arch);
         try testing.expectEqual(@as(usize, 1), arch.len);
     }
     {
-        const arch = try container.getArchetypesWithComponents(testing.allocator, &[_]u64{a_hash});
+        const arch = try container.getArchetypesWithComponents(
+            testing.allocator,
+            &[_]u64{a_hash},
+            &[0]u64{},
+        );
         defer testing.allocator.free(arch);
         try testing.expectEqual(@as(usize, 2), arch.len);
     }
@@ -985,6 +1086,7 @@ test "ArcheContainer getArchetypesWithComponents returns matching archetypes" {
         const arch = try container.getArchetypesWithComponents(
             testing.allocator,
             &[_]u64{ a_hash, c_hash },
+            &[0]u64{},
         );
         defer testing.allocator.free(arch);
         try testing.expectEqual(@as(usize, 2), arch.len);
@@ -993,6 +1095,7 @@ test "ArcheContainer getArchetypesWithComponents returns matching archetypes" {
         const arch = try container.getArchetypesWithComponents(
             testing.allocator,
             &[_]u64{ a_hash, b_hash },
+            &[0]u64{},
         );
         defer testing.allocator.free(arch);
         try testing.expectEqual(@as(usize, 1), arch.len);
@@ -1001,8 +1104,76 @@ test "ArcheContainer getArchetypesWithComponents returns matching archetypes" {
         const arch = try container.getArchetypesWithComponents(
             testing.allocator,
             &[_]u64{ b_hash, c_hash },
+            &[0]u64{},
         );
         defer testing.allocator.free(arch);
         try testing.expectEqual(@as(usize, 1), arch.len);
+    }
+}
+
+test "ArcheContainer getArchetypesWithComponents can exclude archetypes" {
+    var container = try TestContainer.init(testing.allocator);
+    defer container.deinit();
+
+    const a_hash = comptime hashType(Testing.Component.A);
+    const b_hash = comptime hashType(Testing.Component.B);
+    const c_hash = comptime hashType(Testing.Component.C);
+    if (a_hash > b_hash) {
+        @compileError("hash function give unexpected result");
+    }
+    if (b_hash > c_hash) {
+        @compileError("hash function give unexpected result");
+    }
+
+    // make sure the container have Archetype {A}, {B}, {C}, {AB}, {AC}, {ABC}
+    _ = try container.createEntity(Testing.Archetype.A{});
+    _ = try container.createEntity(Testing.Archetype.B{});
+    _ = try container.createEntity(Testing.Archetype.C{});
+    _ = try container.createEntity(Testing.Archetype.AB{});
+    _ = try container.createEntity(Testing.Archetype.AC{});
+    _ = try container.createEntity(Testing.Archetype.ABC{});
+
+    // ask for A, excluding C
+    {
+        const arch = try container.getArchetypesWithComponents(
+            testing.allocator,
+            &[_]u64{a_hash},
+            &[_]u64{c_hash},
+        );
+        defer testing.allocator.free(arch);
+        try testing.expectEqual(@as(usize, 2), arch.len);
+    }
+
+    // ask for A, excluding B, C
+    {
+        const arch = try container.getArchetypesWithComponents(
+            testing.allocator,
+            &[_]u64{a_hash},
+            &[_]u64{ b_hash, c_hash },
+        );
+        defer testing.allocator.free(arch);
+        try testing.expectEqual(@as(usize, 1), arch.len);
+    }
+
+    // ask for B, excluding A
+    {
+        const arch = try container.getArchetypesWithComponents(
+            testing.allocator,
+            &[_]u64{b_hash},
+            &[_]u64{a_hash},
+        );
+        defer testing.allocator.free(arch);
+        try testing.expectEqual(@as(usize, 1), arch.len);
+    }
+
+    // ask for C, excluding B
+    {
+        const arch = try container.getArchetypesWithComponents(
+            testing.allocator,
+            &[_]u64{c_hash},
+            &[_]u64{b_hash},
+        );
+        defer testing.allocator.free(arch);
+        try testing.expectEqual(@as(usize, 2), arch.len);
     }
 }

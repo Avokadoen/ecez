@@ -329,7 +329,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
         /// ```
         /// const World = WorldBuilder.WithEvents(.{Event("onMouse", .{onMouseSystem}, .{MouseArg})}
         /// // ... world creation etc ...
-        /// try world.triggerEvent(.onMouse, mouse);
+        /// try world.triggerEvent(.onMouse, @as(MouseArg, mouse));
         /// ```
         pub fn triggerEvent(self: *World, comptime event: EventsEnum, event_extra_argument: anytype) error{OutOfMemory}!void {
             const tracy_zone_name = comptime std.fmt.comptimePrint("World trigger {s}", .{@tagName(event)});
@@ -400,7 +400,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                         event_cache_storage.assignCacheEntry(
                             self.allocator,
                             system_index,
-                            try self.container.getArchetypesWithComponents(self.allocator, &sorted_component_hashes),
+                            try self.container.getArchetypesWithComponents(self.allocator, &sorted_component_hashes, &[0]u64{}),
                         );
                     }
 
