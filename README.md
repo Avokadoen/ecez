@@ -108,6 +108,7 @@ var world = try World.init(allocator, .{});
 // we filter out all monsters that might have the previously mentioned components if they also have 
 // a SadTag or SickTag attached to the same entity
 var happy_healhy_monster_iter = try World.Query(
+    // notice that Monster components will be mutable through pointer semantics
     .{*Monster, HappyTag, HealthyTag},   // these are our include types
     .{SadTag, SickTag}                   // these are our exclude types
 ).submit(world, std.testing.allocator);
