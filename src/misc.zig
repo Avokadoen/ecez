@@ -5,6 +5,7 @@ pub const Color = struct {
     pub const arche_container = Light.green;
     pub const entity_builder = Light.purple;
     pub const serializer = Light.brown;
+    pub const iterator = Light.orange;
 
     pub const Light = struct {
         pub const red = 0xeb_80_7b;

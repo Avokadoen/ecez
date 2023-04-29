@@ -8,6 +8,12 @@ pub const Archetype = struct {
     pub const A = struct {
         a: Component.A = .{},
     };
+    pub const B = struct {
+        b: Component.B = .{},
+    };
+    pub const C = struct {
+        c: Component.C = .{},
+    };
     pub const AB = struct {
         a: Component.A = .{},
         b: Component.B = .{},

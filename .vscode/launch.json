@@ -9,7 +9,7 @@
             "request": "launch",
             "name": "Debug Test",
             "program": "${workspaceFolder}/zig-out/bin/main_tests.exe",
-            "args": ["/c/Program Files/Zig/zig.exe"],
+            "args": [],
             "cwd": "${workspaceFolder}",
             "preLaunchTask": "build",
         },

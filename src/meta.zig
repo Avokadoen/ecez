@@ -205,22 +205,18 @@ pub const SystemMetadata = struct {
     }
 
     /// Get the argument types as proper component types
-    /// This function will extrapolate interior types from pointers
+    /// This function will extrapolate inner types from pointers
     pub fn componentQueryArgTypes(comptime self: SystemMetadata) [self.component_params_count]type {
         comptime var params: [self.component_params_count]type = undefined;
-        inline for (self.fn_info.params, 0..) |arg, i| {
-            if (self.component_params_count == i) {
-                break;
-            }
-
+        inline for (&params, self.fn_info.params[0..self.component_params_count]) |*param, arg| {
             switch (@typeInfo(arg.type.?)) {
                 .Pointer => |p| {
-                    params[i] = p.child;
+                    param.* = p.child;
                     continue;
                 },
                 else => {},
             }
-            params[i] = arg.type.?;
+            param.* = arg.type.?;
         }
         return params;
     }
@@ -624,8 +620,36 @@ pub fn ComponentStorage(comptime types: []const type) type {
     return @Type(RtrTypeInfo);
 }
 
-pub fn LengthComponentStorage(comptime types: []const type) type {
-    return struct { len: usize, storage: ComponentStorage(types) };
+/// Generate a struct that hold one component
+pub fn ComponentStruct(comptime types: []const type) type {
+    var struct_fields: [types.len]Type.StructField = undefined;
+    inline for (types, 0..) |T, i| {
+        const field_name = blk: {
+            switch (@typeInfo(T)) {
+                .Pointer => |pointer| {
+                    break :blk @typeName(pointer.child);
+                },
+                else => {},
+            }
+
+            break :blk @typeName(T);
+        };
+
+        struct_fields[i] = .{
+            .name = field_name,
+            .type = T,
+            .default_value = null,
+            .is_comptime = false,
+            .alignment = if (@sizeOf(T) > 0) @alignOf(T) else 0,
+        };
+    }
+    const RtrTypeInfo = Type{ .Struct = .{
+        .layout = .Auto,
+        .fields = &struct_fields,
+        .decls = &[0]Type.Declaration{},
+        .is_tuple = false,
+    } };
+    return @Type(RtrTypeInfo);
 }
 
 /// Given a slice of structures, count how many contains the slice of types t
