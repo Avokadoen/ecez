@@ -84,6 +84,51 @@ var world = try ecez.WorldBuilder().WithComponents(.{
     }).init(allocator, .{});
 ```
 
+### Queries
+
+You can query the api instance for all components of certain type and filter out instances of said components that also have unwanted sibling components.
+
+#### Example
+
+```zig
+const World = ecez.WorldBuilder().WithComponents(.{
+    Monsters,
+    HappyTag,
+    SadTag,
+    AngryTag,
+    SickTag,
+    HealthyTag
+    // ...
+});
+
+var world = try World.init(allocator, .{});
+// .. some construction of your world entites
+
+// we want to iterate over all Monsters, HappyTag and HealthyTag components grouped by entity,
+// we filter out all monsters that might have the previously mentioned components if they also have 
+// a SadTag or SickTag attached to the same entity
+var happy_healhy_monster_iter = try World.Query(
+    .{*Monster, HappyTag, HealthyTag},   // these are our include types
+    .{SadTag, SickTag}                   // these are our exclude types
+).submit(world, std.testing.allocator);
+
+// iterators have to do some allocations for now, so we need to make sure to deinit iterator when done using it
+defer happy_healhy_monster_iter.deinit();
+
+while (happy_healhy_monster_iter.next()) |happy_healhy_monster| {
+    // these monsters are not sick or sad so they become more happy :)
+    happy_healhy_monster.Monster.mood_rating += 1;
+}
+
+
+if (happy_healhy_monster_iter.at(5)) |fifth_happy_monster| {
+    // the 5th monster becomes extra happy! 
+    happy_healhy_monster.Monster.mood_rating += 1;
+}
+
+```
+
+
 ### Multithreading is done thorugh [zjobs](https://github.com/michal-z/zig-gamedev/tree/main/libs/zjobs)
 
 zjobs is as the name suggest a job based multithreading API. 
@@ -106,4 +151,3 @@ The codebase also utilize TDD to ensure a certain level of robustness, altough I
 
 Please see the issues for planned features.
 
-Some key features include queries with iterators
