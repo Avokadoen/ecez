@@ -1,6 +1,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const ztracy = @import("ztracy");
+
+const Color = @import("misc.zig").Color;
+
 const meta = @import("meta.zig");
 const query = @import("query.zig");
 const OpaqueArchetype = @import("OpaqueArchetype.zig");
@@ -40,6 +44,9 @@ pub fn FromTypes(comptime sorted_types: []const type, comptime type_hashes: []co
         }
 
         pub fn next(self: *Iterator) ?Item {
+            const zone = ztracy.ZoneNC(@src(), "Query Iterator next", Color.iterator);
+            defer zone.End();
+
             if (self.query_result.len == 0) {
                 return null;
             }
@@ -103,6 +110,9 @@ pub fn FromTypes(comptime sorted_types: []const type, comptime type_hashes: []co
 
         /// Retrieve an item from a flat index, this operation is **not** 0(1)
         pub fn at(self: Iterator, index: usize) ?Item {
+            const zone = ztracy.ZoneNC(@src(), "Query Iterator at", Color.iterator);
+            defer zone.End();
+
             var cursor: usize = 0;
             for (0..self.query_result.len) |outer_index| {
                 for (0..self.query_result[outer_index].entities.count()) |inner_index| {

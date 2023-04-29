@@ -615,6 +615,9 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                 pub const Iter = IterType;
 
                 pub fn submit(world: World, allocator: Allocator) error{OutOfMemory}!Iter {
+                    const zone = ztracy.ZoneNC(@src(), "Query", Color.world);
+                    defer zone.End();
+
                     // extract data relative to system for each relevant archetype
                     const opaque_archetypes = try world.container.getArchetypesWithComponents(
                         allocator,
