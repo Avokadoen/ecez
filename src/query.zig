@@ -26,6 +26,27 @@ pub fn sortTypes(comptime Ts: []const type) [Ts.len]type {
     return types;
 }
 
+pub fn sortBasedOnTypes(comptime types: []const type, comptime ToSortType: type, sort_me: []const ToSortType) [types.len]ToSortType {
+    const TypeSortElem = struct {
+        original_index: usize,
+        hash: u64,
+    };
+    var sort_target: [types.len]TypeSortElem = undefined;
+    inline for (types, 0..) |T, i| {
+        sort_target[i] = TypeSortElem{
+            .original_index = i,
+            .hash = hashType(T),
+        };
+    }
+    sort(TypeSortElem, &sort_target);
+
+    var rtr: [types.len]ToSortType = undefined;
+    for (sort_target, 0..) |s, i| {
+        rtr[i] = sort_me[s.original_index];
+    }
+    return rtr;
+}
+
 pub fn hashType(comptime T: type) u64 {
     const type_name = @typeName(T);
     return hashfn(type_name[0..]);

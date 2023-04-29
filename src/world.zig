@@ -526,15 +526,31 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                 @compileError("query include types must be a tuple of types");
             }
 
-            var include_type_arr: [include_type_info.Struct.fields.len]type = undefined;
-            inline for (&include_type_arr, include_type_info.Struct.fields, 0..include_type_arr.len) |*include_type, field, index| {
+            const exclude_type_info = @typeInfo(@TypeOf(exclude_types));
+            if (exclude_type_info != .Struct) {
+                @compileError("query exclude types must be a tuple of types");
+            }
+
+            var include_inner_type_arr: [include_type_info.Struct.fields.len]type = undefined;
+            var include_outer_type_arr: [include_type_info.Struct.fields.len]type = undefined;
+            inline for (&include_inner_type_arr, &include_outer_type_arr, include_type_info.Struct.fields, 0..) |*inner_type, *outer_type, field, index| {
                 if (field.type != type) {
                     @compileError("query include types field " ++ field.name ++ "must be a component type, was " ++ @typeName(field.type));
                 }
 
+                outer_type.* = include_types[index];
+                inner_type.* = blk: {
+                    const field_info = @typeInfo(include_types[index]);
+                    if (field_info != .Pointer) {
+                        break :blk include_types[index];
+                    }
+
+                    break :blk field_info.Pointer.child;
+                };
+
                 var type_is_component = false;
                 for (component_types) |Component| {
-                    if (include_types[index] == Component) {
+                    if (inner_type.* == Component) {
                         type_is_component = true;
                         break;
                     }
@@ -543,56 +559,49 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                 if (type_is_component == false) {
                     @compileError("query include types field " ++ field.name ++ " is not a registered World component");
                 }
-
-                include_type.* = include_types[index];
             }
-
-            const exclude_type_info = @typeInfo(@TypeOf(exclude_types));
-            if (exclude_type_info != .Struct) {
-                @compileError("query exclude types must be a tuple of types");
-            }
+            include_outer_type_arr = query.sortBasedOnTypes(&include_inner_type_arr, type, &include_outer_type_arr);
+            include_inner_type_arr = query.sortTypes(&include_inner_type_arr);
 
             var exclude_type_arr: [exclude_type_info.Struct.fields.len]type = undefined;
-            inline for (&exclude_type_arr, exclude_type_info.Struct.fields, 0..exclude_type_arr.len) |*exclude_type, field, index| {
+            inline for (&exclude_type_arr, exclude_type_info.Struct.fields, 0..) |*exclude_type, field, index| {
                 if (field.type != type) {
-                    @compileError("query exclude types field " ++ field.name ++ "must be a component type, was " ++ @typeName(field.type));
+                    @compileError("query include types field " ++ field.name ++ "must be a component type, was " ++ @typeName(field.type));
                 }
+
+                exclude_type.* = exclude_types[index];
 
                 var type_is_component = false;
                 for (component_types) |Component| {
-                    if (exclude_types[index] == Component) {
+                    if (exclude_type.* == Component) {
                         type_is_component = true;
                         break;
                     }
                 }
 
                 if (type_is_component == false) {
-                    @compileError("query exclude types field " ++ field.name ++ " is not a registered World component");
+                    @compileError("query include types field " ++ field.name ++ " is not a registered World component");
                 }
-
-                exclude_type.* = exclude_types[index];
             }
 
-            const sorted_include_types = query.sortTypes(&include_type_arr);
-            const inlude_component_hashes: [sorted_include_types.len]u64 = comptime blk: {
-                var hashes: [sorted_include_types.len]u64 = undefined;
-                inline for (&hashes, sorted_include_types) |*hash, T| {
+            const inlude_component_hashes: [include_inner_type_arr.len]u64 = comptime blk: {
+                var hashes: [include_inner_type_arr.len]u64 = undefined;
+                inline for (&hashes, include_inner_type_arr) |*hash, T| {
                     hash.* = query.hashType(T);
                 }
                 break :blk hashes;
             };
 
-            const sorted_exclude_types = query.sortTypes(&exclude_type_arr);
-            const exclude_component_hashes: [sorted_exclude_types.len]u64 = comptime blk: {
-                var hashes: [sorted_exclude_types.len]u64 = undefined;
-                inline for (&hashes, sorted_exclude_types) |*hash, T| {
+            const exclude_component_hashes: [exclude_type_arr.len]u64 = comptime blk: {
+                var hashes: [exclude_type_arr.len]u64 = undefined;
+                inline for (&hashes, exclude_type_arr) |*hash, T| {
                     hash.* = query.hashType(T);
                 }
                 break :blk hashes;
             };
 
-            inline for (sorted_include_types) |IncType| {
-                inline for (sorted_exclude_types) |ExType| {
+            inline for (include_inner_type_arr) |IncType| {
+                inline for (exclude_type_arr) |ExType| {
                     if (IncType == ExType) {
                         // illegal query, you are doing something wrong :)
                         @compileError(@typeName(IncType) ++ " is used as an include type}, and as a exclude type");
@@ -600,8 +609,10 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                 }
             }
 
+            const IterType = Iterator(&include_outer_type_arr, &inlude_component_hashes);
+
             return struct {
-                pub const Iter = Iterator(&sorted_include_types, &inlude_component_hashes);
+                pub const Iter = IterType;
 
                 pub fn submit(world: World, allocator: Allocator) error{OutOfMemory}!Iter {
                     // extract data relative to system for each relevant archetype
@@ -1600,6 +1611,44 @@ test "query with multiple include type works" {
             try std.testing.expectEqual(Testing.Component.B{
                 .value = @intCast(u8, index),
             }, item.@"Testing.Component.B");
+
+            index += 1;
+        }
+    }
+}
+
+test "query with single ptr include type works" {
+    const World = WorldStub.Build();
+    var world = try World.init(std.testing.allocator, .{});
+    defer world.deinit();
+
+    for (0..100) |index| {
+        _ = try world.createEntity(AbEntityType{
+            .a = .{ .value = @intCast(u32, index) },
+            .b = .{ .value = @intCast(u8, index) },
+        });
+    }
+
+    {
+        var index: usize = 0;
+        var a_iter = try World.Query(.{*Testing.Component.A}, .{}).submit(world, std.testing.allocator);
+        defer a_iter.deinit();
+
+        while (a_iter.next()) |item| {
+            item.@"Testing.Component.A".value += 1;
+            index += 1;
+        }
+    }
+
+    {
+        var index: usize = 1;
+        var a_iter = try World.Query(.{Testing.Component.A}, .{}).submit(world, std.testing.allocator);
+        defer a_iter.deinit();
+
+        while (a_iter.next()) |item| {
+            try std.testing.expectEqual(Testing.Component.A{
+                .value = @intCast(u32, index),
+            }, item.@"Testing.Component.A");
 
             index += 1;
         }
