@@ -25,7 +25,7 @@ pub fn FromTypes(comptime sorted_types: []const type, comptime type_hashes: []co
 
         /// Initialize an ``iterator``. The ``iterator`` will own the ``query_result`` meaning the caller must make sure to call
         /// ```js
-        ///     iterator.free();
+        ///     iterator.deinit();
         /// ```
         pub fn init(allocator: Allocator, query_result: []const *OpaqueArchetype) Iterator {
             return Iterator{
@@ -159,7 +159,7 @@ pub fn FromTypes(comptime sorted_types: []const type, comptime type_hashes: []co
             return null;
         }
 
-        pub fn free(self: *Iterator) void {
+        pub fn deinit(self: Iterator) void {
             self.allocator.free(self.query_result);
         }
     };

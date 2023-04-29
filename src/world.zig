@@ -21,8 +21,7 @@ const SystemMetadata = meta.SystemMetadata;
 const ezby = @import("ezby.zig");
 
 const query = @import("query.zig");
-const Query = query.Query;
-const iterator = @import("iterator.zig");
+const Iterator = @import("iterator.zig").FromTypes;
 
 const Testing = @import("Testing.zig");
 
@@ -519,6 +518,102 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
         pub fn deserialize(self: *World, ezby_bytes: []const u8) ezby.DeserializeError!void {
             const Serializer = ezby.Serializer(components, shared_state_types, events);
             return Serializer.deserialize(self, ezby_bytes);
+        }
+
+        pub fn Query(comptime include_types: anytype, comptime exclude_types: anytype) type {
+            const include_type_info = @typeInfo(@TypeOf(include_types));
+            if (include_type_info != .Struct) {
+                @compileError("query include types must be a tuple of types");
+            }
+
+            var include_type_arr: [include_type_info.Struct.fields.len]type = undefined;
+            inline for (&include_type_arr, include_type_info.Struct.fields, 0..include_type_arr.len) |*include_type, field, index| {
+                if (field.type != type) {
+                    @compileError("query include types field " ++ field.name ++ "must be a component type, was " ++ @typeName(field.type));
+                }
+
+                var type_is_component = false;
+                for (component_types) |Component| {
+                    if (include_types[index] == Component) {
+                        type_is_component = true;
+                        break;
+                    }
+                }
+
+                if (type_is_component == false) {
+                    @compileError("query include types field " ++ field.name ++ " is not a registered World component");
+                }
+
+                include_type.* = include_types[index];
+            }
+
+            const exclude_type_info = @typeInfo(@TypeOf(exclude_types));
+            if (exclude_type_info != .Struct) {
+                @compileError("query exclude types must be a tuple of types");
+            }
+
+            var exclude_type_arr: [exclude_type_info.Struct.fields.len]type = undefined;
+            inline for (&exclude_type_arr, exclude_type_info.Struct.fields, 0..exclude_type_arr.len) |*exclude_type, field, index| {
+                if (field.type != type) {
+                    @compileError("query exclude types field " ++ field.name ++ "must be a component type, was " ++ @typeName(field.type));
+                }
+
+                var type_is_component = false;
+                for (component_types) |Component| {
+                    if (exclude_types[index] == Component) {
+                        type_is_component = true;
+                        break;
+                    }
+                }
+
+                if (type_is_component == false) {
+                    @compileError("query exclude types field " ++ field.name ++ " is not a registered World component");
+                }
+
+                exclude_type.* = exclude_types[index];
+            }
+
+            const sorted_include_types = query.sortTypes(&include_type_arr);
+            const inlude_component_hashes: [sorted_include_types.len]u64 = comptime blk: {
+                var hashes: [sorted_include_types.len]u64 = undefined;
+                inline for (&hashes, sorted_include_types) |*hash, T| {
+                    hash.* = query.hashType(T);
+                }
+                break :blk hashes;
+            };
+
+            const sorted_exclude_types = query.sortTypes(&exclude_type_arr);
+            const exclude_component_hashes: [sorted_exclude_types.len]u64 = comptime blk: {
+                var hashes: [sorted_exclude_types.len]u64 = undefined;
+                inline for (&hashes, sorted_exclude_types) |*hash, T| {
+                    hash.* = query.hashType(T);
+                }
+                break :blk hashes;
+            };
+
+            inline for (sorted_include_types) |IncType| {
+                inline for (sorted_exclude_types) |ExType| {
+                    if (IncType == ExType) {
+                        // illegal query, you are doing something wrong :)
+                        @compileError(@typeName(IncType) ++ " is used as an include type}, and as a exclude type");
+                    }
+                }
+            }
+
+            return struct {
+                pub const Iter = Iterator(&sorted_include_types, &inlude_component_hashes);
+
+                pub fn submit(world: World, allocator: Allocator) error{OutOfMemory}!Iter {
+                    // extract data relative to system for each relevant archetype
+                    const opaque_archetypes = try world.container.getArchetypesWithComponents(
+                        allocator,
+                        &inlude_component_hashes,
+                        &exclude_component_hashes,
+                    );
+
+                    return Iter.init(allocator, opaque_archetypes);
+                }
+            };
         }
 
         fn indexOfSharedType(comptime Shared: type) comptime_int {
@@ -1450,6 +1545,138 @@ test "Event DependOn events can have multiple dependencies" {
             Testing.Component.A{ .value = 52 },
             try world.getComponent(entity, Testing.Component.A),
         );
+    }
+}
+
+test "query with single include type works" {
+    const World = WorldStub.Build();
+    var world = try World.init(std.testing.allocator, .{});
+    defer world.deinit();
+
+    for (0..100) |index| {
+        _ = try world.createEntity(AbEntityType{
+            .a = .{ .value = @intCast(u32, index) },
+            .b = .{ .value = @intCast(u8, index) },
+        });
+    }
+
+    {
+        var index: usize = 0;
+        var a_iter = try World.Query(.{Testing.Component.A}, .{}).submit(world, std.testing.allocator);
+        defer a_iter.deinit();
+
+        while (a_iter.next()) |item| {
+            try std.testing.expectEqual(Testing.Component.A{
+                .value = @intCast(u32, index),
+            }, item.@"Testing.Component.A");
+
+            index += 1;
+        }
+    }
+}
+
+test "query with multiple include type works" {
+    const World = WorldStub.Build();
+    var world = try World.init(std.testing.allocator, .{});
+    defer world.deinit();
+
+    for (0..100) |index| {
+        _ = try world.createEntity(AbEntityType{
+            .a = .{ .value = @intCast(u32, index) },
+            .b = .{ .value = @intCast(u8, index) },
+        });
+    }
+
+    {
+        var a_b_iter = try World.Query(.{ Testing.Component.A, Testing.Component.B }, .{}).submit(world, std.testing.allocator);
+        defer a_b_iter.deinit();
+
+        var index: usize = 0;
+        while (a_b_iter.next()) |item| {
+            try std.testing.expectEqual(Testing.Component.A{
+                .value = @intCast(u32, index),
+            }, item.@"Testing.Component.A");
+
+            try std.testing.expectEqual(Testing.Component.B{
+                .value = @intCast(u8, index),
+            }, item.@"Testing.Component.B");
+
+            index += 1;
+        }
+    }
+}
+
+test "query with single include type and single exclude works" {
+    const World = WorldStub.Build();
+    var world = try World.init(std.testing.allocator, .{});
+    defer world.deinit();
+
+    for (0..100) |index| {
+        _ = try world.createEntity(AbEntityType{
+            .a = .{ .value = @intCast(u32, index) },
+            .b = .{ .value = @intCast(u8, index) },
+        });
+    }
+
+    for (100..200) |index| {
+        _ = try world.createEntity(AEntityType{
+            .a = .{ .value = @intCast(u32, index) },
+        });
+    }
+
+    {
+        var iter = try World.Query(.{Testing.Component.A}, .{Testing.Component.B}).submit(world, std.testing.allocator);
+        defer iter.deinit();
+
+        var index: usize = 100;
+        while (iter.next()) |item| {
+            try std.testing.expectEqual(Testing.Component.A{
+                .value = @intCast(u32, index),
+            }, item.@"Testing.Component.A");
+
+            index += 1;
+        }
+    }
+}
+
+test "query with single include type and multiple exclude works" {
+    const World = WorldStub.Build();
+    var world = try World.init(std.testing.allocator, .{});
+    defer world.deinit();
+
+    for (0..100) |index| {
+        _ = try world.createEntity(AbEntityType{
+            .a = .{ .value = @intCast(u32, index) },
+            .b = .{ .value = @intCast(u8, index) },
+        });
+    }
+
+    for (100..200) |index| {
+        _ = try world.createEntity(AbcEntityType{
+            .a = .{ .value = @intCast(u32, index) },
+            .b = .{ .value = @intCast(u8, index) },
+            .c = .{},
+        });
+    }
+
+    for (200..300) |index| {
+        _ = try world.createEntity(AEntityType{
+            .a = .{ .value = @intCast(u32, index) },
+        });
+    }
+
+    {
+        var iter = try World.Query(.{Testing.Component.A}, .{ Testing.Component.B, Testing.Component.C }).submit(world, std.testing.allocator);
+        defer iter.deinit();
+
+        var index: usize = 200;
+        while (iter.next()) |item| {
+            try std.testing.expectEqual(Testing.Component.A{
+                .value = @intCast(u32, index),
+            }, item.@"Testing.Component.A");
+
+            index += 1;
+        }
     }
 }
 

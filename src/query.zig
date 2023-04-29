@@ -4,21 +4,6 @@ const testing = std.testing;
 
 const meta = @import("meta.zig");
 
-pub const Query = struct {
-    include_types: []const type,
-    exclude_types: []const type,
-
-    pub fn init(
-        comptime include_types: []const type,
-        comptime exclude_types: []const type,
-    ) Query {
-        return Query{
-            .include_types = include_types,
-            .exclude_types = exclude_types,
-        };
-    }
-};
-
 const hashfn: fn (str: []const u8) u64 = std.hash.Fnv1a_64.hash;
 
 pub fn sortTypes(comptime Ts: []const type) [Ts.len]type {
