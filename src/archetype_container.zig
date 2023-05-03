@@ -85,11 +85,11 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
             var archetypes = try allocator.alloc(?Arch, count);
             errdefer allocator.free(archetypes);
-            std.mem.set(?Arch, archetypes, null);
+            @memset(archetypes, null);
 
             var children = try allocator.alloc(?Self, count);
             errdefer children.free(children);
-            std.mem.set(?Self, children, null);
+            @memset(children, null);
 
             return Self{
                 .archetypes = archetypes,
