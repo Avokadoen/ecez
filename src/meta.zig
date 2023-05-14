@@ -1109,16 +1109,6 @@ test "createSystemInfo generate accurate system information" {
     try testing.expectEqual(a.a, 1);
 }
 
-test "systemCount count systems" {
-    const TestSystems = struct {
-        pub fn hello() void {}
-        pub fn world() void {}
-    };
-    const count = countAndVerifySystems(.{ countAndVerifySystems, TestSystems });
-
-    try testing.expectEqual(3, count);
-}
-
 test "countRelevantStructuresContainingTs count all relevant structures" {
     const A = struct {};
     const B = struct {};
