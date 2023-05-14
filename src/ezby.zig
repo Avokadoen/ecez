@@ -92,8 +92,10 @@ pub fn Serializer(comptime components: anytype, comptime shared_state: anytype, 
                             current_node = &current_node.children[step].?;
                         }
 
-                        // get the archetype of the path
-                        break :blk1 &current_node.archetypes[path.indices[path.len - 1]].?.archetype;
+                        // get the archetype index from the path
+                        const index = current_node.archetype_references[path.indices[path.len - 1]].?.archetype_index;
+
+                        break :blk1 &world_to_serialize.container.archetypes.items[index];
                     }
                     continue :path_iter;
                 };
