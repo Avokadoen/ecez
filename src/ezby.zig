@@ -51,7 +51,9 @@ pub fn Serializer(comptime components: anytype, comptime shared_state: anytype, 
             const zone = ztracy.ZoneNC(@src(), "Ezby serialize", Color.serializer);
             defer zone.End();
 
-            const inital_written_size = @max(@sizeOf(Chunk.Ezby), initial_byte_size);
+            // TODO: replace with @max(@sizeOf(Chunk.Ezby), initial_byte_size), related issue https://github.com/ziglang/zig/issues/15828 (not sure which issue)
+            const inital_written_size = if (@sizeOf(Chunk.Ezby) > initial_byte_size) @sizeOf(Chunk.Ezby) else initial_byte_size;
+
             var written_bytes = try ByteList.initCapacity(allocator, inital_written_size);
             errdefer written_bytes.deinit();
 
