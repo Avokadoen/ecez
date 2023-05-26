@@ -392,7 +392,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                                     return lhs < rhs;
                                 }
                             }.cmp;
-                            std.sort.sort(u64, &sorted_component_hashes, {}, lessThan);
+                            std.sort.insertion(u64, &sorted_component_hashes, {}, lessThan);
                         }
 
                         // update the stored cache

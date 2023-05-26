@@ -59,7 +59,7 @@ pub fn sort(comptime T: type, data: []T) void {
             return lhs.hash < rhs.hash;
         }
     }.func;
-    comptime std.sort.sort(T, data, {}, lessThan);
+    comptime std.sort.insertion(T, data, {}, lessThan);
 }
 
 test "sortTypes() sorts" {
