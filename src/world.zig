@@ -943,6 +943,26 @@ test "getComponent() retrieve component value" {
     try testing.expectEqual(entity_initial_state.a, try world.getComponent(entity, Testing.Component.A));
 }
 
+test "getComponent() can mutate component value with ptr" {
+    var world = try WorldStub.init(testing.allocator, .{});
+    defer world.deinit();
+
+    const initial_state = AEntityType{
+        .a = Testing.Component.A{ .value = 0 },
+    };
+    const entity = try world.createEntity(initial_state);
+
+    var a_ptr = try world.getComponent(entity, *Testing.Component.A);
+    try testing.expectEqual(initial_state.a, a_ptr.*);
+
+    const mutate_a_value = Testing.Component.A{ .value = 42 };
+
+    // mutate a value ptr
+    a_ptr.* = mutate_a_value;
+
+    try testing.expectEqual(mutate_a_value, try world.getComponent(entity, Testing.Component.A));
+}
+
 test "clearRetainingCapacity() allow world reuse" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();

@@ -753,7 +753,21 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             const zone = ztracy.ZoneNC(@src(), "Container getComponent", Color.arche_container);
             defer zone.End();
             const ref = self.getArchetypeReferenceWithEntity(entity) orelse return error.ComponentMissing;
-            return self.archetypes.items[ref.archetype_index].getComponent(entity, Component);
+
+            const component_get_info = @typeInfo(Component);
+            switch (component_get_info) {
+                .Pointer => |ptr_info| {
+                    if (@typeInfo(ptr_info.child) == .Struct) {
+                        return self.archetypes.items[ref.archetype_index].getComponent(entity, ptr_info.child);
+                    }
+                },
+                .Struct => {
+                    const component_ptr = try self.archetypes.items[ref.archetype_index].getComponent(entity, Component);
+                    return component_ptr.*;
+                },
+                else => {},
+            }
+            @compileError("Get component can only find a component which has to be struct, or pointer to struct");
         }
 
         const RefHandling = enum {

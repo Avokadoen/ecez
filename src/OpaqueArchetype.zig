@@ -41,6 +41,8 @@ entities: EntityMap,
 type_info: TypeMap,
 component_storage: []ArrayList(u8),
 
+void_component: [0]u8 = undefined,
+
 pub fn init(allocator: Allocator, type_hashes: []const u64, type_sizes: []const usize) error{OutOfMemory}!OpaqueArchetype {
     std.debug.assert(type_hashes.len == type_sizes.len);
 
@@ -99,17 +101,18 @@ pub fn hasComponent(self: OpaqueArchetype, comptime T: type) bool {
     return self.rawHasComponent(comptime hashType(T));
 }
 
-pub fn getComponent(self: OpaqueArchetype, entity: Entity, comptime T: type) ecez_error.ArchetypeError!T {
+/// Retrieve an entity's component as a pointer
+pub fn getComponent(self: OpaqueArchetype, entity: Entity, comptime T: type) ecez_error.ArchetypeError!*T {
     if (@sizeOf(T) == 0) {
         if (self.hasComponent(T)) {
-            return T{};
+            return @constCast(@ptrCast(*const T, &self.void_component));
         } else {
             return error.ComponentMissing;
         }
     }
 
     const bytes = try self.rawGetComponent(entity, comptime hashType(T));
-    return @ptrCast(*const T, @alignCast(@alignOf(T), bytes.ptr)).*;
+    return @constCast(@ptrCast(*const T, @alignCast(@alignOf(T), bytes.ptr)));
 }
 
 pub fn setComponent(self: *OpaqueArchetype, entity: Entity, component: anytype) ArchetypeError!void {
@@ -302,7 +305,7 @@ test "hasComponent returns expected values" {
     try testing.expectEqual(false, archetype.hasComponent(Testing.Component.B));
 }
 
-test "getComponent returns expected values" {
+test "getComponent returns expected value ptrs" {
     const hashes = comptime [_]u64{ hashType(A), hashType(B), hashType(C) };
     const sizes = comptime [_]usize{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
 
@@ -323,12 +326,12 @@ test "getComponent returns expected values" {
 
     try testing.expectEqual(
         A{ .value = @intCast(u32, 50) },
-        try archetype.getComponent(entity, A),
+        (try archetype.getComponent(entity, A)).*,
     );
 
     try testing.expectEqual(
         B{ .value = @intCast(u8, 50) },
-        try archetype.getComponent(entity, B),
+        (try archetype.getComponent(entity, B)).*,
     );
 }
 
