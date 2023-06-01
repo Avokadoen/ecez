@@ -520,6 +520,21 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
             return Serializer.deserialize(self, ezby_bytes);
         }
 
+        /// Query components which can be iterated upon.
+        /// Parameters:
+        ///     - include_types: all the components you would like to iterate over with the specified field name that should map to the
+        ///                      component type. (see IncludeType)
+        ///     - exclude_types: all the components that should make a given entity exluded from the query result
+        ///
+        /// Example:
+        /// ```
+        /// var a_iter = try World.Query(.{ world.IncludeType{ .name = "a", .type = A }}, .{B}).submit(world, std.testing.allocator);
+        /// defer a_iter.deinit();
+        ///
+        /// while (a_iter.next()) |item| {
+        ///    std.debug.print("{any}", .{item.a});
+        /// }
+        /// ```
         pub fn Query(comptime include_types: anytype, comptime exclude_types: anytype) type {
             const include_type_info = @typeInfo(@TypeOf(include_types));
             if (include_type_info != .Struct) {
@@ -531,18 +546,30 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                 @compileError("query exclude types must be a tuple of types");
             }
 
-            var include_inner_type_arr: [include_type_info.Struct.fields.len]type = undefined;
-            var include_outer_type_arr: [include_type_info.Struct.fields.len]type = undefined;
-            inline for (&include_inner_type_arr, &include_outer_type_arr, include_type_info.Struct.fields, 0..) |*inner_type, *outer_type, field, index| {
-                if (field.type != type) {
-                    @compileError("query include types field " ++ field.name ++ "must be a component type, was " ++ @typeName(field.type));
+            comptime var query_result_names: [include_type_info.Struct.fields.len][]const u8 = undefined;
+            comptime var include_inner_type_arr: [include_type_info.Struct.fields.len]type = undefined;
+            comptime var include_outer_type_arr: [include_type_info.Struct.fields.len]type = undefined;
+            inline for (
+                &query_result_names,
+                &include_inner_type_arr,
+                &include_outer_type_arr,
+                include_types,
+                0..,
+            ) |*query_result_name, *inner_type, *outer_type, include_type, index| {
+                if (@TypeOf(include_type) != query.IncludeType) {
+                    const compile_error = std.fmt.comptimePrint(
+                        "expected include type number {d} to be of type IncludeType, actual type was {any}",
+                        .{ index, @TypeOf(include_type) },
+                    );
+                    @compileError(compile_error);
                 }
 
-                outer_type.* = include_types[index];
+                query_result_name.* = include_type.name;
+                outer_type.* = include_type.type;
                 inner_type.* = blk: {
-                    const field_info = @typeInfo(include_types[index]);
+                    const field_info = @typeInfo(include_type.type);
                     if (field_info != .Pointer) {
-                        break :blk include_types[index];
+                        break :blk include_type.type;
                     }
 
                     break :blk field_info.Pointer.child;
@@ -557,9 +584,10 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                 }
 
                 if (type_is_component == false) {
-                    @compileError("query include types field " ++ field.name ++ " is not a registered World component");
+                    @compileError("query include types field " ++ include_type.name ++ " is not a registered World component");
                 }
             }
+            query_result_names = query.sortBasedOnTypes(&include_inner_type_arr, []const u8, &query_result_names);
             include_outer_type_arr = query.sortBasedOnTypes(&include_inner_type_arr, type, &include_outer_type_arr);
             include_inner_type_arr = query.sortTypes(&include_inner_type_arr);
 
@@ -609,7 +637,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                 }
             }
 
-            const IterType = Iterator(&include_outer_type_arr, &inlude_component_hashes);
+            const IterType = Iterator(&query_result_names, &include_outer_type_arr, &inlude_component_hashes);
 
             return struct {
                 pub const Iter = IterType;
@@ -1596,13 +1624,16 @@ test "query with single include type works" {
 
     {
         var index: usize = 0;
-        var a_iter = try World.Query(.{Testing.Component.A}, .{}).submit(world, std.testing.allocator);
+        var a_iter = try World.Query(
+            .{query.include("a", Testing.Component.A)},
+            .{},
+        ).submit(world, std.testing.allocator);
         defer a_iter.deinit();
 
         while (a_iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
                 .value = @intCast(u32, index),
-            }, item.@"Testing.Component.A");
+            }, item.a);
 
             index += 1;
         }
@@ -1622,18 +1653,21 @@ test "query with multiple include type works" {
     }
 
     {
-        var a_b_iter = try World.Query(.{ Testing.Component.A, Testing.Component.B }, .{}).submit(world, std.testing.allocator);
+        var a_b_iter = try World.Query(.{
+            query.include("a", Testing.Component.A),
+            query.include("b", Testing.Component.B),
+        }, .{}).submit(world, std.testing.allocator);
         defer a_b_iter.deinit();
 
         var index: usize = 0;
         while (a_b_iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
                 .value = @intCast(u32, index),
-            }, item.@"Testing.Component.A");
+            }, item.a);
 
             try std.testing.expectEqual(Testing.Component.B{
                 .value = @intCast(u8, index),
-            }, item.@"Testing.Component.B");
+            }, item.b);
 
             index += 1;
         }
@@ -1654,24 +1688,28 @@ test "query with single ptr include type works" {
 
     {
         var index: usize = 0;
-        var a_iter = try World.Query(.{*Testing.Component.A}, .{}).submit(world, std.testing.allocator);
+        var a_iter = try World.Query(.{
+            query.include("a_ptr", *Testing.Component.A),
+        }, .{}).submit(world, std.testing.allocator);
         defer a_iter.deinit();
 
         while (a_iter.next()) |item| {
-            item.@"Testing.Component.A".value += 1;
+            item.a_ptr.value += 1;
             index += 1;
         }
     }
 
     {
         var index: usize = 1;
-        var a_iter = try World.Query(.{Testing.Component.A}, .{}).submit(world, std.testing.allocator);
+        var a_iter = try World.Query(.{
+            query.include("a", Testing.Component.A),
+        }, .{}).submit(world, std.testing.allocator);
         defer a_iter.deinit();
 
         while (a_iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
                 .value = @intCast(u32, index),
-            }, item.@"Testing.Component.A");
+            }, item.a);
 
             index += 1;
         }
@@ -1697,14 +1735,16 @@ test "query with single include type and single exclude works" {
     }
 
     {
-        var iter = try World.Query(.{Testing.Component.A}, .{Testing.Component.B}).submit(world, std.testing.allocator);
+        var iter = try World.Query(.{
+            query.include("a", Testing.Component.A),
+        }, .{Testing.Component.B}).submit(world, std.testing.allocator);
         defer iter.deinit();
 
         var index: usize = 100;
         while (iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
                 .value = @intCast(u32, index),
-            }, item.@"Testing.Component.A");
+            }, item.a);
 
             index += 1;
         }
@@ -1738,14 +1778,17 @@ test "query with single include type and multiple exclude works" {
     }
 
     {
-        var iter = try World.Query(.{Testing.Component.A}, .{ Testing.Component.B, Testing.Component.C }).submit(world, std.testing.allocator);
+        var iter = try World.Query(
+            .{query.include("a", Testing.Component.A)},
+            .{ Testing.Component.B, Testing.Component.C },
+        ).submit(world, std.testing.allocator);
         defer iter.deinit();
 
         var index: usize = 200;
         while (iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
                 .value = @intCast(u32, index),
-            }, item.@"Testing.Component.A");
+            }, item.a);
 
             index += 1;
         }

@@ -4,6 +4,20 @@ const testing = std.testing;
 
 const meta = @import("meta.zig");
 
+/// Used when submitting queries. A include type specify a component type that should be included in the query.
+/// The name is used as the query result item's field name
+pub fn include(comptime name: []const u8, comptime @"type": type) IncludeType {
+    return IncludeType{
+        .name = name,
+        .type = @"type",
+    };
+}
+
+pub const IncludeType = struct {
+    name: []const u8,
+    type: type,
+};
+
 const hashfn: fn (str: []const u8) u64 = std.hash.Fnv1a_64.hash;
 
 pub fn sortTypes(comptime Ts: []const type) [Ts.len]type {

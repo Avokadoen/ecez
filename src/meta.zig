@@ -620,21 +620,10 @@ pub fn ComponentStorage(comptime types: []const type) type {
     return @Type(RtrTypeInfo);
 }
 
-/// Generate a struct that hold one component
-pub fn ComponentStruct(comptime types: []const type) type {
+/// Generate a struct that hold components
+pub fn ComponentStruct(comptime field_names: []const []const u8, comptime types: []const type) type {
     var struct_fields: [types.len]Type.StructField = undefined;
-    inline for (types, 0..) |T, i| {
-        const field_name = blk: {
-            switch (@typeInfo(T)) {
-                .Pointer => |pointer| {
-                    break :blk @typeName(pointer.child);
-                },
-                else => {},
-            }
-
-            break :blk @typeName(T);
-        };
-
+    inline for (field_names, types, 0..) |field_name, T, i| {
         struct_fields[i] = .{
             .name = field_name,
             .type = T,

@@ -91,6 +91,8 @@ You can query the api instance for all components of certain type and filter out
 #### Example
 
 ```zig
+
+
 const World = ecez.WorldBuilder().WithComponents(.{
     Monsters,
     HappyTag,
@@ -104,12 +106,18 @@ const World = ecez.WorldBuilder().WithComponents(.{
 var world = try World.init(allocator, .{});
 // .. some construction of your world entites
 
+const include = ecez.query.include;
+
 // we want to iterate over all Monsters, HappyTag and HealthyTag components grouped by entity,
 // we filter out all monsters that might have the previously mentioned components if they also have 
 // a SadTag or SickTag attached to the same entity
 var happy_healhy_monster_iter = try World.Query(
     // notice that Monster components will be mutable through pointer semantics
-    .{*Monster, HappyTag, HealthyTag},   // these are our include types
+    .{
+        include("monster", *Monster), 
+        include("happy", HappyTag), 
+        include("healthy", HealthyTag),
+    }, // these are our include types  
     .{SadTag, SickTag}                   // these are our exclude types
 ).submit(world, std.testing.allocator);
 
@@ -118,13 +126,13 @@ defer happy_healhy_monster_iter.deinit();
 
 while (happy_healhy_monster_iter.next()) |happy_healhy_monster| {
     // these monsters are not sick or sad so they become more happy :)
-    happy_healhy_monster.Monster.mood_rating += 1;
+    happy_healhy_monster.monster.mood_rating += 1;
 }
 
 
 if (happy_healhy_monster_iter.at(5)) |fifth_happy_monster| {
     // the 5th monster becomes extra happy! 
-    happy_healhy_monster.Monster.mood_rating += 1;
+    happy_healhy_monster.monster.mood_rating += 1;
 }
 
 ```

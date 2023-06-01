@@ -13,7 +13,7 @@ pub const SharedState = meta.SharedState;
 pub const EventArgument = meta.EventArgument;
 pub const Event = meta.Event;
 
-pub const Query = @import("query.zig").Query;
+pub const query = @import("query.zig");
 pub const tracy_alloc = @import("tracy_alloc.zig");
 pub const misc = @import("misc.zig");
 
