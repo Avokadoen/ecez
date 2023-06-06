@@ -91,7 +91,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                 @compileError("expected " ++ @typeName(types[i]) ++ " component type to be a struct");
             }
         }
-        break :blk types;
+        break :blk query.sortTypes(&types);
     };
 
     const Container = archetype_container.FromComponents(&component_types);
@@ -395,11 +395,22 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                             std.sort.insertion(u64, &sorted_component_hashes, {}, lessThan);
                         }
 
+                        const archetypes = self.container.getArchetypesWithComponents(
+                            self.allocator,
+                            &sorted_component_hashes,
+                            &[0]u64{},
+                        ) catch |err| {
+                            switch (err) {
+                                error.OutOfMemory => return error.OutOfMemory,
+                                error.InvalidQuery => unreachable,
+                            }
+                        };
+
                         // update the stored cache
                         event_cache_storage.assignCacheEntry(
                             self.allocator,
                             system_index,
-                            try self.container.getArchetypesWithComponents(self.allocator, &sorted_component_hashes, &[0]u64{}),
+                            archetypes,
                         );
                     }
 

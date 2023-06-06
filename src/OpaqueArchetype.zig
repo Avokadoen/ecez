@@ -101,6 +101,10 @@ pub fn hasComponent(self: OpaqueArchetype, comptime T: type) bool {
     return self.rawHasComponent(comptime hashType(T));
 }
 
+pub inline fn getTypeHashes(self: OpaqueArchetype) []const u64 {
+    return self.type_info.keys();
+}
+
 /// Retrieve an entity's component as a pointer
 pub fn getComponent(self: OpaqueArchetype, entity: Entity, comptime T: type) ecez_error.ArchetypeError!*T {
     if (@sizeOf(T) == 0) {
@@ -174,10 +178,9 @@ pub fn rawSetComponent(self: *OpaqueArchetype, entity: Entity, type_hash: u64, c
 }
 
 pub fn rawRegisterEntity(self: *OpaqueArchetype, entity: Entity, data: []const []const u8) error{OutOfMemory}!void {
-    std.debug.assert(data.len == self.component_storage.len);
-
     const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype rawRegisterEntity", Color.opaque_archetype);
     defer zone.End();
+    std.debug.assert(data.len == self.component_storage.len);
 
     const value = self.entities.count();
     try self.entities.put(entity, value);
@@ -197,12 +200,13 @@ pub fn rawRegisterEntity(self: *OpaqueArchetype, entity: Entity, data: []const [
     }
 
     const type_infos = self.type_info.values();
-    for (data, 0..) |component_bytes, i| {
+    for (self.component_storage, data, 0..) |*storage, component_bytes, i| {
         if (data.len > 0) {
             // this might change in the future, which will mean we will need to update this code
             std.debug.assert(type_infos[i].storage_index == i);
+
             // TODO: proper errdefer
-            try self.component_storage[i].appendSlice(component_bytes[0..type_infos[i].size]);
+            try storage.appendSlice(component_bytes[0..type_infos[i].size]);
             appended_component = i;
         }
     }
