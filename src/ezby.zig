@@ -20,7 +20,7 @@ const ez_testing = @import("Testing.zig");
 // TODO: option to use stack instead of heap
 
 pub const version_major = 0;
-pub const version_minor = 1;
+pub const version_minor = 2;
 pub const version_patch = 0;
 pub const alignment = 8;
 
@@ -85,23 +85,7 @@ pub fn Serializer(comptime components: anytype, comptime shared_state: anytype, 
             }
 
             // step through the archetype tree and serialize each archetype (ARCH)
-            path_iter: for (world_to_serialize.container.archetype_paths.items[1..]) |path| {
-                const archetype: *OpaqueArchetype = blk1: {
-                    // step through the path to find the current archetype
-                    if (path.len > 0 and path.indices.len > 0) {
-                        var current_node = &world_to_serialize.container.root_node;
-                        for (path.indices[0 .. path.len - 1]) |step| {
-                            current_node = &current_node.children[step].?;
-                        }
-
-                        // get the archetype index from the path
-                        const index = current_node.archetype_references[path.indices[path.len - 1]].?.archetype_index;
-
-                        break :blk1 &world_to_serialize.container.archetypes.items[index];
-                    }
-                    continue :path_iter;
-                };
-
+            for (world_to_serialize.container.archetypes.items) |archetype| {
                 const entity_count = archetype.entities.count();
                 const type_count = archetype.type_info.count();
                 std.debug.assert(archetype.component_storage.len == type_count);
@@ -411,7 +395,7 @@ test "serializing then using parseEzbyChunk produce expected EZBY chunk" {
     var dummy_world = try Serialize.World.init(std.testing.allocator, .{});
     defer dummy_world.deinit();
 
-    const bytes = try Serialize.serialize(testing.allocator, 516, dummy_world);
+    const bytes = try Serialize.serialize(testing.allocator, 512, dummy_world);
     defer testing.allocator.free(bytes);
 
     var ezby: *Chunk.Ezby = undefined;
@@ -435,7 +419,7 @@ test "serializing then using parseCompChunk produce expected COMP chunk" {
     var b = ez_testing.Component.B{};
     _ = try dummy_world.createEntity(.{ a, b });
 
-    const bytes = try Serialize.serialize(testing.allocator, 516, dummy_world);
+    const bytes = try Serialize.serialize(testing.allocator, 512, dummy_world);
     defer testing.allocator.free(bytes);
 
     // parse ezby header to get to eref bytes
@@ -490,10 +474,10 @@ test "serializing then using parseArchChunk produce expected ARCH chunk" {
         _ = try dummy_world.createEntity(.{ a, b });
     }
 
-    const bytes = try Serialize.serialize(testing.allocator, 516, dummy_world);
+    const bytes = try Serialize.serialize(testing.allocator, 512, dummy_world);
     defer testing.allocator.free(bytes);
 
-    const arch_bytes = blk: {
+    const void_arch_bytes = blk: {
         // parse ezby header to get to eref bytes
         var ezby: *Chunk.Ezby = undefined;
         const eref_bytes = try parseEzbyChunk(bytes, &ezby);
@@ -504,12 +488,41 @@ test "serializing then using parseArchChunk produce expected ARCH chunk" {
         break :blk parseCompChunk(eref_bytes, &comp, &hash_list, &size_list);
     };
 
+    const a_b_arch_bytes = blk: {
+        var arch: *Chunk.Arch = undefined;
+        var rtti_list: Chunk.Arch.RttiList = undefined;
+        var entity_map_list: Chunk.Arch.EntityMapList = undefined;
+        var component_bytes: [*]const u8 = undefined;
+        const a_b_bytes = parseArchChunk(
+            void_arch_bytes,
+            &arch,
+            &rtti_list,
+            &entity_map_list,
+            &component_bytes,
+        );
+
+        // the first arch is always the "void" archetype
+        try testing.expectEqual(Chunk.Arch{
+            .number_of_components = 0,
+            .number_of_entities = 0,
+        }, arch.*);
+
+        break :blk a_b_bytes;
+    };
+
     var arch: *Chunk.Arch = undefined;
     var rtti_list: Chunk.Arch.RttiList = undefined;
     var entity_map_list: Chunk.Arch.EntityMapList = undefined;
     var component_bytes: [*]const u8 = undefined;
-    _ = parseArchChunk(arch_bytes, &arch, &rtti_list, &entity_map_list, &component_bytes);
+    _ = parseArchChunk(
+        a_b_arch_bytes,
+        &arch,
+        &rtti_list,
+        &entity_map_list,
+        &component_bytes,
+    );
 
+    // check if we have counted 2 types
     try testing.expectEqual(Chunk.Arch{
         .number_of_components = 2,
         .number_of_entities = entities_to_create,

@@ -91,7 +91,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                 @compileError("expected " ++ @typeName(types[i]) ++ " component type to be a struct");
             }
         }
-        break :blk types;
+        break :blk query.sortTypes(&types);
     };
 
     const Container = archetype_container.FromComponents(&component_types);
@@ -395,11 +395,17 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
                             std.sort.insertion(u64, &sorted_component_hashes, {}, lessThan);
                         }
 
+                        const archetypes = try self.container.getArchetypesWithComponents(
+                            self.allocator,
+                            &sorted_component_hashes,
+                            &[0]u64{},
+                        );
+
                         // update the stored cache
                         event_cache_storage.assignCacheEntry(
                             self.allocator,
                             system_index,
-                            try self.container.getArchetypesWithComponents(self.allocator, &sorted_component_hashes, &[0]u64{}),
+                            archetypes,
                         );
                     }
 
@@ -669,10 +675,9 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
         }
 
         inline fn markAllCacheMasks(self: *World, entity: Entity) void {
-            if (self.container.getTypeHashes(entity)) |type_hashes| {
-                for (&self.event_cache_masks) |*mask| {
-                    mask.setIncoherentBitWithTypeHashes(type_hashes);
-                }
+            const type_hashes = self.container.getTypeHashes(entity);
+            for (&self.event_cache_masks) |*mask| {
+                mask.setIncoherentBitWithTypeHashes(type_hashes);
             }
         }
 
@@ -810,9 +815,9 @@ test "init() + deinit() is idempotent" {
         .a = Testing.Component.A{},
     };
     const entity0 = try world.createEntity(initial_state);
-    try testing.expectEqual(entity0.id, 1);
+    try testing.expectEqual(entity0.id, 0);
     const entity1 = try world.createEntity(initial_state);
-    try testing.expectEqual(entity1.id, 2);
+    try testing.expectEqual(entity1.id, 1);
 }
 
 test "createEntity() can create empty entities" {
@@ -858,7 +863,7 @@ test "setComponent() component moves entity to correct archetype" {
     const stored_b = try world.getComponent(entity1, Testing.Component.B);
     try testing.expectEqual(b, stored_b);
 
-    try testing.expectEqual(@as(usize, 2), world.container.entity_references.items.len);
+    try testing.expectEqual(@as(usize, 1), world.container.entity_references.items.len);
 }
 
 test "setComponent() update entities component state" {

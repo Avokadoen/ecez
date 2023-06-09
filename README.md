@@ -91,8 +91,6 @@ You can query the api instance for all components of certain type and filter out
 #### Example
 
 ```zig
-
-
 const World = ecez.WorldBuilder().WithComponents(.{
     Monsters,
     HappyTag,

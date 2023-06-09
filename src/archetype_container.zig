@@ -69,257 +69,45 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         break :blk info;
     };
 
-    const Node = struct {
-        const Self = @This();
-
-        pub const ArchtypeRef = struct {
-            path_index: usize,
-            archetype_index: usize,
-        };
-
-        archetype_references: []?ArchtypeRef,
-        children: []?Self,
-
-        pub fn init(allocator: Allocator, count: usize) error{OutOfMemory}!Self {
-            std.debug.assert(submitted_components.len >= count);
-
-            var archetype_references = try allocator.alloc(?ArchtypeRef, count);
-            errdefer allocator.free(archetype_references);
-            @memset(archetype_references, null);
-
-            var children = try allocator.alloc(?Self, count);
-            errdefer children.free(children);
-            @memset(children, null);
-
-            return Self{
-                .archetype_references = archetype_references,
-                .children = children,
-            };
-        }
-
-        pub fn deinit(self: *Self, allocator: Allocator) void {
-            for (self.children) |maybe_child| {
-                var m_child: ?Self = maybe_child;
-                if (m_child) |*child| {
-                    child.deinit(allocator);
-                }
-            }
-            allocator.free(self.children);
-            allocator.free(self.archetype_references);
-        }
-
-        pub fn clearRetainingCapacity(self: *Self, container: anytype) void {
-            for (self.children) |maybe_child| {
-                var m_child: ?Self = maybe_child;
-                if (m_child) |*child| {
-                    child.clearRetainingCapacity(container);
-                }
-            }
-
-            for (self.archetype_references) |*maybe_arche_ref| {
-                if (maybe_arche_ref.*) |*arche_ref| {
-                    container.archetypes.items[arche_ref.archetype_index].clearRetainingCapacity();
-                }
-            }
-        }
-
-        // TODO: this function should be shorter. Should not be too hard to make more concise ...
-        /// retrieve all archetype interfaces that are at the path destination and all children of the destination
-        pub fn getArchetypesWithComponents(self: Self, container: anytype, include_path: ?[]u16, exclude_path: []u16, result: *ArrayList(*OpaqueArchetype), depth: usize) error{OutOfMemory}!void {
-            const exclude_step: usize = exclude_blk: {
-                var index: usize = 0;
-                while (index < exclude_path.len) {
-                    if (exclude_path[index] >= depth) {
-                        break :exclude_blk exclude_path[index];
-                    }
-                    index += 1;
-                }
-
-                // if we do not have any exclude next then we need to make sure any step does always not equal exclude step
-                break :exclude_blk std.math.maxInt(usize);
-            };
-
-            // if we have not found nodes with our requirements
-            if (include_path) |some_include_path| {
-                std.debug.assert(some_include_path.len > 0);
-
-                if (some_include_path.len > 1) {
-                    // if desired path contains a step that is not part of the next step
-                    if (some_include_path[0] < depth) {
-                        return;
-                    }
-
-                    child_loop: for (self.children, 0..) |maybe_child, i| {
-                        const depth_normalized_i = i + depth;
-
-                        // make sure we are not stepping in an excluded path
-                        for (exclude_path) |loop_exclude_step| {
-                            if ((loop_exclude_step == depth_normalized_i)) continue :child_loop;
-                        }
-
-                        if (maybe_child) |child| {
-                            const next_exclude_path = if (depth_normalized_i > exclude_step) exclude_path[1..] else exclude_path;
-
-                            // if the path index is the current loop index
-                            const on_path = some_include_path[0] == depth_normalized_i;
-
-                            const from: usize = if (on_path) 1 else 0;
-                            try child.getArchetypesWithComponents(
-                                container,
-                                some_include_path[from..],
-                                next_exclude_path,
-                                result,
-                                depth + 1,
-                            );
-                        }
-                    }
-                } else {
-                    const arche_index = some_include_path[0] - depth;
-                    // store the initial archetype meeting our requirement
-                    if (self.archetype_references[arche_index]) |*arche_ref| {
-                        try result.append(&container.archetypes.items[arche_ref.archetype_index]);
-                    }
-
-                    const next_depth = depth + 1;
-
-                    // if any of the steps are less than the depth then it means we are in a
-                    // branch that does not contain any matches
-                    const skip_searching_siblings = blk: {
-                        for (some_include_path) |step| {
-                            if (step < next_depth) {
-                                break :blk true;
-                            }
-                        }
-                        break :blk false;
-                    };
-
-                    if (skip_searching_siblings) {
-                        child_loop: for (self.children, 0..) |maybe_child, i| {
-                            if (maybe_child) |child| {
-                                if (i == arche_index) {
-                                    const depth_normalized_i = i + depth;
-
-                                    // make sure we are not stepping in an excluded path
-                                    for (exclude_path) |loop_exclude_step| {
-                                        if ((loop_exclude_step == depth_normalized_i)) continue :child_loop;
-                                    }
-
-                                    const next_exclude_path = if (depth_normalized_i > exclude_step) exclude_path[1..] else exclude_path;
-
-                                    // record all defined archetypes in the child as well since they also only have suitable archetypes
-                                    try child.getArchetypesWithComponents(
-                                        container,
-                                        null,
-                                        next_exclude_path,
-                                        result,
-                                        next_depth,
-                                    );
-                                }
-                            }
-                        }
-                    } else {
-                        child_loop: for (self.children, 0..) |maybe_child, i| {
-                            if (maybe_child) |child| {
-                                const depth_normalized_i = i + depth;
-
-                                // make sure we are not stepping in an excluded path
-                                for (exclude_path) |loop_exclude_step| {
-                                    if ((loop_exclude_step == depth_normalized_i)) continue :child_loop;
-                                }
-
-                                const next_exclude_path = if (depth_normalized_i > exclude_step) exclude_path[1..] else exclude_path;
-
-                                if (i == arche_index) {
-                                    // record all defined archetypes in the child as well since they also only have suitable archetypes
-                                    try child.getArchetypesWithComponents(
-                                        container,
-                                        null,
-                                        next_exclude_path,
-                                        result,
-                                        next_depth,
-                                    );
-                                } else {
-                                    // look for matching component in the other children
-                                    try child.getArchetypesWithComponents(
-                                        container,
-                                        some_include_path,
-                                        next_exclude_path,
-                                        result,
-                                        next_depth,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                // all archetypes except any exclude should be fitting our requirement
-                sibling_loop: for (self.archetype_references, 0..) |maybe_arche_ref, i| {
-                    if (maybe_arche_ref) |arche_ref| {
-                        const depth_normalized_i = i + depth;
-
-                        // make sure we are not stepping in an excluded path
-                        for (exclude_path) |loop_exclude_step| {
-                            if ((loop_exclude_step == depth_normalized_i)) continue :sibling_loop;
-                        }
-
-                        try result.append(&container.archetypes.items[arche_ref.archetype_index]);
-                    }
-                }
-
-                // record all defined archetypes in the children as well since they also only have suitable archetypes
-                child_loop: for (self.children, 0..) |maybe_child, i| {
-                    if (maybe_child) |child| {
-                        const depth_normalized_i = i + depth;
-
-                        // make sure we are not stepping in an excluded path
-                        for (exclude_path) |loop_exclude_step| {
-                            if ((loop_exclude_step == depth_normalized_i)) continue :child_loop;
-                        }
-
-                        const next_exclude_path = if (depth_normalized_i > exclude_step) exclude_path[1..] else exclude_path;
-
-                        try child.getArchetypesWithComponents(
-                            container,
-                            null,
-                            next_exclude_path,
-                            result,
-                            depth + 1,
-                        );
-                    }
-                }
-            }
-        }
-    };
-
     return struct {
         const ArcheContainer = @This();
 
         const void_index = 0;
 
-        // contains the indices to find a given archetype
-        pub const ArchetypePath = struct {
-            len: usize,
-            indices: [submitted_components.len]u16,
-        };
+        // A single integer that represent the full path of an opaque archetype
+        pub const BitEncoding = @Type(std.builtin.Type{ .Int = .{
+            .signedness = .unsigned,
+            .bits = submitted_components.len,
+        } });
+
+        pub const BitEncodingShift = @Type(std.builtin.Type{ .Int = .{
+            .signedness = .unsigned,
+            .bits = std.math.log2_int_ceil(BitEncoding, submitted_components.len),
+        } });
+
+        const ArchetypeIndex = u32;
+
         allocator: Allocator,
-        archetype_paths: ArrayList(ArchetypePath),
-        entity_references: ArrayList(EntityRef),
         archetypes: ArrayList(OpaqueArchetype),
-        root_node: Node,
+        bit_encodings: ArrayList(BitEncoding),
+        entity_references: ArrayList(EntityRef),
 
         component_hashes: [submitted_components.len]u64,
         component_sizes: [submitted_components.len]usize,
 
         empty_bytes: [0]u8,
 
-        pub inline fn init(allocator: Allocator) error{OutOfMemory}!ArcheContainer {
-            var archetype_paths = ArrayList(ArchetypePath).init(allocator);
-            try archetype_paths.append(ArchetypePath{ .len = 0, .indices = undefined });
-            errdefer archetype_paths.deinit();
+        pub fn init(allocator: Allocator) error{OutOfMemory}!ArcheContainer {
+            const pre_alloc_amount = 32;
 
-            var root_node = try Node.init(allocator, submitted_components.len);
-            errdefer root_node.deinit(allocator);
+            var archetypes = try ArrayList(OpaqueArchetype).initCapacity(allocator, pre_alloc_amount);
+            errdefer archetypes.deinit();
+
+            var bit_encodings = try ArrayList(BitEncoding).initCapacity(allocator, pre_alloc_amount);
+            errdefer bit_encodings.deinit();
+
+            var entity_references = try ArrayList(EntityRef).initCapacity(allocator, pre_alloc_amount);
+            errdefer entity_references.deinit();
 
             comptime var component_hashes: [submitted_components.len]u64 = undefined;
             comptime var component_sizes: [submitted_components.len]usize = undefined;
@@ -328,22 +116,15 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 size.* = @sizeOf(info.type);
             }
 
-            var entity_references = try ArrayList(EntityRef).initCapacity(allocator, 32);
-            errdefer entity_references.deinit();
-
-            var archetypes = ArrayList(OpaqueArchetype).init(allocator);
-            errdefer archetypes.deinit();
-
-            // append a special "void" type does not need to be defined (index 0 indicate void)
-            std.debug.assert(entity_references.items.len == void_index);
-            entity_references.appendAssumeCapacity(undefined);
+            const void_archetype = try OpaqueArchetype.init(allocator, &[0]u64{}, &[0]usize{});
+            archetypes.appendAssumeCapacity(void_archetype);
+            bit_encodings.appendAssumeCapacity(@as(BitEncoding, 0));
 
             return ArcheContainer{
                 .allocator = allocator,
-                .archetype_paths = archetype_paths,
-                .entity_references = entity_references,
                 .archetypes = archetypes,
-                .root_node = root_node,
+                .bit_encodings = bit_encodings,
+                .entity_references = entity_references,
                 .component_hashes = component_hashes,
                 .component_sizes = component_sizes,
                 .empty_bytes = .{},
@@ -351,28 +132,24 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         }
 
         pub inline fn deinit(self: *ArcheContainer) void {
-            self.archetype_paths.deinit();
-            self.entity_references.deinit();
-            self.root_node.deinit(self.allocator);
-
             for (self.archetypes.items) |*archetype| {
                 archetype.deinit();
             }
             self.archetypes.deinit();
+            self.bit_encodings.deinit();
+            self.entity_references.deinit();
         }
 
         pub inline fn clearRetainingCapacity(self: *ArcheContainer) void {
             const zone = ztracy.ZoneNC(@src(), "Container clear", Color.arche_container);
             defer zone.End();
 
-            // paths are kept
-            // self.archetype_paths.clearRetainingCapacity();
-            // self.archetype_paths.appendAssumeCapacity(ArchetypePath{ .len = 0, .indices = undefined });
-
+            // Do not clear node_bit_paths & bit_path_relation since archetypes persist
             self.entity_references.clearRetainingCapacity();
-            self.entity_references.appendAssumeCapacity(undefined);
 
-            self.root_node.clearRetainingCapacity(self);
+            for (self.archetypes.items) |*archetype| {
+                archetype.clearRetainingCapacity();
+            }
         }
 
         pub const CreateEntityResult = struct {
@@ -384,34 +161,19 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         ///     - inital_state: the initial components of the entity
         ///
         /// Returns: A bool indicating if a new archetype has been made, and the entity
-        pub inline fn createEntity(self: *ArcheContainer, initial_state: anytype) error{OutOfMemory}!CreateEntityResult {
+        pub fn createEntity(self: *ArcheContainer, initial_state: anytype) error{OutOfMemory}!CreateEntityResult {
             const zone = ztracy.ZoneNC(@src(), "Container createEntity", Color.arche_container);
             defer zone.End();
-
-            const ArchetypeStruct = @TypeOf(initial_state);
-            const arche_struct_info = blk: {
-                const info = @typeInfo(ArchetypeStruct);
-                if (info != .Struct) {
-                    @compileError("expected initial_state to be of type struct");
-                }
-                break :blk info.Struct;
-            };
 
             // create new entity
             const entity = Entity{ .id = @intCast(u32, self.entity_references.items.len) };
 
-            // if no initial_state
-            if (arche_struct_info.fields.len == 0) {
-                // register a void reference to able to locate empty entity
-                try self.entity_references.append(void_index);
-                return CreateEntityResult{
-                    .new_archetype_container = false,
-                    .entity = entity,
-                };
-            }
+            // allocate the entity reference item and let initializeEntityStorage assign it if it suceeds
+            try self.entity_references.append(undefined);
+            errdefer _ = self.entity_references.pop();
 
             // if some initial state, then we initialize the storage needed
-            const new_archetype_created = try self.initializeEntityStorage(entity, .create_new_ref, initial_state);
+            const new_archetype_created = try self.initializeEntityStorage(entity, initial_state);
             return CreateEntityResult{
                 .new_archetype_container = new_archetype_created,
                 .entity = entity,
@@ -428,138 +190,111 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             const zone = ztracy.ZoneNC(@src(), "Container setComponent", Color.arche_container);
             defer zone.End();
 
-            // get the archetype of the entity
-            if (self.getArchetypeReferenceWithEntity(entity)) |arche_ref| {
-                // try to update component in current archetype
-                if (self.archetypes.items[arche_ref.archetype_index].setComponent(entity, component)) |ok| {
-                    // ok we don't need to do anymore
-                    _ = ok;
-                } else |err| {
-                    switch (err) {
-                        // component is not part of current archetype
-                        error.ComponentMissing => {
-                            const component_index = comptime componentIndex(@TypeOf(component));
+            const current_bit_index = self.entity_references.items[entity.id];
 
-                            const old_path = self.archetype_paths.items[arche_ref.path_index];
-                            var new_component_index: usize = 0;
-                            const new_path = blk1: {
-                                // the new path of the entity will be based on its current path
-                                var path = ArchetypePath{
-                                    .len = old_path.len + 1,
-                                    .indices = undefined,
-                                };
-                                std.mem.copy(u16, &path.indices, old_path.indices[0..old_path.len]);
+            // try to update component in current archetype
+            self.archetypes.items[current_bit_index].setComponent(entity, component) catch |err| switch (err) {
+                // component is not part of current archetype
+                error.ComponentMissing => {
+                    const new_component_global_index = comptime componentIndex(@TypeOf(component));
 
-                                // loop old path and find the correct order to insert the new component
-                                new_component_index = blk2: {
-                                    for (path.indices[0..old_path.len], 0..) |step, depth| {
-                                        const existing_component_index = step + depth;
-                                        if (existing_component_index > component_index) {
-                                            break :blk2 depth;
-                                        }
-                                    }
-                                    // component is the last component
-                                    break :blk2 old_path.len;
-                                };
+                    const old_bit_encoding = self.bit_encodings.items[current_bit_index];
+                    const new_bit = @as(BitEncoding, 1 << new_component_global_index);
+                    const new_encoding = old_bit_encoding | new_bit;
 
-                                path.indices[new_component_index] = @intCast(u15, component_index - new_component_index);
-                                for (old_path.indices[new_component_index..old_path.len], 0..) |step, i| {
-                                    const index = new_component_index + i + 1;
-                                    path.indices[index] = step - 1;
-                                }
+                    // we need the index of the new component in the sequence of components are tied to the entity
+                    const new_local_component_index: usize = new_comp_index_calc_blk: {
+                        // calculate mask that filters out most significant bits
+                        const new_after_bits_mask = new_bit - 1;
+                        const new_index = @popCount(old_bit_encoding & new_after_bits_mask);
+                        break :new_comp_index_calc_blk new_index;
+                    };
 
-                                break :blk1 path;
-                            };
+                    const total_local_components: u32 = @popCount(new_encoding);
 
-                            var new_archetype_created: bool = undefined;
-                            const new_arche_ref: Node.ArchtypeRef = blk1: {
-                                var arche_node = blk: {
-                                    var current_node: *Node = &self.root_node;
-                                    for (new_path.indices[0 .. new_path.len - 1]) |step| {
-                                        if (current_node.children[step]) |*some| {
-                                            current_node = some;
-                                        } else {
-                                            // create new node and set it as current node
-                                            current_node.children[step] = try Node.init(
-                                                self.allocator,
-                                                current_node.children.len - 1,
-                                            );
-                                            current_node = &current_node.children[step].?;
-                                        }
-                                    }
-                                    break :blk current_node;
-                                };
+                    var new_archetype_index = self.encodingToArchetypeIndex(new_encoding);
 
-                                const archetype_ref_index = new_path.indices[new_path.len - 1];
-                                if (arche_node.archetype_references[archetype_ref_index]) |some| {
-                                    new_archetype_created = false;
-                                    break :blk1 some;
-                                } else {
-                                    var type_hashes: [submitted_components.len]u64 = undefined;
-                                    var type_sizes: [submitted_components.len]usize = undefined;
-                                    for (new_path.indices[0..new_path.len], 0..) |step, i| {
-                                        type_hashes[i] = self.component_hashes[step + i];
-                                        type_sizes[i] = self.component_sizes[step + i];
-                                    }
+                    var new_archetype_created: bool = maybe_create_archetype_blk: {
+                        // if the archetype already exist
+                        if (new_archetype_index != null) {
+                            break :maybe_create_archetype_blk false;
+                        }
 
-                                    // register archetype path
-                                    try self.archetype_paths.append(new_path);
-                                    errdefer _ = self.archetype_paths.pop();
+                        // get the type hashes and sizes
+                        var type_hashes: [submitted_components.len]u64 = undefined;
+                        var type_sizes: [submitted_components.len]usize = undefined;
+                        {
+                            var encoding = new_encoding;
+                            var assigned_components: u32 = 0;
+                            var cursor: u32 = 0;
+                            for (0..total_local_components) |component_index| {
+                                const step = @intCast(BitEncodingShift, @ctz(encoding));
+                                std.debug.assert(((encoding >> step) & 1) == 1);
 
-                                    var archetype = try OpaqueArchetype.init(self.allocator, type_hashes[0..new_path.len], type_sizes[0..new_path.len]);
-                                    errdefer archetype.deinit();
+                                cursor += step;
+                                type_hashes[component_index] = self.component_hashes[cursor];
+                                type_sizes[component_index] = self.component_sizes[cursor];
+                                cursor += 1;
 
-                                    try self.archetypes.append(archetype);
-                                    errdefer self.archetypes.pop();
-
-                                    // create new opaque archetype
-                                    arche_node.archetype_references[archetype_ref_index] = Node.ArchtypeRef{
-                                        .path_index = self.archetype_paths.items.len - 1,
-                                        .archetype_index = self.archetypes.items.len - 1,
-                                    };
-
-                                    new_archetype_created = true;
-                                    break :blk1 arche_node.archetype_references[archetype_ref_index].?;
-                                }
-                            };
-
-                            var data: [submitted_components.len][]u8 = undefined;
-                            inline for (component_info, 0..) |_, i| {
-                                var buf: [biggest_component_size]u8 = undefined;
-                                data[i] = &buf;
+                                encoding = (encoding >> step) >> 1;
+                                assigned_components += 1;
                             }
 
-                            // remove the entity and it's components from the old archetype
-                            try self.archetypes.items[arche_ref.archetype_index].rawSwapRemoveEntity(entity, data[0..old_path.len]);
+                            std.debug.assert(assigned_components == total_local_components);
+                        }
 
-                            // insert the new component at it's correct location
-                            var rhd = data[new_component_index..new_path.len];
-                            std.mem.rotate([]u8, rhd, rhd.len - 1);
-                            std.mem.copy(u8, data[new_component_index], std.mem.asBytes(&component));
+                        var new_archetype = try OpaqueArchetype.init(
+                            self.allocator,
+                            type_hashes[0..total_local_components],
+                            type_sizes[0..total_local_components],
+                        );
+                        errdefer new_archetype.deinit();
 
-                            // register the entity in the new archetype
-                            try self.archetypes.items[new_arche_ref.archetype_index].rawRegisterEntity(entity, data[0..new_path.len]);
+                        const opaque_archetype_index = self.archetypes.items.len;
+                        try self.archetypes.append(new_archetype);
+                        errdefer _ = self.archetypes.pop();
 
-                            // update entity reference
-                            self.entity_references.items[entity.id] = @intCast(EntityRef, new_arche_ref.path_index);
+                        // register archetype bit encoding
+                        try self.bit_encodings.append(new_encoding);
+                        errdefer _ = self.node_bit_paths.pop();
 
-                            return new_archetype_created;
-                        },
-                        // if this happen, then the container is in an invalid state
-                        error.EntityMissing => {
-                            unreachable;
-                        },
+                        std.debug.assert(self.bit_encodings.items.len == self.archetypes.items.len);
+
+                        new_archetype_index = opaque_archetype_index;
+                        break :maybe_create_archetype_blk true;
+                    };
+
+                    var data: [submitted_components.len][]u8 = undefined;
+                    inline for (component_info, 0..) |_, i| {
+                        var buf: [biggest_component_size]u8 = undefined;
+                        data[i] = &buf;
                     }
-                }
-            } else {
-                // workaround for https://github.com/ziglang/zig/issues/12963
-                const T = std.meta.Tuple(&[_]type{@TypeOf(component)});
-                var t: T = undefined;
-                t[0] = component;
 
-                // this entity has no previous storage, initialize some if needed
-                return self.initializeEntityStorage(entity, .reassign_existing_ref, t);
-            }
+                    // remove the entity and it's components from the old archetype
+                    try self.archetypes.items[current_bit_index].rawSwapRemoveEntity(entity, data[0 .. total_local_components - 1]);
+
+                    // insert the new component at it's correct location
+                    var rhd = data[new_local_component_index..total_local_components];
+                    std.mem.rotate([]u8, rhd, rhd.len - 1);
+                    std.mem.copy(u8, data[new_local_component_index], std.mem.asBytes(&component));
+
+                    const unwrapped_index = new_archetype_index.?;
+
+                    // register the entity in the new archetype
+                    try self.archetypes.items[unwrapped_index].rawRegisterEntity(entity, data[0..total_local_components]);
+
+                    // update entity reference
+                    self.entity_references.items[entity.id] = @intCast(
+                        EntityRef,
+                        unwrapped_index,
+                    );
+
+                    return new_archetype_created;
+                },
+                // if this happen, then the container is in an invalid state
+                error.EntityMissing => unreachable,
+            };
+
             return false;
         }
 
@@ -574,9 +309,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 return false;
             }
 
-            // we know that archetype exist because hasComponent can only return if it does
-            const old_arche = self.getArchetypeReferenceWithEntity(entity).?;
-            const old_path = self.archetype_paths.items[old_arche.path_index];
+            const old_archetype_index = self.entity_references.items[entity.id];
 
             var data: [submitted_components.len][]u8 = undefined;
             inline for (component_info, 0..) |_, i| {
@@ -584,128 +317,119 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 data[i] = &buf;
             }
 
+            // get old path and count how many components are stored in the entity
+            const old_encoding = self.bit_encodings.items[old_archetype_index];
+            const old_component_count = @popCount(old_encoding);
+
             // remove the entity and it's components from the old archetype
-            try self.archetypes.items[old_arche.archetype_index].rawSwapRemoveEntity(entity, data[0..old_path.len]);
+            try self.archetypes.items[old_archetype_index].rawSwapRemoveEntity(entity, data[0..old_component_count]);
+            // TODO: handle error, this currently can lead to corrupt entities!
 
-            if (old_path.len <= 1) {
-                // update entity reference
-                self.entity_references.items[entity.id] = void_index;
-                return false;
-            }
+            const global_remove_component_index = comptime componentIndex(Component);
+            const remove_bit = @as(BitEncoding, 1 << global_remove_component_index);
+            const new_encoding = old_encoding & ~remove_bit;
 
-            var remove_component_index: usize = undefined;
-            const new_path = blk: {
-                const component_hash = comptime hashType(Component);
+            var local_remove_component_index: usize = remove_index_calc_blk: {
+                // calculate mask that filters out most significant bits
+                const remove_after_bits_mask = remove_bit - 1;
+                const remove_index = @popCount(old_encoding & remove_after_bits_mask);
+                break :remove_index_calc_blk remove_index;
+            };
 
-                var path = ArchetypePath{
-                    .len = 0,
-                    .indices = undefined,
-                };
+            var new_archetype_index = self.encodingToArchetypeIndex(new_encoding);
 
-                var removed_step: bool = false;
-                for (old_path.indices[0..old_path.len], 0..) |step, i| {
-                    const component_index = step + i;
-                    if (self.component_hashes[component_index] != component_hash) {
-                        path.indices[path.len] = if (removed_step) step + 1 else step;
-                        path.len += 1;
-                    } else {
-                        remove_component_index = i;
-                        removed_step = true;
+            const new_component_count = old_component_count - 1;
+            var new_archetype_created = archetype_create_blk: {
+                // if archetype already exist
+                if (new_archetype_index != null) {
+                    break :archetype_create_blk false;
+                }
+
+                // get the type hashes and sizes
+                var type_hashes: [submitted_components.len]u64 = undefined;
+                var type_sizes: [submitted_components.len]usize = undefined;
+                {
+                    var encoding = new_encoding;
+                    var cursor: u32 = 0;
+                    for (0..new_component_count) |component_index| {
+                        const step = @ctz(encoding);
+                        std.debug.assert((encoding >> step) & 1 == 1);
+
+                        cursor += @intCast(u32, step);
+                        encoding = (encoding >> step) >> 1;
+
+                        type_hashes[component_index] = self.component_hashes[cursor];
+                        type_sizes[component_index] = self.component_sizes[cursor];
+
+                        cursor += 1;
                     }
                 }
 
-                break :blk path;
+                var new_archetype = try OpaqueArchetype.init(
+                    self.allocator,
+                    type_hashes[0..new_component_count],
+                    type_sizes[0..new_component_count],
+                );
+                errdefer new_archetype.deinit();
+
+                const opaque_archetype_index = self.archetypes.items.len;
+
+                // register archetype bit encoding
+                try self.bit_encodings.append(new_encoding);
+                errdefer _ = self.bit_encodings.pop();
+
+                try self.archetypes.append(new_archetype);
+                errdefer _ = self.archetypes.pop();
+
+                std.debug.assert(self.bit_encodings.items.len == self.archetypes.items.len);
+
+                new_archetype_index = opaque_archetype_index;
+                break :archetype_create_blk true;
             };
 
-            var arche_node = blk: {
-                var current_node: Node = self.root_node;
-                for (new_path.indices[0 .. new_path.len - 1]) |step| {
-                    if (current_node.children[step]) |some| {
-                        current_node = some;
-                    } else {
-                        // create new node and set it as current node
-                        current_node.children[step] = try Node.init(
-                            self.allocator,
-                            current_node.children.len - 1,
-                        );
-                        current_node = current_node.children[step].?;
-                    }
-                }
-                break :blk current_node;
-            };
-
-            var new_archetype_created: bool = undefined;
-            var new_archetype_ref: Node.ArchtypeRef = blk: {
-                const archetype_index = new_path.indices[new_path.len - 1];
-                if (arche_node.archetype_references[archetype_index]) |some| {
-                    new_archetype_created = false;
-                    break :blk some;
-                } else {
-                    var type_hashes: [submitted_components.len]u64 = undefined;
-                    var type_sizes: [submitted_components.len]usize = undefined;
-                    for (new_path.indices[0..new_path.len], 0..) |step, i| {
-                        type_hashes[i] = self.component_hashes[step + i];
-                        type_sizes[i] = self.component_sizes[step + i];
-                    }
-
-                    // register archetype path
-                    try self.archetype_paths.append(new_path);
-                    errdefer _ = self.archetype_paths.pop();
-
-                    var new_archetype = try OpaqueArchetype.init(self.allocator, type_hashes[0..new_path.len], type_sizes[0..new_path.len]);
-                    errdefer new_archetype.deinit();
-
-                    try self.archetypes.append(new_archetype);
-                    errdefer _ = self.archetypes.pop();
-
-                    // create new opaque archetype
-                    arche_node.archetype_references[archetype_index] = Node.ArchtypeRef{
-                        .path_index = self.archetype_paths.items.len - 1,
-                        .archetype_index = self.archetypes.items.len - 1,
-                    };
-
-                    new_archetype_created = true;
-                    break :blk arche_node.archetype_references[archetype_index].?;
-                }
-            };
-
-            var rhd = data[remove_component_index..old_path.len];
+            var rhd = data[local_remove_component_index..old_component_count];
             std.mem.rotate([]u8, rhd, 1);
 
             // register the entity in the new archetype
-            try self.archetypes.items[new_archetype_ref.archetype_index].rawRegisterEntity(entity, data[0..new_path.len]);
+            const unwrapped_index = new_archetype_index.?;
+            try self.archetypes.items[unwrapped_index].rawRegisterEntity(
+                entity,
+                data[0..new_component_count],
+            );
 
             // update entity reference
-            self.entity_references.items[entity.id] = @intCast(EntityRef, new_archetype_ref.path_index);
+            self.entity_references.items[entity.id] = @intCast(
+                EntityRef,
+                unwrapped_index,
+            );
 
             return new_archetype_created;
         }
 
-        pub inline fn getTypeHashes(self: ArcheContainer, entity: Entity) ?[]u64 {
-            const ref = switch (self.entity_references.items[entity.id]) {
-                void_index => return null, // void type
-                else => |index| index,
-            };
-            const path = self.archetype_paths.items[ref];
-
-            var hashes: [submitted_components.len]u64 = undefined;
-            for (path.indices[0..path.len], 0..) |step, i| {
-                hashes[i] = self.component_hashes[step + i];
+        pub inline fn encodingToArchetypeIndex(self: ArcheContainer, bit_encoding: BitEncoding) ?usize {
+            for (self.bit_encodings.items, 0..) |bit_encoding_item, bit_encoding_index| {
+                if (bit_encoding_item == bit_encoding) {
+                    return bit_encoding_index;
+                }
             }
+            return null;
+        }
 
-            // TODO: Returning stack memory ok for inline?
-            return hashes[0..path.len];
+        pub inline fn getTypeHashes(self: ArcheContainer, entity: Entity) []const u64 {
+            const opaque_archetype_index = self.entity_references.items[entity.id];
+            return self.archetypes.items[opaque_archetype_index].getTypeHashes();
         }
 
         pub inline fn hasComponent(self: ArcheContainer, entity: Entity, comptime Component: type) bool {
             // verify that component exist in storage
             _ = comptime componentIndex(Component);
-            // get the archetype of the entity
-            const node = self.getArchetypeReferenceWithEntity(entity) orelse return false;
-            return self.archetypes.items[node.archetype_index].hasComponent(Component);
+
+            const opaque_archetype_index = self.entity_references.items[entity.id];
+            return self.archetypes.items[opaque_archetype_index].hasComponent(Component);
         }
 
         /// Query archetypes containing all components listed in component_hashes
+        /// hashes must be sorted
         /// caller own the returned memory
         pub fn getArchetypesWithComponents(
             self: ArcheContainer,
@@ -713,56 +437,65 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             include_component_hashes: []const u64,
             exclude_component_hashes: []const u64,
         ) error{OutOfMemory}![]*OpaqueArchetype {
-            var include_path: [submitted_components.len]u16 = undefined;
+            var include_bits: BitEncoding = 0;
             for (include_component_hashes, 0..) |include_hash, i| {
-                include_path[i] = blk: {
-                    for (self.component_hashes[i..], 0..) |stored_hash, step| {
+                include_bits |= blk: {
+                    for (self.component_hashes[i..], i..) |stored_hash, step| {
                         if (include_hash == stored_hash) {
-                            break :blk @intCast(u15, step + i);
+                            break :blk @as(BitEncoding, 1) << @intCast(BitEncodingShift, step);
                         }
                     }
                     unreachable; // should be compile type guards before we reach this point ...
                 };
             }
 
-            var exclude_path: [submitted_components.len]u16 = undefined;
+            var exclude_bits: BitEncoding = 0;
             for (exclude_component_hashes, 0..) |exclude_hash, i| {
-                exclude_path[i] = blk: {
-                    for (self.component_hashes[i..], 0..) |stored_hash, step| {
+                exclude_bits |= blk: {
+                    for (self.component_hashes[i..], i..) |stored_hash, step| {
                         if (exclude_hash == stored_hash) {
-                            break :blk @intCast(u15, step + i);
+                            break :blk @as(BitEncoding, 1) << @intCast(BitEncodingShift, step);
                         }
                     }
                     unreachable; // should be compile type guards before we reach this point ...
                 };
             }
+
+            // caller should verify this
+            std.debug.assert(include_bits & exclude_bits == 0);
 
             var resulting_archetypes = ArrayList(*OpaqueArchetype).init(allocator);
-            try self.root_node.getArchetypesWithComponents(
-                self,
-                include_path[0..include_component_hashes.len],
-                exclude_path[0..exclude_component_hashes.len],
-                &resulting_archetypes,
-                0,
-            );
+            errdefer resulting_archetypes.deinit();
+
+            // TODO: implement inplace zero alloc binary traversal
+            // TODO: benchmark between brute force and tree traversal
+            // https://www.geeksforgeeks.org/inorder-tree-traversal-without-recursion/
+
+            // brute force search of queried nodes which should be fast for smaller amount of nodes (limit of 1000-10000s of nodes)
+            for (self.bit_encodings.items, 0..) |bit_path, path_index| {
+                if ((bit_path & include_bits) == include_bits and (bit_path & exclude_bits == 0)) {
+                    try resulting_archetypes.append(&self.archetypes.items[path_index]);
+                }
+            }
 
             return resulting_archetypes.toOwnedSlice();
         }
 
-        pub inline fn getComponent(self: ArcheContainer, entity: Entity, comptime Component: type) ecez_error.ArchetypeError!Component {
+        pub fn getComponent(self: ArcheContainer, entity: Entity, comptime Component: type) ecez_error.ArchetypeError!Component {
             const zone = ztracy.ZoneNC(@src(), "Container getComponent", Color.arche_container);
             defer zone.End();
-            const ref = self.getArchetypeReferenceWithEntity(entity) orelse return error.ComponentMissing;
+
+            const opaque_archetype_index = self.entity_references.items[entity.id];
 
             const component_get_info = @typeInfo(Component);
             switch (component_get_info) {
                 .Pointer => |ptr_info| {
                     if (@typeInfo(ptr_info.child) == .Struct) {
-                        return self.archetypes.items[ref.archetype_index].getComponent(entity, ptr_info.child);
+                        return self.archetypes.items[opaque_archetype_index].getComponent(entity, ptr_info.child);
                     }
                 },
                 .Struct => {
-                    const component_ptr = try self.archetypes.items[ref.archetype_index].getComponent(entity, Component);
+                    const component_ptr = try self.archetypes.items[opaque_archetype_index].getComponent(entity, Component);
                     return component_ptr.*;
                 },
                 else => {},
@@ -770,12 +503,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             @compileError("Get component can only find a component which has to be struct, or pointer to struct");
         }
 
-        const RefHandling = enum {
-            create_new_ref,
-            reassign_existing_ref,
-        };
-        /// This function can initialize the storage for
-        fn initializeEntityStorage(self: *ArcheContainer, entity: Entity, entity_ref_handling: RefHandling, initial_state: anytype) error{OutOfMemory}!bool {
+        /// This function can initialize the storage for the components of a given entity
+        fn initializeEntityStorage(self: *ArcheContainer, entity: Entity, initial_state: anytype) error{OutOfMemory}!bool {
             const zone = ztracy.ZoneNC(@src(), "Container createEntity", Color.arche_container);
             defer zone.End();
 
@@ -787,176 +516,96 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 }
                 break :blk info.Struct;
             };
-            if (arche_struct_info.fields.len == 0) {
-                // no storage should be created if initial state is empty
-                @compileError("called initializeEntityStorage with empty initial_state is illegal");
-            }
 
-            const TypeMap = struct {
-                hash: u64,
-                state_index: usize,
-                component_index: u16,
+            // sort the types in the inital state to produce a valid binary path
+            const sorted_initial_state_field_types = comptime sort_fields_blk: {
+                var field_types: [arche_struct_info.fields.len]type = undefined;
+                inline for (&field_types, arche_struct_info.fields) |*field_type, field_info| {
+                    field_type.* = field_info.type;
+                }
+                // TODO: in-place sort instead
+                break :sort_fields_blk ecez_query.sortTypes(&field_types);
             };
 
-            const index_path = comptime blk1: {
-                var path: [arche_struct_info.fields.len]TypeMap = undefined;
-                var sort: [arche_struct_info.fields.len]Sort = undefined;
-                inline for (arche_struct_info.fields, 0..) |field, i| {
-                    // find index of field in outer component array
-                    const component_index = blk2: {
-                        inline for (component_info, 0..) |component, j| {
-                            if (field.type == component.type) {
-                                break :blk2 @intCast(u15, j);
-                            }
+            // calculate the bits that describe the path to the archetype of this entity
+            const initial_bit_encoding: BitEncoding = comptime bit_calc_blk: {
+                var bits: BitEncoding = 0;
+                outer_loop: inline for (sorted_initial_state_field_types, 0..) |initial_state_field_type, field_index| {
+                    inline for (submitted_components[field_index..], field_index..) |Component, comp_index| {
+                        if (initial_state_field_type == Component) {
+                            bits |= 1 << comp_index;
+                            continue :outer_loop;
                         }
-                        @compileError(@typeName(field.type) ++ " is not a registered component type");
-                    };
-
-                    path[i] = TypeMap{
-                        .hash = hashType(field.type),
-                        .state_index = i,
-                        .component_index = component_index,
-                    };
-                    sort[i] = .{ .hash = path[i].hash };
+                    }
+                    @compileError(@typeName(initial_state_field_type) ++ " is not a World registered component type");
                 }
-                // sort based on hash
-                ecez_query.sort(Sort, &sort);
+                break :bit_calc_blk bits;
+            };
 
-                // sort path based on hash
-                for (sort, 0..) |s, j| {
-                    for (path, 0..) |p, k| {
-                        if (s.hash == p.hash) {
-                            std.mem.swap(TypeMap, &path[j], &path[k]);
+            // generate a map from initial state to the internal storage order so we store binary data in the correct location
+            // the map goes as followed: field_map[initial_state_index] => internal_storage_index
+            const field_map = comptime field_map_blk: {
+                var map: [arche_struct_info.fields.len]usize = undefined;
+                inline for (&map, arche_struct_info.fields) |*map_entry, initial_field| {
+                    inline for (sorted_initial_state_field_types, 0..) |sorted_type, sorted_index| {
+                        if (initial_field.type == sorted_type) {
+                            map_entry.* = sorted_index;
+                            break;
                         }
                     }
                 }
-                break :blk1 path;
+
+                break :field_map_blk map;
             };
 
-            // TODO: errdefer deinit allocations!
-            // get the node that will store the new entity
-            var entity_node: *Node = blk: {
-                var current_node = &self.root_node;
-                for (index_path[0 .. index_path.len - 1], 0..) |path, depth| {
-                    const index = path.component_index - depth;
-                    // see if our new node exist
-                    if (current_node.children[index]) |*child| {
-                        // set target child node as current node
-                        current_node = child;
-                    } else {
-                        // create new node and set it as current node
-                        current_node.children[index] = try Node.init(
-                            self.allocator,
-                            current_node.children.len - 1,
-                        );
-                        current_node = &(current_node.children[index].?);
-                    }
-                }
-                break :blk current_node;
-            };
-
-            // create a component byte data view
-            const fields = @typeInfo(ArchetypeStruct).Struct.fields;
-            var data: [arche_struct_info.fields.len][]const u8 = undefined;
-            inline for (index_path, 0..) |path, i| {
-                if (@sizeOf(fields[path.state_index].type) > 0) {
-                    const field = &@field(initial_state, fields[path.state_index].name);
-                    data[i] = std.mem.asBytes(field);
+            // create a component byte data view (sort initial state according to type)
+            var sorted_state_data: [arche_struct_info.fields.len][]const u8 = undefined;
+            inline for (arche_struct_info.fields, field_map) |initial_field_info, data_index| {
+                if (@sizeOf(initial_field_info.type) > 0) {
+                    const field = &@field(initial_state, initial_field_info.name);
+                    sorted_state_data[data_index] = std.mem.asBytes(field);
                 } else {
-                    data[i] = &self.empty_bytes;
+                    sorted_state_data[data_index] = &self.empty_bytes;
                 }
             }
 
-            var new_archetype_created: bool = undefined;
-            // get the index of the archetype in the node
-            const arche_ref_index = index_path[index_path.len - 1].component_index - (index_path.len - 1);
-            const path_index = blk1: {
-                if (entity_node.archetype_references[arche_ref_index]) |*arche_ref| {
-                    const archetype_index = arche_ref.archetype_index;
-                    try self.archetypes.items[archetype_index].rawRegisterEntity(entity, &data);
-                    new_archetype_created = false;
-                    break :blk1 arche_ref.path_index;
-                } else {
-                    // register archetype path
-                    const arche_path_index = self.archetype_paths.items.len;
-                    {
-                        var archetype_path = ArchetypePath{
-                            .len = index_path.len,
-                            .indices = undefined,
-                        };
-                        for (index_path, 0..) |sub_path, i| {
-                            archetype_path.indices[i] = sub_path.component_index - @intCast(u15, i);
-                        }
-                        try self.archetype_paths.append(archetype_path);
-                    }
-                    errdefer _ = self.archetype_paths.pop();
+            var new_archetype_index = self.encodingToArchetypeIndex(initial_bit_encoding);
 
-                    comptime var type_hashes: [index_path.len]u64 = undefined;
-                    comptime var type_sizes: [index_path.len]usize = undefined;
-                    inline for (index_path, 0..) |path, i| {
-                        const Component = fields[path.state_index].type;
-                        type_hashes[i] = comptime ecez_query.hashType(Component);
-                        type_sizes[i] = @sizeOf(Component);
-                    }
-
-                    var new_archetype = try OpaqueArchetype.init(self.allocator, &type_hashes, &type_sizes);
-                    errdefer new_archetype.deinit();
-
-                    try self.archetypes.append(new_archetype);
-                    errdefer _ = self.archetypes.pop();
-
-                    // create new opaque archetype
-                    const archetype_index = self.archetypes.items.len - 1;
-                    entity_node.archetype_references[arche_ref_index] = Node.ArchtypeRef{
-                        .path_index = arche_path_index,
-                        .archetype_index = archetype_index,
-                    };
-
-                    // register entity in the new archetype
-                    try self.archetypes.items[archetype_index].rawRegisterEntity(entity, &data);
-
-                    new_archetype_created = true;
-                    break :blk1 arche_path_index;
+            var new_archetype_created: bool = regiser_entity_blk: {
+                // if the archetype already exist
+                if (new_archetype_index) |index| {
+                    try self.archetypes.items[index].rawRegisterEntity(entity, &sorted_state_data);
+                    break :regiser_entity_blk false;
                 }
+
+                comptime var type_hashes: [sorted_initial_state_field_types.len]u64 = undefined;
+                comptime var type_sizes: [sorted_initial_state_field_types.len]usize = undefined;
+                inline for (&type_hashes, &type_sizes, sorted_initial_state_field_types) |*type_hash, *type_size, Component| {
+                    type_hash.* = comptime ecez_query.hashType(Component);
+                    type_size.* = comptime @sizeOf(Component);
+                }
+
+                var new_archetype = try OpaqueArchetype.init(self.allocator, &type_hashes, &type_sizes);
+                errdefer new_archetype.deinit();
+
+                const opaque_archetype_index = self.archetypes.items.len;
+                try self.archetypes.append(new_archetype);
+                errdefer _ = self.archetypes.pop();
+
+                try self.bit_encodings.append(initial_bit_encoding);
+                errdefer _ = self.bit_encodings.pop();
+
+                try self.archetypes.items[opaque_archetype_index].rawRegisterEntity(entity, &sorted_state_data);
+                // TODO: errdefer self.archetypes.items[opaque_archetype_index].removeEntity(); https://github.com/Avokadoen/ecez/issues/118
+
+                new_archetype_index = opaque_archetype_index;
+                break :regiser_entity_blk true;
             };
 
             // register a reference to able to locate entity
-            const new_ref = @intCast(EntityRef, path_index);
-            if (entity_ref_handling == .create_new_ref) {
-                try self.entity_references.append(new_ref);
-            } else {
-                self.entity_references.items[entity.id] = new_ref;
-            }
-            errdefer {
-                if (entity_ref_handling == .create_new_ref) {
-                    _ = self.entity_references.pop();
-                }
-            }
+            self.entity_references.items[entity.id] = @intCast(EntityRef, new_archetype_index.?);
 
             return new_archetype_created;
-        }
-
-        inline fn getArchetypeReferenceWithEntity(self: ArcheContainer, entity: Entity) ?*Node.ArchtypeRef {
-            const ref = switch (self.entity_references.items[entity.id]) {
-                void_index => return null, // void type
-                else => |index| index,
-            };
-            const path = self.archetype_paths.items[ref];
-
-            var entity_node = self.getNodeWithPath(path);
-
-            // if entity is not spoofed, then this is always defined
-            return &entity_node.archetype_references[path.indices[path.len - 1]].?;
-        }
-
-        inline fn getNodeWithPath(self: ArcheContainer, path: ArchetypePath) Node {
-            var current_node: Node = self.root_node;
-            for (path.indices[0 .. path.len - 1]) |step| {
-                // if node is null, then entity has been modified externally, or there is a
-                // bug in ecez
-                current_node = current_node.children[step].?;
-            }
-            return current_node;
         }
 
         inline fn componentIndex(comptime Component: type) comptime_int {
@@ -1014,6 +663,21 @@ test "ArcheContainer setComponent & getComponent works" {
     try testing.expectEqual(b, try container.getComponent(entity, Testing.Component.B));
 }
 
+test "ArcheContainer removeComponent & getComponent works" {
+    var container = try TestContainer.init(testing.allocator);
+    defer container.deinit();
+
+    const initial_state = Testing.Archetype.AC{
+        .a = Testing.Component.A{ .value = 1 },
+        .c = Testing.Component.C{},
+    };
+    const entity = (try container.createEntity(initial_state)).entity;
+
+    _ = try container.removeComponent(entity, Testing.Component.C);
+    try testing.expectEqual(initial_state.a, try container.getComponent(entity, Testing.Component.A));
+    try testing.expectEqual(false, container.hasComponent(entity, Testing.Component.C));
+}
+
 test "ArcheContainer getTypeHashes works" {
     var container = try TestContainer.init(testing.allocator);
     defer container.deinit();
@@ -1027,7 +691,7 @@ test "ArcheContainer getTypeHashes works" {
     try testing.expectEqualSlices(
         u64,
         &[_]u64{ ecez_query.hashType(Testing.Component.A), ecez_query.hashType(Testing.Component.C) },
-        container.getTypeHashes(entity).?,
+        container.getTypeHashes(entity),
     );
 }
 
