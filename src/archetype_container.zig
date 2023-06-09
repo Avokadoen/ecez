@@ -69,74 +69,28 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         break :blk info;
     };
 
-    const Step = enum(u1) {
-        left = 0,
-        right = 1,
-    };
-    const NodeType = enum(u1) {
-        root,
-        not_root,
-    };
-    // TODO: rename bitnode
-    // TODO: type safety: 2 nodes, a OneNode and ZeroNode where ZeroNode does not have bidirectional_ref: ?BidirectRef,
-    // A single node in the binary tree
-    const BinaryNode = struct {
-        pub const BidirectRef = struct {
-            bit_path_index: u32,
-            opaque_arcehetype_index: u32,
-        };
-        const Ref = struct {
-            type: NodeType,
-            self_index: u31,
-        };
-
-        const Node = @This();
-
-        ref: Ref,
-        bit_offset: u32,
-        child_indices: [2]?u32,
-        bidirectional_ref: ?BidirectRef,
-
-        pub fn root() Node {
-            return Node{
-                .ref = .{ .type = .root, .self_index = 0 },
-                .bit_offset = 0,
-                .child_indices = .{ null, null },
-                .bidirectional_ref = null,
-            };
-        }
-
-        pub fn empty(self_index: usize, bit_offset: u32) Node {
-            return Node{
-                .ref = .{ .type = .not_root, .self_index = @intCast(u31, self_index) },
-                .bit_offset = bit_offset,
-                .child_indices = .{ null, null },
-                .bidirectional_ref = null,
-            };
-        }
-    };
-
     return struct {
         const ArcheContainer = @This();
 
         const void_index = 0;
 
         // A single integer that represent the full path of an opaque archetype
-        pub const BitPath = @Type(std.builtin.Type{ .Int = .{
+        pub const BitEncoding = @Type(std.builtin.Type{ .Int = .{
             .signedness = .unsigned,
             .bits = submitted_components.len,
         } });
 
-        pub const BitPathShift = @Type(std.builtin.Type{ .Int = .{
+        pub const BitEncodingShift = @Type(std.builtin.Type{ .Int = .{
             .signedness = .unsigned,
-            .bits = std.math.log2_int_ceil(BitPath, submitted_components.len),
+            .bits = std.math.log2_int_ceil(BitEncoding, submitted_components.len),
         } });
 
+        const ArchetypeIndex = u32;
+
         allocator: Allocator,
-        node_bit_paths: ArrayList(BitPath),
-        entity_references: ArrayList(EntityRef),
         archetypes: ArrayList(OpaqueArchetype),
-        nodes: ArrayList(BinaryNode),
+        bit_encodings: ArrayList(BitEncoding),
+        entity_references: ArrayList(EntityRef),
 
         component_hashes: [submitted_components.len]u64,
         component_sizes: [submitted_components.len]usize,
@@ -146,16 +100,14 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         pub fn init(allocator: Allocator) error{OutOfMemory}!ArcheContainer {
             const pre_alloc_amount = 32;
 
-            var node_bit_paths = try ArrayList(BitPath).initCapacity(allocator, pre_alloc_amount);
-            errdefer node_bit_paths.deinit();
+            var archetypes = try ArrayList(OpaqueArchetype).initCapacity(allocator, pre_alloc_amount);
+            errdefer archetypes.deinit();
 
-            // append special "void" path
-            try node_bit_paths.append(0);
+            var bit_encodings = try ArrayList(BitEncoding).initCapacity(allocator, pre_alloc_amount);
+            errdefer bit_encodings.deinit();
 
-            var nodes = try ArrayList(BinaryNode).initCapacity(allocator, pre_alloc_amount);
-            errdefer nodes.deinit();
-            // we append a "void" node that should always exist
-            nodes.appendAssumeCapacity(BinaryNode.root());
+            var entity_references = try ArrayList(EntityRef).initCapacity(allocator, pre_alloc_amount);
+            errdefer entity_references.deinit();
 
             comptime var component_hashes: [submitted_components.len]u64 = undefined;
             comptime var component_sizes: [submitted_components.len]usize = undefined;
@@ -164,18 +116,15 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 size.* = @sizeOf(info.type);
             }
 
-            var entity_references = try ArrayList(EntityRef).initCapacity(allocator, pre_alloc_amount);
-            errdefer entity_references.deinit();
-
-            var archetypes = try ArrayList(OpaqueArchetype).initCapacity(allocator, pre_alloc_amount);
-            errdefer archetypes.deinit();
+            const void_archetype = try OpaqueArchetype.init(allocator, &[0]u64{}, &[0]usize{});
+            archetypes.appendAssumeCapacity(void_archetype);
+            bit_encodings.appendAssumeCapacity(@as(BitEncoding, 0));
 
             return ArcheContainer{
                 .allocator = allocator,
-                .node_bit_paths = node_bit_paths,
-                .entity_references = entity_references,
                 .archetypes = archetypes,
-                .nodes = nodes,
+                .bit_encodings = bit_encodings,
+                .entity_references = entity_references,
                 .component_hashes = component_hashes,
                 .component_sizes = component_sizes,
                 .empty_bytes = .{},
@@ -183,24 +132,22 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         }
 
         pub inline fn deinit(self: *ArcheContainer) void {
-            self.node_bit_paths.deinit();
-            self.entity_references.deinit();
-            self.nodes.deinit();
-
             for (self.archetypes.items) |*archetype| {
                 archetype.deinit();
             }
             self.archetypes.deinit();
+            self.bit_encodings.deinit();
+            self.entity_references.deinit();
         }
 
         pub inline fn clearRetainingCapacity(self: *ArcheContainer) void {
             const zone = ztracy.ZoneNC(@src(), "Container clear", Color.arche_container);
             defer zone.End();
 
+            // Do not clear node_bit_paths & bit_path_relation since archetypes persist
             self.entity_references.clearRetainingCapacity();
-            self.entity_references.appendAssumeCapacity(undefined);
 
-            for (&self.archetypes.items) |*archetype| {
+            for (self.archetypes.items) |*archetype| {
                 archetype.clearRetainingCapacity();
             }
         }
@@ -218,27 +165,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             const zone = ztracy.ZoneNC(@src(), "Container createEntity", Color.arche_container);
             defer zone.End();
 
-            const ArchetypeStruct = @TypeOf(initial_state);
-            const arche_struct_info = blk: {
-                const info = @typeInfo(ArchetypeStruct);
-                if (info != .Struct) {
-                    @compileError("expected initial_state to be of type struct");
-                }
-                break :blk info.Struct;
-            };
-
             // create new entity
             const entity = Entity{ .id = @intCast(u32, self.entity_references.items.len) };
-
-            // if no initial_state
-            if (arche_struct_info.fields.len == 0) {
-                // register a void reference to able to locate empty entity
-                try self.entity_references.append(void_index);
-                return CreateEntityResult{
-                    .new_archetype_container = false,
-                    .entity = entity,
-                };
-            }
 
             // allocate the entity reference item and let initializeEntityStorage assign it if it suceeds
             try self.entity_references.append(undefined);
@@ -262,161 +190,111 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             const zone = ztracy.ZoneNC(@src(), "Container setComponent", Color.arche_container);
             defer zone.End();
 
-            // get the archetype of the entity
-            if (self.entityToBinaryNodeIndex(entity)) |node_index| {
-                const current_entity_node: BinaryNode = self.nodes.items[node_index];
-                const node_bidirect_ref: BinaryNode.BidirectRef = current_entity_node.bidirectional_ref.?;
+            const current_bit_index = self.entity_references.items[entity.id];
 
-                // try to update component in current archetype
-                if (self.archetypes.items[node_bidirect_ref.opaque_arcehetype_index].setComponent(entity, component)) |ok| {
-                    // ok we don't need to do anymore
-                    _ = ok;
-                } else |err| {
-                    switch (err) {
-                        // component is not part of current archetype
-                        error.ComponentMissing => {
-                            const new_component_global_index = comptime componentIndex(@TypeOf(component));
+            // try to update component in current archetype
+            self.archetypes.items[current_bit_index].setComponent(entity, component) catch |err| switch (err) {
+                // component is not part of current archetype
+                error.ComponentMissing => {
+                    const new_component_global_index = comptime componentIndex(@TypeOf(component));
 
-                            const old_bit_path = self.node_bit_paths.items[node_bidirect_ref.bit_path_index];
-                            const new_path = old_bit_path | (1 << new_component_global_index);
+                    const old_bit_encoding = self.bit_encodings.items[current_bit_index];
+                    const new_bit = @as(BitEncoding, 1 << new_component_global_index);
+                    const new_encoding = old_bit_encoding | new_bit;
 
-                            var total_local_components: u32 = 0;
-                            var new_node: *BinaryNode = node_search_blk: {
-                                var state_path_bits = new_path;
-                                var current_node = &self.nodes.items[0];
-                                var loop_iter: u32 = 0;
+                    // we need the index of the new component in the sequence of components are tied to the entity
+                    const new_local_component_index: usize = new_comp_index_calc_blk: {
+                        // calculate mask that filters out most significant bits
+                        const new_after_bits_mask = new_bit - 1;
+                        const new_index = @popCount(old_bit_encoding & new_after_bits_mask);
+                        break :new_comp_index_calc_blk new_index;
+                    };
 
-                                // TODO: use @ctz
-                                while (state_path_bits != 0) : (state_path_bits >>= 1) {
-                                    const step = @intCast(usize, state_path_bits & 1);
-                                    if (current_node.child_indices[step]) |index| {
-                                        current_node = &self.nodes.items[index];
-                                    } else {
-                                        const child_index = self.nodes.items.len;
-                                        try self.nodes.append(BinaryNode.empty(child_index, loop_iter));
+                    const total_local_components: u32 = @popCount(new_encoding);
 
-                                        current_node.child_indices[step] = @intCast(u32, child_index);
-                                        current_node = &self.nodes.items[child_index];
+                    var new_archetype_index = self.encodingToArchetypeIndex(new_encoding);
 
-                                        loop_iter += 1;
-                                    }
+                    var new_archetype_created: bool = maybe_create_archetype_blk: {
+                        // if the archetype already exist
+                        if (new_archetype_index != null) {
+                            break :maybe_create_archetype_blk false;
+                        }
 
-                                    total_local_components += 1;
-                                }
+                        // get the type hashes and sizes
+                        var type_hashes: [submitted_components.len]u64 = undefined;
+                        var type_sizes: [submitted_components.len]usize = undefined;
+                        {
+                            var encoding = new_encoding;
+                            var assigned_components: u32 = 0;
+                            var cursor: u32 = 0;
+                            for (0..total_local_components) |component_index| {
+                                const step = @intCast(BitEncodingShift, @ctz(encoding));
+                                std.debug.assert(((encoding >> step) & 1) == 1);
 
-                                break :node_search_blk current_node;
-                            };
+                                cursor += step;
+                                type_hashes[component_index] = self.component_hashes[cursor];
+                                type_sizes[component_index] = self.component_sizes[cursor];
+                                cursor += 1;
 
-                            // TODO: use same logic as in remove
-                            // we need the index of the new component in the sequence of components are tied to the entity
-                            var new_component_local_index: ?usize = null;
-
-                            var new_archetype_created: bool = maybe_create_archetype_blk: {
-                                // if the archetype already exist
-                                if (new_node.bidirectional_ref != null) {
-                                    break :maybe_create_archetype_blk false;
-                                }
-
-                                // register archetype bit path
-                                try self.node_bit_paths.append(new_path);
-                                errdefer _ = self.node_bit_paths.pop();
-
-                                // get the type hashes and sizes
-                                var type_hashes: [submitted_components.len]u64 = undefined;
-                                var type_sizes: [submitted_components.len]usize = undefined;
-                                {
-                                    var path = new_path;
-                                    var assigned_components: u32 = 0;
-                                    var cursor: u32 = 0;
-                                    for (0..total_local_components) |component_index| {
-                                        const step = @intCast(BitPathShift, @ctz(path));
-                                        std.debug.assert((path & 1) == 1);
-
-                                        type_hashes[component_index] = self.component_hashes[cursor];
-                                        type_sizes[component_index] = self.component_sizes[cursor];
-                                        if (new_component_local_index == null and cursor == new_component_global_index) {
-                                            new_component_local_index = component_index;
-                                        }
-
-                                        cursor += step + 1;
-                                        path = (path >> step) >> 1;
-                                        assigned_components += 1;
-                                    }
-
-                                    std.debug.assert(assigned_components == total_local_components);
-                                    std.debug.assert(new_component_local_index != null);
-                                }
-
-                                var new_archetype = try OpaqueArchetype.init(
-                                    self.allocator,
-                                    type_hashes[0..total_local_components],
-                                    type_sizes[0..total_local_components],
-                                );
-                                errdefer new_archetype.deinit();
-
-                                const opaque_archetype_index = self.archetypes.items.len;
-                                try self.archetypes.append(new_archetype);
-                                errdefer _ = self.archetypes.pop();
-
-                                const bit_path_index = self.node_bit_paths.items.len;
-                                try self.node_bit_paths.append(new_path);
-                                errdefer _ = self.node_bit_paths.pop();
-
-                                // update this entity's node to contain the new archetype
-                                new_node.bidirectional_ref = BinaryNode.BidirectRef{
-                                    .bit_path_index = @intCast(u32, bit_path_index),
-                                    .opaque_arcehetype_index = @intCast(u32, opaque_archetype_index),
-                                };
-
-                                break :maybe_create_archetype_blk true;
-                            };
-
-                            var data: [submitted_components.len][]u8 = undefined;
-                            inline for (component_info, 0..) |_, i| {
-                                var buf: [biggest_component_size]u8 = undefined;
-                                data[i] = &buf;
+                                encoding = (encoding >> step) >> 1;
+                                assigned_components += 1;
                             }
 
-                            const old_node_index = self.bitPathToBinaryNodeIndex(old_bit_path);
-                            const old_node = self.nodes.items[old_node_index];
-                            const old_archetype_index = old_node.bidirectional_ref.?.opaque_arcehetype_index;
+                            std.debug.assert(assigned_components == total_local_components);
+                        }
 
-                            // remove the entity and it's components from the old archetype
-                            try self.archetypes.items[old_archetype_index].rawSwapRemoveEntity(entity, data[0 .. total_local_components - 1]);
+                        var new_archetype = try OpaqueArchetype.init(
+                            self.allocator,
+                            type_hashes[0..total_local_components],
+                            type_sizes[0..total_local_components],
+                        );
+                        errdefer new_archetype.deinit();
 
-                            // insert the new component at it's correct location
-                            const new_component_local_index_unwrapped = new_component_local_index.?;
-                            var rhd = data[new_component_local_index_unwrapped..total_local_components];
-                            std.mem.rotate([]u8, rhd, rhd.len - 1);
-                            std.mem.copy(u8, data[new_component_local_index_unwrapped], std.mem.asBytes(&component));
+                        const opaque_archetype_index = self.archetypes.items.len;
+                        try self.archetypes.append(new_archetype);
+                        errdefer _ = self.archetypes.pop();
 
-                            // register the entity in the new archetype
-                            const new_archetype_index = new_node.bidirectional_ref.?.opaque_arcehetype_index;
-                            try self.archetypes.items[new_archetype_index].rawRegisterEntity(entity, data[0..total_local_components]);
+                        // register archetype bit encoding
+                        try self.bit_encodings.append(new_encoding);
+                        errdefer _ = self.node_bit_paths.pop();
 
-                            // update entity reference
-                            self.entity_references.items[entity.id] = @intCast(
-                                EntityRef,
-                                new_node.bidirectional_ref.?.bit_path_index,
-                            );
+                        std.debug.assert(self.bit_encodings.items.len == self.archetypes.items.len);
 
-                            return new_archetype_created;
-                        },
-                        // if this happen, then the container is in an invalid state
-                        error.EntityMissing => {
-                            unreachable;
-                        },
+                        new_archetype_index = opaque_archetype_index;
+                        break :maybe_create_archetype_blk true;
+                    };
+
+                    var data: [submitted_components.len][]u8 = undefined;
+                    inline for (component_info, 0..) |_, i| {
+                        var buf: [biggest_component_size]u8 = undefined;
+                        data[i] = &buf;
                     }
-                }
-            } else {
-                // workaround for https://github.com/ziglang/zig/issues/12963
-                const T = std.meta.Tuple(&[_]type{@TypeOf(component)});
-                var t: T = undefined;
-                t[0] = component;
 
-                // this entity has no previous storage, initialize some if needed
-                return self.initializeEntityStorage(entity, t);
-            }
+                    // remove the entity and it's components from the old archetype
+                    try self.archetypes.items[current_bit_index].rawSwapRemoveEntity(entity, data[0 .. total_local_components - 1]);
+
+                    // insert the new component at it's correct location
+                    var rhd = data[new_local_component_index..total_local_components];
+                    std.mem.rotate([]u8, rhd, rhd.len - 1);
+                    std.mem.copy(u8, data[new_local_component_index], std.mem.asBytes(&component));
+
+                    const unwrapped_index = new_archetype_index.?;
+
+                    // register the entity in the new archetype
+                    try self.archetypes.items[unwrapped_index].rawRegisterEntity(entity, data[0..total_local_components]);
+
+                    // update entity reference
+                    self.entity_references.items[entity.id] = @intCast(
+                        EntityRef,
+                        unwrapped_index,
+                    );
+
+                    return new_archetype_created;
+                },
+                // if this happen, then the container is in an invalid state
+                error.EntityMissing => unreachable,
+            };
+
             return false;
         }
 
@@ -431,10 +309,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 return false;
             }
 
-            // we know that archetype exist because hasComponent can only return if it does
-            const old_node_index = self.entityToBinaryNodeIndex(entity).?;
-            const old_entity_node: BinaryNode = self.nodes.items[old_node_index];
-            const old_node_bidirect_ref: BinaryNode.BidirectRef = old_entity_node.bidirectional_ref.?;
+            const old_archetype_index = self.entity_references.items[entity.id];
 
             var data: [submitted_components.len][]u8 = undefined;
             inline for (component_info, 0..) |_, i| {
@@ -443,112 +318,81 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             }
 
             // get old path and count how many components are stored in the entity
-            const old_bit_path = self.node_bit_paths.items[old_node_bidirect_ref.bit_path_index];
-            const old_component_count = @popCount(old_bit_path);
+            const old_encoding = self.bit_encodings.items[old_archetype_index];
+            const old_component_count = @popCount(old_encoding);
 
             // remove the entity and it's components from the old archetype
-            try self.archetypes.items[old_node_bidirect_ref.opaque_arcehetype_index].rawSwapRemoveEntity(entity, data[0..old_component_count]);
+            try self.archetypes.items[old_archetype_index].rawSwapRemoveEntity(entity, data[0..old_component_count]);
             // TODO: handle error, this currently can lead to corrupt entities!
 
-            // if the entity only had a single component previously
-            if (old_component_count == 1) {
-                // update entity reference to be of void type
-                self.entity_references.items[entity.id] = void_index;
-                return false;
-            }
-
             const global_remove_component_index = comptime componentIndex(Component);
-            const remove_bit = @as(BitPath, 1 << global_remove_component_index);
-            const new_path = old_bit_path & ~remove_bit;
+            const remove_bit = @as(BitEncoding, 1 << global_remove_component_index);
+            const new_encoding = old_encoding & ~remove_bit;
 
             var local_remove_component_index: usize = remove_index_calc_blk: {
                 // calculate mask that filters out most significant bits
                 const remove_after_bits_mask = remove_bit - 1;
-                const remove_index = @popCount(old_bit_path & remove_after_bits_mask);
+                const remove_index = @popCount(old_encoding & remove_after_bits_mask);
                 break :remove_index_calc_blk remove_index;
             };
 
-            var new_node: *BinaryNode = node_search_blk: {
-                var state_path_bits = new_path;
-                var current_node = &self.nodes.items[0];
-                var loop_iter: u32 = 0;
-
-                while (state_path_bits != 0) : (state_path_bits >>= 1) {
-                    const step = @intCast(usize, state_path_bits & 1);
-                    if (current_node.child_indices[step]) |index| {
-                        current_node = &self.nodes.items[index];
-                    } else {
-                        const child_index = self.nodes.items.len;
-                        try self.nodes.append(BinaryNode.empty(child_index, loop_iter));
-
-                        current_node.child_indices[step] = @intCast(u32, child_index);
-                        current_node = &self.nodes.items[child_index];
-
-                        loop_iter += 1;
-                    }
-                }
-
-                break :node_search_blk current_node;
-            };
+            var new_archetype_index = self.encodingToArchetypeIndex(new_encoding);
 
             const new_component_count = old_component_count - 1;
             var new_archetype_created = archetype_create_blk: {
                 // if archetype already exist
-                if (new_node.bidirectional_ref != null) {
+                if (new_archetype_index != null) {
                     break :archetype_create_blk false;
-                } else {
-                    // get the type hashes and sizes
-                    var type_hashes: [submitted_components.len]u64 = undefined;
-                    var type_sizes: [submitted_components.len]usize = undefined;
-                    {
-                        var path = new_path;
-                        var cursor: u32 = 0;
-                        for (0..new_component_count) |component_index| {
-                            const step = @ctz(path);
-                            std.debug.assert((path >> step) == 1);
-
-                            type_hashes[component_index] = self.component_hashes[cursor];
-                            type_sizes[component_index] = self.component_sizes[cursor];
-
-                            cursor += @intCast(u32, step);
-                            path = (path >> step) >> 1;
-                        }
-                    }
-
-                    // register archetype path
-                    try self.node_bit_paths.append(new_path);
-                    errdefer _ = self.node_bit_paths.pop();
-
-                    var new_archetype = try OpaqueArchetype.init(
-                        self.allocator,
-                        type_hashes[0..new_component_count],
-                        type_sizes[0..new_component_count],
-                    );
-                    errdefer new_archetype.deinit();
-
-                    const opaque_archetype_index = self.archetypes.items.len;
-                    try self.archetypes.append(new_archetype);
-                    errdefer _ = self.archetypes.pop();
-
-                    const bit_path_index = self.node_bit_paths.items.len;
-                    try self.node_bit_paths.append(new_path);
-                    errdefer _ = self.node_bit_paths.pop();
-
-                    // update this entity's node to contain the new archetype
-                    new_node.bidirectional_ref = BinaryNode.BidirectRef{
-                        .bit_path_index = @intCast(u32, bit_path_index),
-                        .opaque_arcehetype_index = @intCast(u32, opaque_archetype_index),
-                    };
-
-                    break :archetype_create_blk true;
                 }
+
+                // get the type hashes and sizes
+                var type_hashes: [submitted_components.len]u64 = undefined;
+                var type_sizes: [submitted_components.len]usize = undefined;
+                {
+                    var encoding = new_encoding;
+                    var cursor: u32 = 0;
+                    for (0..new_component_count) |component_index| {
+                        const step = @ctz(encoding);
+                        std.debug.assert((encoding >> step) & 1 == 1);
+
+                        cursor += @intCast(u32, step);
+                        encoding = (encoding >> step) >> 1;
+
+                        type_hashes[component_index] = self.component_hashes[cursor];
+                        type_sizes[component_index] = self.component_sizes[cursor];
+
+                        cursor += 1;
+                    }
+                }
+
+                var new_archetype = try OpaqueArchetype.init(
+                    self.allocator,
+                    type_hashes[0..new_component_count],
+                    type_sizes[0..new_component_count],
+                );
+                errdefer new_archetype.deinit();
+
+                const opaque_archetype_index = self.archetypes.items.len;
+
+                // register archetype bit encoding
+                try self.bit_encodings.append(new_encoding);
+                errdefer _ = self.bit_encodings.pop();
+
+                try self.archetypes.append(new_archetype);
+                errdefer _ = self.archetypes.pop();
+
+                std.debug.assert(self.bit_encodings.items.len == self.archetypes.items.len);
+
+                new_archetype_index = opaque_archetype_index;
+                break :archetype_create_blk true;
             };
 
             var rhd = data[local_remove_component_index..old_component_count];
             std.mem.rotate([]u8, rhd, 1);
 
             // register the entity in the new archetype
-            try self.archetypes.items[new_node.bidirectional_ref.?.opaque_arcehetype_index].rawRegisterEntity(
+            const unwrapped_index = new_archetype_index.?;
+            try self.archetypes.items[unwrapped_index].rawRegisterEntity(
                 entity,
                 data[0..new_component_count],
             );
@@ -556,17 +400,23 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             // update entity reference
             self.entity_references.items[entity.id] = @intCast(
                 EntityRef,
-                new_node.bidirectional_ref.?.bit_path_index,
+                unwrapped_index,
             );
 
             return new_archetype_created;
         }
 
-        pub inline fn getTypeHashes(self: ArcheContainer, entity: Entity) ?[]const u64 {
-            // get node index, or return empty slice if entity is a void type
-            const node_index = self.entityToBinaryNodeIndex(entity) orelse return self.component_hashes[0..0];
+        pub inline fn encodingToArchetypeIndex(self: ArcheContainer, bit_encoding: BitEncoding) ?usize {
+            for (self.bit_encodings.items, 0..) |bit_encoding_item, bit_encoding_index| {
+                if (bit_encoding_item == bit_encoding) {
+                    return bit_encoding_index;
+                }
+            }
+            return null;
+        }
 
-            const opaque_archetype_index = self.nodes.items[node_index].bidirectional_ref.?.opaque_arcehetype_index;
+        pub inline fn getTypeHashes(self: ArcheContainer, entity: Entity) []const u64 {
+            const opaque_archetype_index = self.entity_references.items[entity.id];
             return self.archetypes.items[opaque_archetype_index].getTypeHashes();
         }
 
@@ -574,9 +424,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             // verify that component exist in storage
             _ = comptime componentIndex(Component);
 
-            // get node index, or return false if entity has void type
-            const node_index = self.entityToBinaryNodeIndex(entity) orelse return false;
-            const opaque_archetype_index = self.nodes.items[node_index].bidirectional_ref.?.opaque_arcehetype_index;
+            const opaque_archetype_index = self.entity_references.items[entity.id];
             return self.archetypes.items[opaque_archetype_index].hasComponent(Component);
         }
 
@@ -588,126 +436,47 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             allocator: Allocator,
             include_component_hashes: []const u64,
             exclude_component_hashes: []const u64,
-        ) error{ InvalidQuery, OutOfMemory }![]*OpaqueArchetype {
-            var include_bits: BitPath = 0;
+        ) error{OutOfMemory}![]*OpaqueArchetype {
+            var include_bits: BitEncoding = 0;
             for (include_component_hashes, 0..) |include_hash, i| {
                 include_bits |= blk: {
                     for (self.component_hashes[i..], i..) |stored_hash, step| {
                         if (include_hash == stored_hash) {
-                            break :blk @as(BitPath, 1) << @intCast(BitPathShift, step);
+                            break :blk @as(BitEncoding, 1) << @intCast(BitEncodingShift, step);
                         }
                     }
                     unreachable; // should be compile type guards before we reach this point ...
                 };
             }
 
-            var exclude_bits: BitPath = 0;
+            var exclude_bits: BitEncoding = 0;
             for (exclude_component_hashes, 0..) |exclude_hash, i| {
                 exclude_bits |= blk: {
                     for (self.component_hashes[i..], i..) |stored_hash, step| {
                         if (exclude_hash == stored_hash) {
-                            break :blk @as(BitPath, 1) << @intCast(BitPathShift, step);
+                            break :blk @as(BitEncoding, 1) << @intCast(BitEncodingShift, step);
                         }
                     }
                     unreachable; // should be compile type guards before we reach this point ...
                 };
             }
 
-            if (include_bits & exclude_bits != 0) {
-                // cant request components that are also excluded
-                return error.InvalidQuery;
-            }
+            // caller should verify this
+            std.debug.assert(include_bits & exclude_bits == 0);
 
             var resulting_archetypes = ArrayList(*OpaqueArchetype).init(allocator);
             errdefer resulting_archetypes.deinit();
 
-            // TODO: if total count is low, then it should be cheaper to just loop bit paths and match with including and excluding
+            // TODO: implement inplace zero alloc binary traversal
+            // TODO: benchmark between brute force and tree traversal
+            // https://www.geeksforgeeks.org/inorder-tree-traversal-without-recursion/
 
-            // We use morris traversal: source https://www.geeksforgeeks.org/inorder-tree-traversal-without-recursion/
-            var bit_location: BitPath = 0;
-            var current_node_index: usize = 0;
-            var current_node: *BinaryNode = &self.nodes.items[current_node_index];
-            search_loop: while (true) {
-                // TODO: comment!
-                if (current_node.child_indices[@enumToInt(Step.left)] == null) {
-                    current_node_index = current_node.child_indices[@enumToInt(Step.right)].?;
-                    current_node = &self.nodes.items[current_node_index];
-
-                    bit_location |= @as(BitPath, 1) << @intCast(BitPathShift, current_node.bit_offset);
-
-                    if ((bit_location & include_bits) == include_bits) {
-                        if (current_node.bidirectional_ref) |bidirection_ref| {
-                            try resulting_archetypes.append(&self.archetypes.items[bidirection_ref.opaque_arcehetype_index]);
-                        }
-                    }
-                } else {
-                    const pre_left_index = current_node.child_indices[@enumToInt(Step.left)].?;
-                    var predecessor: *BinaryNode = &self.nodes.items[pre_left_index];
-                    pre_loop: while (predecessor.child_indices[@enumToInt(Step.right)]) |right_child_index| {
-                        if (predecessor == current_node) {
-                            break :pre_loop;
-                        }
-
-                        predecessor = &self.nodes.items[right_child_index];
-                    }
-
-                    if (predecessor.child_indices[@enumToInt(Step.right)] == null) {
-                        predecessor.child_indices[@enumToInt(Step.right)] = @intCast(u32, current_node_index);
-                        current_node_index = current_node.child_indices[@enumToInt(Step.left)].?;
-                        current_node = &self.nodes.items[current_node_index];
-                    } else {
-                        predecessor.child_indices[@enumToInt(Step.right)] = null;
-
-                        if ((bit_location & include_bits) == include_bits) {
-                            if (current_node.bidirectional_ref) |bidirection_ref| {
-                                try resulting_archetypes.append(&self.archetypes.items[bidirection_ref.opaque_arcehetype_index]);
-                            }
-                        }
-
-                        if (current_node.child_indices[@enumToInt(Step.right)]) |right_index| {
-                            current_node_index = right_index;
-                            current_node = &self.nodes.items[current_node_index];
-
-                            bit_location |= @as(BitPath, 1) << @intCast(BitPathShift, current_node.bit_offset);
-                        } else {
-                            break :search_loop;
-                        }
-                    }
+            // brute force search of queried nodes which should be fast for smaller amount of nodes (limit of 1000-10000s of nodes)
+            for (self.bit_encodings.items, 0..) |bit_path, path_index| {
+                if ((bit_path & include_bits) == include_bits and (bit_path & exclude_bits == 0)) {
+                    try resulting_archetypes.append(&self.archetypes.items[path_index]);
                 }
             }
-
-            // search_loop: while (true) {
-            //     var did_step_down = false;
-
-            //     // if query does not care about next left step, then we can step left if we have a left node
-            //     if (include_bits & (1 << depth) == 0 and
-            //         exclude_bits & (1 << depth) == 0 and
-            //         current_node.child_indices[@enumToInt(Step.left)] != null)
-            //     {
-            //         const left_node_index = current_node.child_indices[@enumToInt(Step.left)].?;
-            //         current_node = self.nodes.items[left_node_index];
-
-            //         depth += 1;
-            //         did_step_down = true;
-
-            //         // if query does not care about next right step, then we can step right if we have a right node
-            //     } else if (exclude_bits & (1 << depth) == 0 and
-            //         current_node.child_indices[@enumToInt(Step.right)] != null)
-            //     {
-            //         const right_node_index = current_node.child_indices[@enumToInt(Step.left)].?;
-            //         current_node = self.nodes.items[right_node_index];
-
-            //         depth += 1;
-            //         did_step_down = true;
-            //     }
-
-            //     if (did_step_down == false) {}
-            // }
-            // for (self.node_bit_paths.items) |bit_path| {
-            //     if ((bit_path & include_bits) == include_bits and (bit_path & exclude_bits) == 0) {
-            //         resulting_archetypes.append()
-            //     }
-            // }
 
             return resulting_archetypes.toOwnedSlice();
         }
@@ -716,8 +485,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             const zone = ztracy.ZoneNC(@src(), "Container getComponent", Color.arche_container);
             defer zone.End();
 
-            const node_index = self.entityToBinaryNodeIndex(entity) orelse return error.ComponentMissing;
-            const opaque_archetype_index = self.nodes.items[node_index].bidirectional_ref.?.opaque_arcehetype_index;
+            const opaque_archetype_index = self.entity_references.items[entity.id];
 
             const component_get_info = @typeInfo(Component);
             switch (component_get_info) {
@@ -748,10 +516,6 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 }
                 break :blk info.Struct;
             };
-            if (arche_struct_info.fields.len == 0) {
-                // no storage should be created if initial state is empty
-                @compileError("called initializeEntityStorage with empty initial_state is illegal");
-            }
 
             // sort the types in the inital state to produce a valid binary path
             const sorted_initial_state_field_types = comptime sort_fields_blk: {
@@ -764,41 +528,18 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             };
 
             // calculate the bits that describe the path to the archetype of this entity
-            const initial_state_path_bits: BitPath = comptime bit_calc_blk: {
-                var bits: BitPath = 0;
+            const initial_bit_encoding: BitEncoding = comptime bit_calc_blk: {
+                var bits: BitEncoding = 0;
                 outer_loop: inline for (sorted_initial_state_field_types, 0..) |initial_state_field_type, field_index| {
-                    inline for (submitted_components[field_index..], 0..) |Component, comp_index| {
+                    inline for (submitted_components[field_index..], field_index..) |Component, comp_index| {
                         if (initial_state_field_type == Component) {
-                            bits |= 1 << (field_index + comp_index);
+                            bits |= 1 << comp_index;
                             continue :outer_loop;
                         }
                     }
                     @compileError(@typeName(initial_state_field_type) ++ " is not a World registered component type");
                 }
                 break :bit_calc_blk bits;
-            };
-
-            // get the node that will store the new entity and create the node path while required
-            var entity_node: *BinaryNode = node_search_blk: {
-                var state_path_bits = initial_state_path_bits;
-                var current_node = &self.nodes.items[0];
-                var loop_iter: u32 = 0;
-
-                while (state_path_bits != 0) : (state_path_bits >>= 1) {
-                    const step = @intCast(usize, state_path_bits & 1);
-                    if (current_node.child_indices[step]) |index| {
-                        current_node = &self.nodes.items[index];
-                    } else {
-                        const child_index = self.nodes.items.len;
-                        try self.nodes.append(BinaryNode.empty(child_index, loop_iter));
-
-                        current_node.child_indices[step] = @intCast(u32, child_index);
-                        current_node = &self.nodes.items[child_index];
-                        loop_iter += 1;
-                    }
-                }
-
-                break :node_search_blk current_node;
             };
 
             // generate a map from initial state to the internal storage order so we store binary data in the correct location
@@ -828,17 +569,14 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 }
             }
 
+            var new_archetype_index = self.encodingToArchetypeIndex(initial_bit_encoding);
+
             var new_archetype_created: bool = regiser_entity_blk: {
                 // if the archetype already exist
-                if (entity_node.bidirectional_ref) |ref| {
-                    try self.archetypes.items[ref.opaque_arcehetype_index].rawRegisterEntity(entity, &sorted_state_data);
+                if (new_archetype_index) |index| {
+                    try self.archetypes.items[index].rawRegisterEntity(entity, &sorted_state_data);
                     break :regiser_entity_blk false;
                 }
-
-                // register archetype bit path
-                const bit_path_index = self.node_bit_paths.items.len;
-                try self.node_bit_paths.append(initial_state_path_bits);
-                errdefer _ = self.node_bit_paths.pop();
 
                 comptime var type_hashes: [sorted_initial_state_field_types.len]u64 = undefined;
                 comptime var type_sizes: [sorted_initial_state_field_types.len]usize = undefined;
@@ -854,45 +592,20 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 try self.archetypes.append(new_archetype);
                 errdefer _ = self.archetypes.pop();
 
+                try self.bit_encodings.append(initial_bit_encoding);
+                errdefer _ = self.bit_encodings.pop();
+
                 try self.archetypes.items[opaque_archetype_index].rawRegisterEntity(entity, &sorted_state_data);
                 // TODO: errdefer self.archetypes.items[opaque_archetype_index].removeEntity(); https://github.com/Avokadoen/ecez/issues/118
 
-                // update this entity's node to contain the new archetype
-                entity_node.bidirectional_ref = BinaryNode.BidirectRef{
-                    .bit_path_index = @intCast(u32, bit_path_index),
-                    .opaque_arcehetype_index = @intCast(u32, opaque_archetype_index),
-                };
-
+                new_archetype_index = opaque_archetype_index;
                 break :regiser_entity_blk true;
             };
 
             // register a reference to able to locate entity
-            self.entity_references.items[entity.id] = @intCast(EntityRef, entity_node.bidirectional_ref.?.bit_path_index);
+            self.entity_references.items[entity.id] = @intCast(EntityRef, new_archetype_index.?);
 
             return new_archetype_created;
-        }
-
-        inline fn entityToBinaryNodeIndex(self: ArcheContainer, entity: Entity) ?usize {
-            const ref = switch (self.entity_references.items[entity.id]) {
-                void_index => return null, // void type
-                else => |index| index,
-            };
-            const path = self.node_bit_paths.items[ref];
-
-            return self.bitPathToBinaryNodeIndex(path);
-        }
-
-        inline fn bitPathToBinaryNodeIndex(self: ArcheContainer, path: BitPath) usize {
-            var local_path = path;
-
-            var current_node = &self.nodes.items[0];
-            while (local_path != 0) : (local_path >>= 1) {
-                const step = @intCast(usize, local_path & 1);
-                const index = current_node.child_indices[step].?;
-                current_node = &self.nodes.items[index];
-            }
-
-            return @intCast(usize, current_node.ref.self_index);
         }
 
         inline fn componentIndex(comptime Component: type) comptime_int {
@@ -978,7 +691,7 @@ test "ArcheContainer getTypeHashes works" {
     try testing.expectEqualSlices(
         u64,
         &[_]u64{ ecez_query.hashType(Testing.Component.A), ecez_query.hashType(Testing.Component.C) },
-        container.getTypeHashes(entity).?,
+        container.getTypeHashes(entity),
     );
 }
 

@@ -30,7 +30,7 @@ This section contain each chunk defined by ezby and how they can be parsed.
 
 ### SHAR - SharedState chunk (TODO)
 
-One SHAR(e) chunk contain one shareable entry. This include the byte hash and size of the shared state and the bytes for the state.
+One SHAR(E) chunk contain one shareable entry. This include the byte hash and size of the shared state and the bytes for the state.
 
 | <div style="width:155px">Data</div> |     Bytes        | <div style="width:200px">Description</div> |
 |:------------------------------------|:----------------:|:-------------------------------------------|
