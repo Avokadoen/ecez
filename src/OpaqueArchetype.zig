@@ -12,8 +12,8 @@ const Entity = entity_type.Entity;
 const EntityMap = entity_type.Map;
 
 const TypeInfo = struct {
-    storage_index: usize,
-    size: usize,
+    storage_index: u32,
+    size: u32,
 };
 const TypeContext = struct {
     pub fn hash(self: TypeContext, k: u64) u32 {
@@ -43,7 +43,7 @@ component_storage: []ArrayList(u8),
 
 void_component: [0]u8 = undefined,
 
-pub fn init(allocator: Allocator, type_hashes: []const u64, type_sizes: []const usize) error{OutOfMemory}!OpaqueArchetype {
+pub fn init(allocator: Allocator, type_hashes: []const u64, type_sizes: []const u32) error{OutOfMemory}!OpaqueArchetype {
     std.debug.assert(type_hashes.len == type_sizes.len);
 
     const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype init", Color.opaque_archetype);
@@ -55,7 +55,7 @@ pub fn init(allocator: Allocator, type_hashes: []const u64, type_sizes: []const 
     try type_info.ensureTotalCapacity(type_hashes.len);
     for (type_hashes, 0..) |hash, i| {
         type_info.putAssumeCapacity(hash, TypeInfo{
-            .storage_index = i,
+            .storage_index = @intCast(u32, i),
             .size = type_sizes[i],
         });
     }
@@ -297,12 +297,12 @@ const C = Testing.Component.C;
 const hashType = @import("query.zig").hashType;
 
 test "init() + deinit() is idempotent" {
-    var archetype = try OpaqueArchetype.init(testing.allocator, &[_]u64{ 0, 1, 2 }, &[_]usize{ 0, 1, 2 });
+    var archetype = try OpaqueArchetype.init(testing.allocator, &[_]u64{ 0, 1, 2 }, &[_]u32{ 0, 1, 2 });
     archetype.deinit();
 }
 
 test "hasComponent returns expected values" {
-    var archetype = try OpaqueArchetype.init(testing.allocator, &[_]u64{hashType(A)}, &[_]usize{@sizeOf(A)});
+    var archetype = try OpaqueArchetype.init(testing.allocator, &[_]u64{hashType(A)}, &[_]u32{@sizeOf(A)});
     defer archetype.deinit();
 
     try testing.expectEqual(true, archetype.hasComponent(Testing.Component.A));
@@ -311,7 +311,7 @@ test "hasComponent returns expected values" {
 
 test "getComponent returns expected value ptrs" {
     const hashes = comptime [_]u64{ hashType(A), hashType(B), hashType(C) };
-    const sizes = comptime [_]usize{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
+    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
 
     var archetype = try OpaqueArchetype.init(testing.allocator, &hashes, &sizes);
     defer archetype.deinit();
@@ -340,7 +340,7 @@ test "getComponent returns expected value ptrs" {
 }
 
 test "rawHasComponent identify existing components" {
-    var archetype = try OpaqueArchetype.init(testing.allocator, &[_]u64{ 0, 1 }, &[_]usize{ 0, 1 });
+    var archetype = try OpaqueArchetype.init(testing.allocator, &[_]u64{ 0, 1 }, &[_]u32{ 0, 1 });
     defer archetype.deinit();
 
     try testing.expectEqual(true, archetype.rawHasComponent(0));
@@ -350,7 +350,7 @@ test "rawHasComponent identify existing components" {
 
 test "rawGetComponent retrieves correct component" {
     const hashes = comptime [_]u64{ hashType(A), hashType(B), hashType(C) };
-    const sizes = comptime [_]usize{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
+    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
 
     var archetype = try OpaqueArchetype.init(testing.allocator, &hashes, &sizes);
     defer archetype.deinit();
@@ -384,7 +384,7 @@ test "rawGetComponent retrieves correct component" {
 
 test "rawGetComponent fails on invalid request" {
     const hashes = comptime [_]u64{hashType(C)};
-    const sizes = comptime [_]usize{@sizeOf(C)};
+    const sizes = comptime [_]u32{@sizeOf(C)};
 
     var archetype = try OpaqueArchetype.init(testing.allocator, &hashes, &sizes);
     defer archetype.deinit();
@@ -400,7 +400,7 @@ test "rawGetComponent fails on invalid request" {
 
 test "rawSwapRemoveEntity removes entity and components" {
     const hashes = comptime [_]u64{ hashType(A), hashType(B), hashType(C) };
-    const sizes = comptime [_]usize{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
+    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
 
     var archetype = try OpaqueArchetype.init(testing.allocator, &hashes, &sizes);
     defer archetype.deinit();
@@ -470,7 +470,7 @@ test "rawSwapRemoveEntity removes entity and components" {
 
 test "rawGetStorageData retrieves components view" {
     const hashes = comptime [_]u64{ hashType(A), hashType(B), hashType(C) };
-    const sizes = comptime [_]usize{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
+    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
     var archetype = try OpaqueArchetype.init(testing.allocator, &hashes, &sizes);
     defer archetype.deinit();
 

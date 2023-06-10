@@ -187,7 +187,7 @@ const Entity = entity_type.Entity;
 
 test "value iterating works" {
     const hashes = comptime [_]u64{ hashType(A), hashType(B), hashType(C) };
-    const sizes = comptime [_]usize{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
+    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
 
     var archetype_ab = try OpaqueArchetype.init(testing.allocator, hashes[0..2], sizes[0..2]);
     defer archetype_ab.deinit();
@@ -268,7 +268,7 @@ test "value iterating works" {
 
 test "ptr iterating works and can mutate storage data" {
     const hashes = comptime [_]u64{ hashType(A), hashType(B), hashType(C) };
-    const sizes = comptime [_]usize{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
+    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
 
     var archetype = try OpaqueArchetype.init(testing.allocator, &hashes, &sizes);
     defer archetype.deinit();
@@ -308,7 +308,7 @@ test "ptr iterating works and can mutate storage data" {
 
 test "value at index works" {
     const hashes = comptime [_]u64{ hashType(A), hashType(B), hashType(C) };
-    const sizes = comptime [_]usize{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
+    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
 
     var archetype_ab = try OpaqueArchetype.init(testing.allocator, hashes[0..2], sizes[0..2]);
     defer archetype_ab.deinit();
@@ -339,7 +339,7 @@ test "value at index works" {
         const A_Iterator = FromTypes(&[_][]const u8{"a"}, &[_]type{A}, hashes[0..1]);
         var iter = A_Iterator.init(std.testing.allocator, &[_]*OpaqueArchetype{ &archetype_ab, &archetype_abc });
 
-        for (&[_]usize{ 0, 99, 100, 199 }) |index| {
+        for (&[_]u32{ 0, 99, 100, 199 }) |index| {
             const result = iter.at(index).?;
             try testing.expectEqual(
                 Testing.Component.A{ .value = @intCast(u32, index) },
@@ -353,7 +353,7 @@ test "value at index works" {
         const B_Iterator = FromTypes(&[_][]const u8{"b"}, &[_]type{B}, hashes[1..2]);
         var iter = B_Iterator.init(std.testing.allocator, &[_]*OpaqueArchetype{ &archetype_ab, &archetype_abc });
 
-        for (&[_]usize{ 0, 99, 100, 199 }) |index| {
+        for (&[_]u32{ 0, 99, 100, 199 }) |index| {
             const result = iter.at(index).?;
             try testing.expectEqual(
                 Testing.Component.B{ .value = @intCast(u8, index) },
@@ -367,7 +367,7 @@ test "value at index works" {
         const A_B_Iterator = FromTypes(&[_][]const u8{ "a", "b" }, &[_]type{ A, B }, hashes[0..2]);
         var iter = A_B_Iterator.init(std.testing.allocator, &[_]*OpaqueArchetype{ &archetype_ab, &archetype_abc });
 
-        for (&[_]usize{ 0, 99, 100, 199 }) |index| {
+        for (&[_]u32{ 0, 99, 100, 199 }) |index| {
             const result = iter.at(index).?;
 
             try testing.expectEqual(
@@ -387,7 +387,7 @@ test "value at index works" {
         const A_B_C_Iterator = FromTypes(&[_][]const u8{ "a", "b", "c" }, &[_]type{ A, B, C }, hashes[0..3]);
         var iter = A_B_C_Iterator.init(std.testing.allocator, &[_]*OpaqueArchetype{&archetype_abc});
 
-        for (&[_]usize{ 0, 99 }) |index| {
+        for (&[_]u32{ 0, 99 }) |index| {
             const result = iter.at(index).?;
 
             try testing.expectEqual(
@@ -408,7 +408,7 @@ test "value at index works" {
 
 test "ptr at works and can mutate storage data" {
     const hashes = comptime [_]u64{ hashType(A), hashType(B), hashType(C) };
-    const sizes = comptime [_]usize{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
+    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
 
     var archetype = try OpaqueArchetype.init(testing.allocator, &hashes, &sizes);
     defer archetype.deinit();
@@ -426,18 +426,18 @@ test "ptr at works and can mutate storage data" {
     {
         const A_B_C_Iterator = FromTypes(&[_][]const u8{ "a_ptr", "b_ptr", "c" }, &[_]type{ *A, *B, C }, hashes[0..3]);
         var iter = A_B_C_Iterator.init(std.testing.allocator, &[_]*OpaqueArchetype{&archetype});
-        for (&[_]usize{ 0, 99 }) |index| {
+        for (&[_]u32{ 0, 99 }) |index| {
             const result = iter.at(index).?;
 
             result.a_ptr.value += @as(u32, 1);
             result.b_ptr.value += @as(u8, 1);
         }
 
-        for (&[_]usize{ 0, 99 }) |index| {
+        for (&[_]u32{ 0, 99 }) |index| {
             const result = iter.at(index).?;
 
-            try testing.expectEqual(index + 1, @intCast(usize, result.a_ptr.value));
-            try testing.expectEqual(index + 1, @intCast(usize, result.b_ptr.value));
+            try testing.expectEqual(index + 1, @intCast(u32, result.a_ptr.value));
+            try testing.expectEqual(index + 1, @intCast(u32, result.b_ptr.value));
         }
         try testing.expectEqual(@as(?A_B_C_Iterator.Item, null), iter.at(100));
     }

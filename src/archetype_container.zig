@@ -93,7 +93,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
         entity_references: ArrayList(EntityRef),
 
         component_hashes: [submitted_components.len]u64,
-        component_sizes: [submitted_components.len]usize,
+        component_sizes: [submitted_components.len]u32,
 
         empty_bytes: [0]u8,
 
@@ -110,13 +110,13 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             errdefer entity_references.deinit();
 
             comptime var component_hashes: [submitted_components.len]u64 = undefined;
-            comptime var component_sizes: [submitted_components.len]usize = undefined;
+            comptime var component_sizes: [submitted_components.len]u32 = undefined;
             inline for (component_info, &component_hashes, &component_sizes) |info, *hash, *size| {
                 hash.* = info.hash;
                 size.* = @sizeOf(info.type);
             }
 
-            const void_archetype = try OpaqueArchetype.init(allocator, &[0]u64{}, &[0]usize{});
+            const void_archetype = try OpaqueArchetype.init(allocator, &[0]u64{}, &[0]u32{});
             archetypes.appendAssumeCapacity(void_archetype);
             bit_encodings.appendAssumeCapacity(@as(BitEncoding, 0));
 
@@ -222,7 +222,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
                         // get the type hashes and sizes
                         var type_hashes: [submitted_components.len]u64 = undefined;
-                        var type_sizes: [submitted_components.len]usize = undefined;
+                        var type_sizes: [submitted_components.len]u32 = undefined;
                         {
                             var encoding = new_encoding;
                             var assigned_components: u32 = 0;
@@ -347,7 +347,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
                 // get the type hashes and sizes
                 var type_hashes: [submitted_components.len]u64 = undefined;
-                var type_sizes: [submitted_components.len]usize = undefined;
+                var type_sizes: [submitted_components.len]u32 = undefined;
                 {
                     var encoding = new_encoding;
                     var cursor: u32 = 0;
@@ -468,6 +468,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             errdefer resulting_archetypes.deinit();
 
             // TODO: implement inplace zero alloc binary traversal
+            //       we can actually use stack array, biggest stack for traversal is submitted_component.len :)
             // TODO: benchmark between brute force and tree traversal
             // https://www.geeksforgeeks.org/inorder-tree-traversal-without-recursion/
 
@@ -579,7 +580,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                 }
 
                 comptime var type_hashes: [sorted_initial_state_field_types.len]u64 = undefined;
-                comptime var type_sizes: [sorted_initial_state_field_types.len]usize = undefined;
+                comptime var type_sizes: [sorted_initial_state_field_types.len]u32 = undefined;
                 inline for (&type_hashes, &type_sizes, sorted_initial_state_field_types) |*type_hash, *type_size, Component| {
                     type_hash.* = comptime ecez_query.hashType(Component);
                     type_size.* = comptime @sizeOf(Component);

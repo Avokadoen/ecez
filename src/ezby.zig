@@ -266,7 +266,7 @@ pub const Chunk = struct {
         /// Run-time type information
         pub const Rtti = u64;
         pub const HashList = [*]const u64;
-        pub const SizeList = [*]const u64;
+        pub const SizeList = [*]const u32;
     };
 
     pub const Arch = packed struct {
@@ -279,7 +279,7 @@ pub const Chunk = struct {
         /// Run-time type information
         pub const Rtti = packed struct {
             hash: u64,
-            size: u64,
+            size: u32,
         };
         pub const RttiList = [*]const Rtti;
 
