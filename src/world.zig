@@ -77,7 +77,11 @@ fn WorldIntermediate(comptime prev_components: anytype, comptime prev_shared_sta
     };
 }
 
-fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytype, comptime events: anytype) type {
+fn CreateWorld(
+    comptime components: anytype,
+    comptime shared_state_types: anytype,
+    comptime events: anytype,
+) type {
     @setEvalBranchQuota(10_000);
     const component_types = blk: {
         const components_info = @typeInfo(@TypeOf(components));
@@ -94,9 +98,10 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
         break :blk query.sortTypes(&types);
     };
 
-    const Container = archetype_container.FromComponents(&component_types);
+    const TypeBitMask = meta.BitMaskFromComponents(&component_types);
+    const CacheMask = archetype_cache.ArchetypeCacheMask(&component_types, TypeBitMask.Bits);
+    const Container = archetype_container.FromComponents(&component_types, TypeBitMask);
     const SharedStateStorage = meta.SharedStateStorage(shared_state_types);
-    const CacheMask = archetype_cache.ArchetypeCacheMask(&components);
 
     const event_count = meta.countAndVerifyEvents(events);
     const EventCacheStorages = blk: {
@@ -264,7 +269,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
 
             var create_result = try self.container.createEntity(entity_state);
             if (create_result.new_archetype_container) {
-                self.markAllCacheMasks(create_result.entity);
+                self.markAllTouchedCacheMasks(create_result.entity);
             }
             return create_result.entity;
         }
@@ -279,7 +284,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
 
             const new_archetype_created = try self.container.setComponent(entity, component);
             if (new_archetype_created) {
-                self.markAllCacheMasks(entity);
+                self.markAllTouchedCacheMasks(entity);
             }
         }
 
@@ -292,7 +297,7 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
             defer zone.End();
             const new_archetype_created = try self.container.removeComponent(entity, Component);
             if (new_archetype_created) {
-                self.markAllCacheMasks(entity);
+                self.markAllTouchedCacheMasks(entity);
             }
         }
 
@@ -674,10 +679,12 @@ fn CreateWorld(comptime components: anytype, comptime shared_state_types: anytyp
             @compileError(@typeName(Shared) ++ " is not a shared state");
         }
 
-        inline fn markAllCacheMasks(self: *World, entity: Entity) void {
-            const type_hashes = self.container.getTypeHashes(entity);
+        /// Given an entity has triggered an archetype creation, we should mark our caches as invalid
+        /// since there are potentially new results to queries
+        inline fn markAllTouchedCacheMasks(self: *World, entity: Entity) void {
+            const bit_encoding = self.container.getEntityBitEncoding(entity);
             for (&self.event_cache_masks) |*mask| {
-                mask.setIncoherentBitWithTypeHashes(type_hashes);
+                mask.setIncoherent(bit_encoding);
             }
         }
 

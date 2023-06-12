@@ -6,12 +6,7 @@ const OpaqueArchetype = @import("OpaqueArchetype.zig");
 // TODO: reduce system_count by checking which has identitcal arguments
 
 /// Create a cache which utilize a bitmask to check for incoherence
-pub fn ArchetypeCacheMask(comptime components: []const type) type {
-    const BitMask = @Type(std.builtin.Type{ .Int = .{
-        .signedness = .unsigned,
-        .bits = components.len,
-    } });
-
+pub fn ArchetypeCacheMask(comptime components: []const type, comptime BitMask: type) type {
     return struct {
         const Self = @This();
 
@@ -29,7 +24,8 @@ pub fn ArchetypeCacheMask(comptime components: []const type) type {
             self.mask = ~@as(BitMask, 0);
         }
 
-        pub fn isCoherent(self: Self, comptime other_components: []const type) bool {
+        /// Compile-time compute "other" mask from "other_components" and check if the other mask has any collision with self
+        pub inline fn isCoherent(self: Self, comptime other_components: []const type) bool {
             const other_comp_positions = comptime blk: {
                 var positions: [other_components.len]usize = undefined;
                 for (other_components, 0..) |OtherComponent, pos_index| {
@@ -45,23 +41,16 @@ pub fn ArchetypeCacheMask(comptime components: []const type) type {
                 }
                 break :blk mask;
             };
+
             return (self.mask & other_mask) == 0;
         }
 
-        pub inline fn setIncoherentBit(self: *Self, comptime Component: type) void {
+        pub inline fn setIncoherentBitWithComponent(self: *Self, comptime Component: type) void {
             self.mask |= (1 << offsetOf(Component));
         }
 
-        pub fn setIncoherentBitWithTypeHashes(self: *Self, type_hashes: []const u64) void {
-            outer: for (type_hashes) |hash| {
-                inline for (components, 0..) |Component, i| {
-                    if (hash == query.hashType(Component)) {
-                        self.mask |= (1 << i);
-                        continue :outer;
-                    }
-                }
-                unreachable;
-            }
+        pub inline fn setIncoherent(self: *Self, bitmask: BitMask) void {
+            self.mask |= bitmask;
         }
 
         pub inline fn setAllCoherent(self: *Self) void {
@@ -126,66 +115,73 @@ pub fn ArchetypeCacheStorage(comptime storage_count: comptime_int) type {
 
 const Testing = @import("Testing.zig");
 const testing = std.testing;
+const meta = @import("meta.zig");
+const TestBitMask = meta.BitMaskFromComponents(&Testing.AllComponentsArr).Bits;
+const TestArcheCacheMask = ArchetypeCacheMask(
+    &Testing.AllComponentsArr,
+    TestBitMask,
+);
 
 test "ArchetypeCacheMask init initialize mask bits to 1" {
-    const cache = ArchetypeCacheMask(&Testing.AllComponentsArr).init();
+    const cache = TestArcheCacheMask.init();
 
     // this will break if we update Testing.AllComponentsArr
     try testing.expectEqual(@as(u3, 0b111), cache.mask);
 }
 
 test "ArchetypeCacheMask reset set mask bits to 0" {
-    var cache = ArchetypeCacheMask(&Testing.AllComponentsArr).init();
+    var cache = TestArcheCacheMask.init();
     cache.setAllCoherent();
     try testing.expectEqual(@as(u3, 0b000), cache.mask);
 }
 
-test "ArchetypeCacheMask setIncoherentBit assigns a given bit to the mask" {
-    var cache = ArchetypeCacheMask(&Testing.AllComponentsArr).init();
+test "ArchetypeCacheMask setIncoherentBitWithComponent assigns a given bit to the mask" {
+    var cache = TestArcheCacheMask.init();
 
     cache.setAllCoherent();
-    cache.setIncoherentBit(Testing.Component.A);
+    cache.setIncoherentBitWithComponent(Testing.Component.A);
     try testing.expectEqual(@as(u3, 0b001), cache.mask);
 
     cache.setAllCoherent();
-    cache.setIncoherentBit(Testing.Component.B);
+    cache.setIncoherentBitWithComponent(Testing.Component.B);
     try testing.expectEqual(@as(u3, 0b010), cache.mask);
 
     cache.setAllCoherent();
-    cache.setIncoherentBit(Testing.Component.C);
+    cache.setIncoherentBitWithComponent(Testing.Component.C);
     try testing.expectEqual(@as(u3, 0b100), cache.mask);
 
-    cache.setIncoherentBit(Testing.Component.A);
+    cache.setIncoherentBitWithComponent(Testing.Component.A);
     try testing.expectEqual(@as(u3, 0b101), cache.mask);
 
-    cache.setIncoherentBit(Testing.Component.B);
+    cache.setIncoherentBitWithComponent(Testing.Component.B);
     try testing.expectEqual(@as(u3, 0b111), cache.mask);
 }
 
-test "ArchetypeCacheMask setIncoherentBitWithTypeHashes assigns given bits to the mask" {
-    var cache = ArchetypeCacheMask(&Testing.AllComponentsArr).init();
+test "ArchetypeCacheMask setIncoherent assigns given bits to the mask" {
+    var cache = TestArcheCacheMask.init();
     cache.setAllCoherent();
-    cache.setIncoherentBitWithTypeHashes(&[_]u64{ query.hashType(Testing.Component.A), query.hashType(Testing.Component.C) });
+    // set A and C as incoherent
+    cache.setIncoherent(@as(TestBitMask, 0b101));
     try testing.expectEqual(@as(u3, 0b101), cache.mask);
 }
 
 test "ArchetypeCacheMask isCoherent returns true when type is coherent" {
-    var cache = ArchetypeCacheMask(&Testing.AllComponentsArr).init();
+    var cache = TestArcheCacheMask.init();
     cache.setAllCoherent();
 
     try testing.expectEqual(true, cache.isCoherent(&Testing.AllComponentsArr));
 
-    cache.setIncoherentBit(Testing.Component.B);
+    cache.setIncoherentBitWithComponent(Testing.Component.B);
     try testing.expectEqual(true, cache.isCoherent(&[_]type{ Testing.Component.A, Testing.Component.C }));
 }
 
 test "ArchetypeCacheMask isCoherent returns false when type is incoherent" {
-    var cache = ArchetypeCacheMask(&Testing.AllComponentsArr).init();
+    var cache = TestArcheCacheMask.init();
 
     try testing.expectEqual(false, cache.isCoherent(&Testing.AllComponentsArr));
 
     cache.setAllCoherent();
-    cache.setIncoherentBit(Testing.Component.A);
-    cache.setIncoherentBit(Testing.Component.C);
+    cache.setIncoherentBitWithComponent(Testing.Component.A);
+    cache.setIncoherentBitWithComponent(Testing.Component.C);
     try testing.expectEqual(false, cache.isCoherent(&[_]type{ Testing.Component.A, Testing.Component.C }));
 }

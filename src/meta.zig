@@ -641,6 +641,34 @@ pub fn ComponentStruct(comptime field_names: []const []const u8, comptime types:
     return @Type(RtrTypeInfo);
 }
 
+pub fn BitMaskFromComponents(comptime submitted_components: []const type) type {
+    return struct {
+        // A single integer that represent the full path of an opaque archetype
+        pub const Bits = @Type(std.builtin.Type{ .Int = .{
+            .signedness = .unsigned,
+            .bits = submitted_components.len,
+        } });
+
+        pub const Shift = @Type(std.builtin.Type{ .Int = .{
+            .signedness = .unsigned,
+            .bits = std.math.log2_int_ceil(Bits, submitted_components.len),
+        } });
+
+        pub fn bitsFromComponents(comptime other_components: []const type) Bits {
+            comptime var bits: Bits = 0;
+            outer_for: inline for (other_components) |OtherComponent| {
+                inline for (submitted_components, 0..) |MaskComponent, bit_offset| {
+                    if (MaskComponent == OtherComponent) {
+                        bits |= 1 << bit_offset;
+                        continue :outer_for;
+                    }
+                }
+                @compileError(@tagName(OtherComponent) ++ " is not part of submitted components");
+            }
+        }
+    };
+}
+
 /// Given a slice of structures, count how many contains the slice of types t
 pub fn countRelevantStructuresContainingTs(comptime structures: []const type, comptime t: []const type) comptime_int {
     comptime var count = 0;

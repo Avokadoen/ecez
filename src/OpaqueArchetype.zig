@@ -101,10 +101,6 @@ pub fn hasComponent(self: OpaqueArchetype, comptime T: type) bool {
     return self.rawHasComponent(comptime hashType(T));
 }
 
-pub inline fn getTypeHashes(self: OpaqueArchetype) []const u64 {
-    return self.type_info.keys();
-}
-
 /// Retrieve an entity's component as a pointer
 pub fn getComponent(self: OpaqueArchetype, entity: Entity, comptime T: type) ecez_error.ArchetypeError!*T {
     if (@sizeOf(T) == 0) {

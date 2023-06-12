@@ -24,7 +24,7 @@ const Testing = @import("Testing.zig");
 const ecez_error = @import("error.zig");
 const StorageError = ecez_error.StorageError;
 
-pub fn FromComponents(comptime submitted_components: []const type) type {
+pub fn FromComponents(comptime submitted_components: []const type, comptime BitMask: type) type {
     const ComponentInfo = struct {
         hash: u64,
         type: type,
@@ -74,22 +74,11 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
         const void_index = 0;
 
-        // A single integer that represent the full path of an opaque archetype
-        pub const BitEncoding = @Type(std.builtin.Type{ .Int = .{
-            .signedness = .unsigned,
-            .bits = submitted_components.len,
-        } });
-
-        pub const BitEncodingShift = @Type(std.builtin.Type{ .Int = .{
-            .signedness = .unsigned,
-            .bits = std.math.log2_int_ceil(BitEncoding, submitted_components.len),
-        } });
-
         const ArchetypeIndex = u32;
 
         allocator: Allocator,
         archetypes: ArrayList(OpaqueArchetype),
-        bit_encodings: ArrayList(BitEncoding),
+        bit_encodings: ArrayList(BitMask.Bits),
         entity_references: ArrayList(EntityRef),
 
         component_hashes: [submitted_components.len]u64,
@@ -103,7 +92,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             var archetypes = try ArrayList(OpaqueArchetype).initCapacity(allocator, pre_alloc_amount);
             errdefer archetypes.deinit();
 
-            var bit_encodings = try ArrayList(BitEncoding).initCapacity(allocator, pre_alloc_amount);
+            var bit_encodings = try ArrayList(BitMask.Bits).initCapacity(allocator, pre_alloc_amount);
             errdefer bit_encodings.deinit();
 
             var entity_references = try ArrayList(EntityRef).initCapacity(allocator, pre_alloc_amount);
@@ -118,7 +107,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
 
             const void_archetype = try OpaqueArchetype.init(allocator, &[0]u64{}, &[0]u32{});
             archetypes.appendAssumeCapacity(void_archetype);
-            bit_encodings.appendAssumeCapacity(@as(BitEncoding, 0));
+            bit_encodings.appendAssumeCapacity(@as(BitMask.Bits, 0));
 
             return ArcheContainer{
                 .allocator = allocator,
@@ -199,7 +188,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                     const new_component_global_index = comptime componentIndex(@TypeOf(component));
 
                     const old_bit_encoding = self.bit_encodings.items[current_bit_index];
-                    const new_bit = @as(BitEncoding, 1 << new_component_global_index);
+                    const new_bit = @as(BitMask.Bits, 1 << new_component_global_index);
                     const new_encoding = old_bit_encoding | new_bit;
 
                     // we need the index of the new component in the sequence of components are tied to the entity
@@ -228,7 +217,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
                             var assigned_components: u32 = 0;
                             var cursor: u32 = 0;
                             for (0..total_local_components) |component_index| {
-                                const step = @intCast(BitEncodingShift, @ctz(encoding));
+                                const step = @intCast(BitMask.Shift, @ctz(encoding));
                                 std.debug.assert(((encoding >> step) & 1) == 1);
 
                                 cursor += step;
@@ -326,7 +315,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             // TODO: handle error, this currently can lead to corrupt entities!
 
             const global_remove_component_index = comptime componentIndex(Component);
-            const remove_bit = @as(BitEncoding, 1 << global_remove_component_index);
+            const remove_bit = @as(BitMask.Bits, 1 << global_remove_component_index);
             const new_encoding = old_encoding & ~remove_bit;
 
             var local_remove_component_index: usize = remove_index_calc_blk: {
@@ -406,7 +395,7 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             return new_archetype_created;
         }
 
-        pub inline fn encodingToArchetypeIndex(self: ArcheContainer, bit_encoding: BitEncoding) ?usize {
+        pub inline fn encodingToArchetypeIndex(self: ArcheContainer, bit_encoding: BitMask.Bits) ?usize {
             for (self.bit_encodings.items, 0..) |bit_encoding_item, bit_encoding_index| {
                 if (bit_encoding_item == bit_encoding) {
                     return bit_encoding_index;
@@ -415,9 +404,9 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             return null;
         }
 
-        pub inline fn getTypeHashes(self: ArcheContainer, entity: Entity) []const u64 {
-            const opaque_archetype_index = self.entity_references.items[entity.id];
-            return self.archetypes.items[opaque_archetype_index].getTypeHashes();
+        pub inline fn getEntityBitEncoding(self: ArcheContainer, entity: Entity) BitMask.Bits {
+            const encoding_index = self.entity_references.items[entity.id];
+            return self.bit_encodings.items[encoding_index];
         }
 
         pub inline fn hasComponent(self: ArcheContainer, entity: Entity, comptime Component: type) bool {
@@ -437,24 +426,24 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             include_component_hashes: []const u64,
             exclude_component_hashes: []const u64,
         ) error{OutOfMemory}![]*OpaqueArchetype {
-            var include_bits: BitEncoding = 0;
+            var include_bits: BitMask.Bits = 0;
             for (include_component_hashes, 0..) |include_hash, i| {
                 include_bits |= blk: {
                     for (self.component_hashes[i..], i..) |stored_hash, step| {
                         if (include_hash == stored_hash) {
-                            break :blk @as(BitEncoding, 1) << @intCast(BitEncodingShift, step);
+                            break :blk @as(BitMask.Bits, 1) << @intCast(BitMask.Shift, step);
                         }
                     }
                     unreachable; // should be compile type guards before we reach this point ...
                 };
             }
 
-            var exclude_bits: BitEncoding = 0;
+            var exclude_bits: BitMask.Bits = 0;
             for (exclude_component_hashes, 0..) |exclude_hash, i| {
                 exclude_bits |= blk: {
                     for (self.component_hashes[i..], i..) |stored_hash, step| {
                         if (exclude_hash == stored_hash) {
-                            break :blk @as(BitEncoding, 1) << @intCast(BitEncodingShift, step);
+                            break :blk @as(BitMask.Bits, 1) << @intCast(BitMask.Shift, step);
                         }
                     }
                     unreachable; // should be compile type guards before we reach this point ...
@@ -529,8 +518,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
             };
 
             // calculate the bits that describe the path to the archetype of this entity
-            const initial_bit_encoding: BitEncoding = comptime bit_calc_blk: {
-                var bits: BitEncoding = 0;
+            const initial_bit_encoding: BitMask.Bits = comptime bit_calc_blk: {
+                var bits: BitMask.Bits = 0;
                 outer_loop: inline for (sorted_initial_state_field_types, 0..) |initial_state_field_type, field_index| {
                     inline for (submitted_components[field_index..], field_index..) |Component, comp_index| {
                         if (initial_state_field_type == Component) {
@@ -620,7 +609,8 @@ pub fn FromComponents(comptime submitted_components: []const type) type {
     };
 }
 
-const TestContainer = FromComponents(&Testing.AllComponentsArr);
+const TestBitmask = meta.BitMaskFromComponents(&Testing.AllComponentsArr);
+const TestContainer = FromComponents(&Testing.AllComponentsArr, TestBitmask);
 
 test "ArcheContainer init + deinit is idempotent" {
     var container = try TestContainer.init(testing.allocator);
@@ -679,7 +669,7 @@ test "ArcheContainer removeComponent & getComponent works" {
     try testing.expectEqual(false, container.hasComponent(entity, Testing.Component.C));
 }
 
-test "ArcheContainer getTypeHashes works" {
+test "ArcheContainer getEntityBitEncoding works" {
     var container = try TestContainer.init(testing.allocator);
     defer container.deinit();
 
@@ -689,11 +679,7 @@ test "ArcheContainer getTypeHashes works" {
     };
     const entity = (try container.createEntity(initial_state)).entity;
 
-    try testing.expectEqualSlices(
-        u64,
-        &[_]u64{ ecez_query.hashType(Testing.Component.A), ecez_query.hashType(Testing.Component.C) },
-        container.getTypeHashes(entity),
-    );
+    try testing.expectEqual(@as(TestBitmask.Bits, 0b101), container.getEntityBitEncoding(entity));
 }
 
 test "ArcheContainer hasComponent works" {
