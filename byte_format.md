@@ -1,5 +1,7 @@
 # ECEZ byte format - .ezby
 
+CURRENTLY NOT PRESENT BECAUSE OF HEAVY REFACTOR OF ECEZ INTERNALS
+
 Ecez support a custom byte format called ezby (see issue [Implement serialize and deserialize #96](https://github.com/Avokadoen/ecez/issues/96)). This format define different [chunks](#chunk_sec) that contain structured bytes. This is inspired by the fantastic .vox format which is made by [ephtracy](https://github.com/ephtracy). 
 
 ## <a name="chunk_sec"></a>Chunks

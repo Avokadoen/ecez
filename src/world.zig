@@ -18,8 +18,6 @@ const Color = @import("misc.zig").Color;
 const OpaqueArchetype = @import("OpaqueArchetype.zig");
 const SystemMetadata = meta.SystemMetadata;
 
-const ezby = @import("ezby.zig");
-
 const query = @import("query.zig");
 const Iterator = @import("iterator.zig").FromTypes;
 
@@ -514,21 +512,6 @@ fn CreateWorld(
 
             const index = indexOfSharedType(QueryT);
             return &self.shared_state[index];
-        }
-
-        /// Serialize the world components and entities to an slice of bytes
-        pub fn serialize(self: World, allocator: Allocator) ezby.SerializeError![]const u8 {
-            // TODO: calc a good start size estimate
-            const inital_size_calc = 1024;
-            const Serializer = ezby.Serializer(components, shared_state_types, events);
-            return Serializer.serialize(allocator, inital_size_calc, self);
-        }
-
-        /// Set world state to hold the content of the ezby byte slice.
-        /// **This will clear all current entities and components!**
-        pub fn deserialize(self: *World, ezby_bytes: []const u8) ezby.DeserializeError!void {
-            const Serializer = ezby.Serializer(components, shared_state_types, events);
-            return Serializer.deserialize(self, ezby_bytes);
         }
 
         /// Query components which can be iterated upon.
@@ -1805,46 +1788,6 @@ test "query with single include type and multiple exclude works" {
             index += 1;
         }
     }
-}
-
-test "serialize and deserialize is idempotent" {
-    const World = WorldStub.Build();
-
-    var world1 = try World.init(testing.allocator, .{});
-    defer world1.deinit();
-
-    var a = Testing.Component.A{ .value = 3 };
-    var b = Testing.Component.B{ .value = 2 };
-    const entity = try world1.createEntity(.{ a, b });
-
-    const world_bytes = try world1.serialize(testing.allocator);
-    defer testing.allocator.free(world_bytes);
-
-    var world2 = try World.init(testing.allocator, .{});
-    defer world2.deinit();
-    try world2.deserialize(world_bytes);
-
-    try testing.expectEqual(a, try world2.getComponent(entity, Testing.Component.A));
-    try testing.expectEqual(b, try world2.getComponent(entity, Testing.Component.B));
-}
-
-test "serialize and deserialize ignore shared state" {
-    const World = WorldStub.WithSharedState(.{Testing.Component.A}).Build();
-
-    var world1 = try World.init(testing.allocator, .{Testing.Component.A{ .value = 41 }});
-    defer world1.deinit();
-
-    const world_bytes = try world1.serialize(testing.allocator);
-    defer testing.allocator.free(world_bytes);
-
-    var world2 = try World.init(testing.allocator, .{Testing.Component.A{ .value = 42 }});
-    defer world2.deinit();
-    try world2.deserialize(world_bytes);
-
-    try testing.expectEqual(@as(u32, 42), world2.getSharedState(Testing.Component.A).value);
-
-    try world1.deserialize(world_bytes);
-    try testing.expectEqual(@as(u32, 41), world1.getSharedState(Testing.Component.A).value);
 }
 
 // this reproducer never had an issue filed, so no issue number
