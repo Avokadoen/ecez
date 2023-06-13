@@ -61,6 +61,7 @@ pub fn sortBasedOnTypes(comptime types: []const type, comptime ToSortType: type,
     return rtr;
 }
 
+// TODO: remove?
 pub fn hashType(comptime T: type) u64 {
     const type_name = @typeName(T);
     return hashfn(type_name[0..]);

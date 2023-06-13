@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const query = @import("query.zig");
-const OpaqueArchetype = @import("OpaqueArchetype.zig");
+const opaque_archetype = @import("opaque_archetype.zig");
 
 // TODO: reduce system_count by checking which has identitcal arguments
 
@@ -68,7 +68,7 @@ pub fn ArchetypeCacheMask(comptime components: []const type, comptime BitMask: t
     };
 }
 
-pub fn ArchetypeCacheStorage(comptime storage_count: comptime_int) type {
+pub fn ArchetypeCacheStorage(comptime storage_count: comptime_int, comptime OpaqueArchetype: type) type {
     const InitializeMask = @Type(std.builtin.Type{ .Int = .{
         .signedness = .unsigned,
         .bits = storage_count,

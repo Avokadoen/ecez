@@ -11,11 +11,12 @@ const JobId = zjobs.JobId;
 const meta = @import("meta.zig");
 const archetype_container = @import("archetype_container.zig");
 const archetype_cache = @import("archetype_cache.zig");
+const opaque_archetype = @import("opaque_archetype.zig");
+
 const ecez_error = @import("error.zig");
 const Entity = @import("entity_type.zig").Entity;
 const EntityRef = @import("entity_type.zig").EntityRef;
 const Color = @import("misc.zig").Color;
-const OpaqueArchetype = @import("OpaqueArchetype.zig");
 const SystemMetadata = meta.SystemMetadata;
 
 const query = @import("query.zig");
@@ -81,7 +82,7 @@ fn CreateWorld(
     comptime events: anytype,
 ) type {
     @setEvalBranchQuota(10_000);
-    const component_types = blk: {
+    const sorted_component_types = blk: {
         const components_info = @typeInfo(@TypeOf(components));
         if (components_info != .Struct) {
             @compileError("components was not a tuple of types");
@@ -96,9 +97,10 @@ fn CreateWorld(
         break :blk query.sortTypes(&types);
     };
 
-    const TypeBitMask = meta.BitMaskFromComponents(&component_types);
-    const CacheMask = archetype_cache.ArchetypeCacheMask(&component_types, TypeBitMask.Bits);
-    const Container = archetype_container.FromComponents(&component_types, TypeBitMask);
+    const ComponentMask = meta.BitMaskFromComponents(&sorted_component_types);
+    const CacheMask = archetype_cache.ArchetypeCacheMask(&sorted_component_types, ComponentMask.Bits);
+    const Container = archetype_container.FromComponents(&sorted_component_types, ComponentMask);
+    const OpaqueArchetype = opaque_archetype.FromComponentMask(ComponentMask);
     const SharedStateStorage = meta.SharedStateStorage(shared_state_types);
 
     const event_count = meta.countAndVerifyEvents(events);
@@ -108,7 +110,7 @@ fn CreateWorld(
         var fields: [event_count]Type.StructField = undefined;
         for (&fields, 0..) |*field, i| {
             const event_system_count = events[i].system_count;
-            const EventCacheStorage = archetype_cache.ArchetypeCacheStorage(event_system_count);
+            const EventCacheStorage = archetype_cache.ArchetypeCacheStorage(event_system_count, OpaqueArchetype);
 
             var num_buf: [8]u8 = undefined;
             field.* = Type.StructField{
@@ -364,44 +366,50 @@ fn CreateWorld(
             inline for (triggered_event.systems_info.metadata, 0..) |metadata, system_index| {
                 const component_query_types = comptime metadata.componentQueryArgTypes();
 
-                const component_hashes: [component_query_types.len]u64 = comptime blk: {
-                    var hashes: [component_query_types.len]u64 = undefined;
-                    inline for (component_query_types, 0..) |T, i| {
-                        hashes[i] = query.hashType(T);
+                comptime var field_map: [component_query_types.len]usize = undefined;
+                const sorted_components: [component_query_types.len]type = comptime sort_comps: {
+                    var index: usize = 0;
+                    var sort_components: [component_query_types.len]type = undefined;
+                    for (sorted_component_types) |SortedComp| {
+                        for (component_query_types, 0..) |QueryComp, query_index| {
+                            if (SortedComp == QueryComp) {
+                                sort_components[index] = QueryComp;
+                                field_map[query_index] = index;
+                                index += 1;
+                                break;
+                            }
+                        }
                     }
-                    break :blk hashes;
+                    break :sort_comps sort_components;
+                };
+
+                const include_bitmask = include_bits_blk: {
+                    comptime var bitmask = 0;
+                    inline for (sorted_components) |SortedComp| {
+                        bitmask |= 1 << Container.componentIndex(SortedComp);
+                    }
+                    break :include_bits_blk bitmask;
                 };
 
                 const DispatchJob = EventDispatchJob(
                     triggered_event.systems_info.functions[system_index],
                     *const triggered_event.systems_info.function_types[system_index],
                     metadata,
+                    include_bitmask,
                     &component_query_types,
-                    &component_hashes,
+                    &field_map,
                     @TypeOf(event_extra_argument),
                 );
 
                 // extract data relative to system for each relevant archetype
-                const opaque_archetypes = blk: {
+                const archetypes = blk: {
                     var event_cache_storage = &self.event_cache_storages[@enumToInt(event)];
                     // if the cache is no longer valid
                     if (event_cache_mask.isCoherent(&component_query_types) == false) {
-                        comptime var sorted_component_hashes: [component_query_types.len]u64 = undefined;
-                        comptime {
-                            std.mem.copy(u64, &sorted_component_hashes, &component_hashes);
-                            const lessThan = struct {
-                                fn cmp(context: void, lhs: u64, rhs: u64) bool {
-                                    _ = context;
-                                    return lhs < rhs;
-                                }
-                            }.cmp;
-                            std.sort.insertion(u64, &sorted_component_hashes, {}, lessThan);
-                        }
-
                         const archetypes = try self.container.getArchetypesWithComponents(
                             self.allocator,
-                            &sorted_component_hashes,
-                            &[0]u64{},
+                            include_bitmask,
+                            0,
                         );
 
                         // update the stored cache
@@ -418,7 +426,7 @@ fn CreateWorld(
                 // initialized the system job
                 var system_job = DispatchJob{
                     .world = self,
-                    .opaque_archetypes = opaque_archetypes,
+                    .archetypes = archetypes,
                     .extra_argument = event_extra_argument,
                 };
 
@@ -570,7 +578,7 @@ fn CreateWorld(
                 };
 
                 var type_is_component = false;
-                for (component_types) |Component| {
+                for (sorted_component_types) |Component| {
                     if (inner_type.* == Component) {
                         type_is_component = true;
                         break;
@@ -594,7 +602,7 @@ fn CreateWorld(
                 exclude_type.* = exclude_types[index];
 
                 var type_is_component = false;
-                for (component_types) |Component| {
+                for (sorted_component_types) |Component| {
                     if (exclude_type.* == Component) {
                         type_is_component = true;
                         break;
@@ -606,32 +614,31 @@ fn CreateWorld(
                 }
             }
 
-            const inlude_component_hashes: [include_inner_type_arr.len]u64 = comptime blk: {
-                var hashes: [include_inner_type_arr.len]u64 = undefined;
-                inline for (&hashes, include_inner_type_arr) |*hash, T| {
-                    hash.* = query.hashType(T);
+            const include_bitmask = comptime include_bit_blk: {
+                var bitmask: ComponentMask.Bits = 0;
+                inline for (include_inner_type_arr) |Component| {
+                    bitmask |= 1 << Container.componentIndex(Component);
                 }
-                break :blk hashes;
+                break :include_bit_blk bitmask;
             };
-
-            const exclude_component_hashes: [exclude_type_arr.len]u64 = comptime blk: {
-                var hashes: [exclude_type_arr.len]u64 = undefined;
-                inline for (&hashes, exclude_type_arr) |*hash, T| {
-                    hash.* = query.hashType(T);
+            const exclude_bitmask = comptime include_bit_blk: {
+                var bitmask: ComponentMask.Bits = 0;
+                inline for (exclude_type_arr) |Component| {
+                    bitmask |= 1 << Container.componentIndex(Component);
                 }
-                break :blk hashes;
+                break :include_bit_blk bitmask;
             };
 
             inline for (include_inner_type_arr) |IncType| {
                 inline for (exclude_type_arr) |ExType| {
                     if (IncType == ExType) {
                         // illegal query, you are doing something wrong :)
-                        @compileError(@typeName(IncType) ++ " is used as an include type}, and as a exclude type");
+                        @compileError(@typeName(IncType) ++ " is used as an include type, and as a exclude type");
                     }
                 }
             }
 
-            const IterType = Iterator(&query_result_names, &include_outer_type_arr, &inlude_component_hashes);
+            const IterType = Iterator(&query_result_names, &include_outer_type_arr, include_bitmask, OpaqueArchetype);
 
             return struct {
                 pub const Iter = IterType;
@@ -641,13 +648,13 @@ fn CreateWorld(
                     defer zone.End();
 
                     // extract data relative to system for each relevant archetype
-                    const opaque_archetypes = try world.container.getArchetypesWithComponents(
+                    const archetypes = try world.container.getArchetypesWithComponents(
                         allocator,
-                        &inlude_component_hashes,
-                        &exclude_component_hashes,
+                        include_bitmask,
+                        exclude_bitmask,
                     );
 
-                    return Iter.init(allocator, opaque_archetypes);
+                    return Iter.init(allocator, archetypes);
                 }
             };
         }
@@ -675,8 +682,9 @@ fn CreateWorld(
             comptime func: *const anyopaque,
             comptime FuncType: type,
             comptime metadata: SystemMetadata,
+            comptime include_bitmask: ComponentMask.Bits,
             comptime component_query_types: []const type,
-            comptime component_hashes: []const u64,
+            comptime field_map: []const usize,
             comptime ExtraArgumentType: type,
         ) type {
             // in the case where the extra argument is a pointer we get the pointer child type
@@ -690,21 +698,20 @@ fn CreateWorld(
 
             return struct {
                 world: *World,
-                opaque_archetypes: []*OpaqueArchetype,
+                archetypes: []*OpaqueArchetype,
                 extra_argument: ExtraArgumentType,
 
                 pub fn exec(self_job: *@This()) void {
                     const param_types = comptime metadata.paramArgTypes();
 
-                    var storage_buffer: [component_hashes.len][]u8 = undefined;
+                    var storage_buffer: [component_query_types.len][]u8 = undefined;
                     var storage = OpaqueArchetype.StorageData{
                         .inner_len = undefined,
                         .outer = &storage_buffer,
                     };
 
-                    for (self_job.opaque_archetypes) |opaque_archetype| {
-                        // TODO: try
-                        opaque_archetype.rawGetStorageData(component_hashes, &storage) catch unreachable;
+                    for (self_job.archetypes) |archetype| {
+                        archetype.getStorageData(&storage, include_bitmask);
 
                         for (0..storage.inner_len) |inner_index| {
                             var arguments: std.meta.Tuple(&param_types) = undefined;
@@ -716,7 +723,7 @@ fn CreateWorld(
                                         if (param_size > 0) {
                                             const from = inner_index * param_size;
                                             const to = from + param_size;
-                                            const bytes = storage.outer[j][from..to];
+                                            const bytes = storage.outer[field_map[j]][from..to];
                                             arguments[j] = @ptrCast(*Param, @alignCast(@alignOf(Param), bytes.ptr)).*;
                                         } else {
                                             arguments[j] = Param{};
@@ -728,7 +735,7 @@ fn CreateWorld(
                                         if (param_size > 0) {
                                             const from = inner_index * param_size;
                                             const to = from + param_size;
-                                            const bytes = storage.outer[j][from..to];
+                                            const bytes = storage.outer[field_map[j]][from..to];
                                             arguments[j] = @ptrCast(Param, @alignCast(@alignOf(component_query_types[j]), bytes.ptr));
                                         } else {
                                             arguments[j] = &component_query_types[j]{};

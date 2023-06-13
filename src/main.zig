@@ -23,5 +23,5 @@ test {
     _ = @import("archetype_container.zig");
     _ = @import("query.zig");
     _ = @import("iterator.zig");
-    _ = @import("OpaqueArchetype.zig");
+    _ = @import("opaque_archetype.zig");
 }
