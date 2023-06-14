@@ -179,7 +179,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype swapRemoveEntity", Color.opaque_archetype);
             defer zone.End();
 
-            std.debug.assert(buffer.len == @popCount(self.component_bitmask));
+            std.debug.assert(buffer.len == self.getComponentCount());
 
             // remove entity from entity map
             const moving_kv = self.entities.fetchSwapRemove(entity) orelse return error.EntityMissing;
@@ -214,6 +214,57 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
                         // new_len is always less than previous len, so it can't fail
                         self.component_storage[comp_index].shrinkRetainingCapacity(new_len);
                     }
+                }
+            }
+
+            // remove entity and update entity values for all entities with component data to the right of removed entity
+            // TODO: faster way of doing this?
+            // https://devlog.hexops.com/2022/zig-hashmaps-explained/
+            for (self.entities.values()) |*component_index| {
+                // if the entity was located after removed entity, we shift it left
+                // to occupy vacant memory
+                if (component_index.* > moving_kv.value) {
+                    component_index.* -= 1;
+                }
+            }
+        }
+
+        pub fn removeEntity(
+            self: *OpaqueArchetype,
+            entity: Entity,
+            all_component_sizes: [max_component_count]u32,
+        ) error{EntityMissing}!void {
+            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype removeEntity", Color.opaque_archetype);
+            defer zone.End();
+
+            // remove entity from entity map
+            const moving_kv = self.entities.fetchSwapRemove(entity) orelse return error.EntityMissing;
+
+            // remove entity data from storage
+            const component_count = self.getComponentCount();
+            var bitmask = self.component_bitmask;
+            var cursor: u32 = 0;
+            for (0..component_count) |comp_index| {
+                const step = @intCast(ComponentMask.Shift, @ctz(bitmask));
+                std.debug.assert((bitmask >> step) & 1 == 1);
+                bitmask = (bitmask >> step) >> 1;
+
+                cursor += @intCast(u32, step) + 1;
+
+                const component_size = all_component_sizes[cursor - 1];
+
+                // remove any data from storage
+                if (component_size > 0) {
+                    // copy data to buffer
+                    const from_bytes = moving_kv.value * component_size;
+
+                    // shift data to the left (moving 'deleted' bytes to the end of the array)
+                    std.mem.rotate(u8, self.component_storage[comp_index].items[from_bytes..], component_size);
+
+                    // mark extracted bytes as invalid
+                    const new_len = self.component_storage[comp_index].items.len - component_size;
+                    // new_len is always less than previous len, so it can't fail
+                    self.component_storage[comp_index].shrinkRetainingCapacity(new_len);
                 }
             }
 
@@ -435,6 +486,55 @@ test "swapRemoveEntity removes entity and components" {
             std.mem.asBytes(&b),
             buffer[1],
         );
+    }
+}
+
+test "removeEntity removes entity and components" {
+    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
+    var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All);
+    defer archetype.deinit();
+
+    var buffer: [3][]u8 = undefined;
+    for (0..100) |i| {
+        const mock_entity = Entity{ .id = @intCast(u32, i) };
+        var a = A{ .value = @intCast(u32, i) };
+        buffer[0] = std.mem.asBytes(&a);
+        var b = B{ .value = @intCast(u8, i) };
+        buffer[1] = std.mem.asBytes(&b);
+        buffer[2] = &[0]u8{};
+
+        try archetype.registerEntity(mock_entity, &buffer, sizes);
+    }
+
+    {
+        const mock_entity1 = Entity{ .id = 50 };
+        try archetype.removeEntity(mock_entity1, sizes);
+
+        try testing.expectError(ArchetypeError.EntityMissing, archetype.getComponent(mock_entity1, Testing.Bits.A, A));
+    }
+
+    for (0..50) |i| {
+        const mock_entity = Entity{ .id = @intCast(u32, i) };
+        const a_comp = try archetype.getComponent(mock_entity, Testing.Bits.A, Testing.Component.A);
+        try testing.expectEqual(A{ .value = @intCast(u32, i) }, a_comp.*);
+
+        const b_comp = try archetype.getComponent(mock_entity, Testing.Bits.B, Testing.Component.B);
+        try testing.expectEqual(B{ .value = @intCast(u8, i) }, b_comp.*);
+
+        const c_comp = try archetype.getComponent(mock_entity, Testing.Bits.C, Testing.Component.C);
+        try testing.expectEqual(C{}, c_comp.*);
+    }
+
+    for (51..100) |i| {
+        const mock_entity = Entity{ .id = @intCast(u32, i) };
+        const a_comp = try archetype.getComponent(mock_entity, Testing.Bits.A, Testing.Component.A);
+        try testing.expectEqual(A{ .value = @intCast(u32, i) }, a_comp.*);
+
+        const b_comp = try archetype.getComponent(mock_entity, Testing.Bits.B, Testing.Component.B);
+        try testing.expectEqual(B{ .value = @intCast(u8, i) }, b_comp.*);
+
+        const c_comp = try archetype.getComponent(mock_entity, Testing.Bits.C, Testing.Component.C);
+        try testing.expectEqual(C{}, c_comp.*);
     }
 }
 

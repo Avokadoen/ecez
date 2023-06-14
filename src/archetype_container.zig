@@ -508,7 +508,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                     &sorted_state_data,
                     self.component_sizes,
                 );
-                // TODO: errdefer self.archetypes.items[opaque_archetype_index].removeEntity(); https://github.com/Avokadoen/ecez/issues/118
+                errdefer self.archetypes.items[opaque_archetype_index].removeEntity(entity, self.component_sizes) catch unreachable;
 
                 new_archetype_index = opaque_archetype_index;
                 break :regiser_entity_blk true;
