@@ -118,7 +118,7 @@ pub fn FromConfig(comptime max_depth: u32, comptime BitMask: type) type {
                     .bitmask = 0,
                     .stack = .{
                         .len = 1,
-                        .buffer = [_]u32{0} ** (Testing.AllComponentsArr.len + 1),
+                        .buffer = [_]u32{0} ** max_depth,
                     },
                 };
             }
