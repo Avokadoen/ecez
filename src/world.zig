@@ -10,7 +10,6 @@ const JobId = zjobs.JobId;
 
 const meta = @import("meta.zig");
 const archetype_container = @import("archetype_container.zig");
-const archetype_cache = @import("archetype_cache.zig");
 const opaque_archetype = @import("opaque_archetype.zig");
 
 const ecez_error = @import("error.zig");
@@ -98,37 +97,11 @@ fn CreateWorld(
     };
 
     const ComponentMask = meta.BitMaskFromComponents(&sorted_component_types);
-    const CacheMask = archetype_cache.ArchetypeCacheMask(&sorted_component_types, ComponentMask.Bits);
     const Container = archetype_container.FromComponents(&sorted_component_types, ComponentMask);
     const OpaqueArchetype = opaque_archetype.FromComponentMask(ComponentMask);
     const SharedStateStorage = meta.SharedStateStorage(shared_state_types);
 
     const event_count = meta.countAndVerifyEvents(events);
-    const EventCacheStorages = blk: {
-        // TODO: move to meta
-        const Type = std.builtin.Type;
-        var fields: [event_count]Type.StructField = undefined;
-        for (&fields, 0..) |*field, i| {
-            const event_system_count = events[i].system_count;
-            const EventCacheStorage = archetype_cache.ArchetypeCacheStorage(event_system_count, OpaqueArchetype);
-
-            var num_buf: [8]u8 = undefined;
-            field.* = Type.StructField{
-                .name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable,
-                .type = EventCacheStorage,
-                .default_value = null,
-                .is_comptime = false,
-                .alignment = @alignOf(EventCacheStorage),
-            };
-        }
-
-        break :blk @Type(Type{ .Struct = .{
-            .layout = .Auto,
-            .fields = &fields,
-            .decls = &[0]Type.Declaration{},
-            .is_tuple = true,
-        } });
-    };
     const EventJobsInFlight = blk: {
         // TODO: move to meta
         const Type = std.builtin.Type;
@@ -162,10 +135,6 @@ fn CreateWorld(
         container: Container,
         shared_state: SharedStateStorage,
 
-        // the trigger event cache used to store archetypes for each system
-        event_cache_masks: [event_count]CacheMask,
-        event_cache_storages: EventCacheStorages,
-
         execution_job_queue: JobQueue,
         event_jobs_in_flight: EventJobsInFlight,
 
@@ -189,19 +158,6 @@ fn CreateWorld(
                 }
             }
 
-            var event_cache_masks: [event_count]CacheMask = undefined;
-            for (&event_cache_masks) |*mask| {
-                mask.* = CacheMask.init();
-            }
-
-            var event_cache_storages: EventCacheStorages = undefined;
-            {
-                const event_cache_storages_info = @typeInfo(EventCacheStorages).Struct;
-                inline for (event_cache_storages_info.fields, 0..) |field, i| {
-                    event_cache_storages[i] = field.type.init();
-                }
-            }
-
             const container = try Container.init(allocator);
             errdefer container.deinit();
 
@@ -220,8 +176,6 @@ fn CreateWorld(
                 .allocator = allocator,
                 .container = container,
                 .shared_state = actual_shared_state,
-                .event_cache_masks = event_cache_masks,
-                .event_cache_storages = event_cache_storages,
                 .execution_job_queue = execution_job_queue,
                 .event_jobs_in_flight = event_jobs_in_flight,
             };
@@ -232,12 +186,6 @@ fn CreateWorld(
             defer zone.End();
 
             self.execution_job_queue.deinit();
-
-            const event_cache_storages_info = @typeInfo(EventCacheStorages).Struct;
-            inline for (event_cache_storages_info.fields, 0..) |_, i| {
-                self.event_cache_storages[i].deinit(self.allocator);
-            }
-
             self.container.deinit();
         }
 
@@ -247,16 +195,6 @@ fn CreateWorld(
             defer zone.End();
 
             self.waitIdle();
-
-            const event_cache_storages_info = @typeInfo(EventCacheStorages).Struct;
-            inline for (event_cache_storages_info.fields, 0..) |_, i| {
-                self.event_cache_storages[i].clear(self.allocator);
-            }
-
-            for (&self.event_cache_masks) |*mask| {
-                mask.clear();
-            }
-
             self.container.clearRetainingCapacity();
         }
 
@@ -268,9 +206,6 @@ fn CreateWorld(
             defer zone.End();
 
             var create_result = try self.container.createEntity(entity_state);
-            if (create_result.new_archetype_container) {
-                self.markAllTouchedCacheMasks(create_result.entity);
-            }
             return create_result.entity;
         }
 
@@ -283,9 +218,7 @@ fn CreateWorld(
             defer zone.End();
 
             const new_archetype_created = try self.container.setComponent(entity, component);
-            if (new_archetype_created) {
-                self.markAllTouchedCacheMasks(entity);
-            }
+            _ = new_archetype_created;
         }
 
         /// Remove a component owned by entity
@@ -296,9 +229,7 @@ fn CreateWorld(
             const zone = ztracy.ZoneNC(@src(), "World removeComponent", Color.world);
             defer zone.End();
             const new_archetype_created = try self.container.removeComponent(entity, Component);
-            if (new_archetype_created) {
-                self.markAllTouchedCacheMasks(entity);
-            }
+            _ = new_archetype_created;
         }
 
         /// Check if an entity has a given component
@@ -345,11 +276,7 @@ fn CreateWorld(
                 self.execution_job_queue.start();
             }
 
-            var event_cache_mask = &self.event_cache_masks[@enumToInt(event)];
             var event_jobs_in_flight = &self.event_jobs_in_flight[@enumToInt(event)];
-
-            // at the end of the function all bits should be coherent
-            defer event_cache_mask.setAllCoherent();
             const triggered_event = events[@enumToInt(event)];
 
             // TODO: verify systems and arguments in type initialization
@@ -396,37 +323,15 @@ fn CreateWorld(
                     *const triggered_event.systems_info.function_types[system_index],
                     metadata,
                     include_bitmask,
+                    0,
                     &component_query_types,
                     &field_map,
                     @TypeOf(event_extra_argument),
                 );
 
-                // extract data relative to system for each relevant archetype
-                const archetypes = blk: {
-                    var event_cache_storage = &self.event_cache_storages[@enumToInt(event)];
-                    // if the cache is no longer valid
-                    if (event_cache_mask.isCoherent(&component_query_types) == false) {
-                        const archetypes = try self.container.getArchetypesWithComponents(
-                            self.allocator,
-                            include_bitmask,
-                            0,
-                        );
-
-                        // update the stored cache
-                        event_cache_storage.assignCacheEntry(
-                            self.allocator,
-                            system_index,
-                            archetypes,
-                        );
-                    }
-
-                    break :blk event_cache_storage.cache[system_index];
-                };
-
                 // initialized the system job
                 var system_job = DispatchJob{
                     .world = self,
-                    .archetypes = archetypes,
                     .extra_argument = event_extra_argument,
                 };
 
@@ -669,20 +574,12 @@ fn CreateWorld(
             @compileError(@typeName(Shared) ++ " is not a shared state");
         }
 
-        /// Given an entity has triggered an archetype creation, we should mark our caches as invalid
-        /// since there are potentially new results to queries
-        inline fn markAllTouchedCacheMasks(self: *World, entity: Entity) void {
-            const bit_encoding = self.container.getEntityBitEncoding(entity);
-            for (&self.event_cache_masks) |*mask| {
-                mask.setIncoherent(bit_encoding);
-            }
-        }
-
         fn EventDispatchJob(
             comptime func: *const anyopaque,
             comptime FuncType: type,
             comptime metadata: SystemMetadata,
             comptime include_bitmask: ComponentMask.Bits,
+            comptime exclude_bitmask: ComponentMask.Bits,
             comptime component_query_types: []const type,
             comptime field_map: []const usize,
             comptime ExtraArgumentType: type,
@@ -698,10 +595,12 @@ fn CreateWorld(
 
             return struct {
                 world: *World,
-                archetypes: []*OpaqueArchetype,
                 extra_argument: ExtraArgumentType,
 
                 pub fn exec(self_job: *@This()) void {
+                    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.world);
+                    defer zone.End();
+
                     const param_types = comptime metadata.paramArgTypes();
 
                     var storage_buffer: [component_query_types.len][]u8 = undefined;
@@ -710,8 +609,13 @@ fn CreateWorld(
                         .outer = &storage_buffer,
                     };
 
-                    for (self_job.archetypes) |archetype| {
-                        archetype.getStorageData(&storage, include_bitmask);
+                    var tree_cursor = Container.BinaryTree.IterCursor.fromRoot();
+                    while (self_job.world.container.tree.iterate(
+                        include_bitmask,
+                        exclude_bitmask,
+                        &tree_cursor,
+                    )) |archetype_index| {
+                        self_job.world.container.archetypes.items[archetype_index].getStorageData(&storage, include_bitmask);
 
                         for (0..storage.inner_len) |inner_index| {
                             var arguments: std.meta.Tuple(&param_types) = undefined;
@@ -1404,7 +1308,9 @@ test "Event can mutate event extra argument" {
     try testing.expectEqual(initial_state.a, event_a);
 }
 
-test "event cache works" {
+// NOTE: we don't use a cache anymore, but the test can stay for now since it might be good for
+//       detecting potential regressions
+test "event caching works" {
     const SystemStruct = struct {
         pub fn event1System(a: *Testing.Component.A) void {
             a.value += 1;

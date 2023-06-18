@@ -35,6 +35,9 @@ pub fn FromTypes(
 
         /// Initialize an ``iterator``
         pub fn init(all_archetypes: []OpaqueArchetype, tree: BinaryTree) Iterator {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.iterator);
+            defer zone.End();
+
             return Iterator{
                 .all_archetypes = all_archetypes,
                 .tree = tree,
