@@ -16,6 +16,7 @@ const EntityRef = entity_type.EntityRef;
 const ecez_query = @import("query.zig");
 const QueryBuilder = ecez_query.QueryBuilder;
 const Query = ecez_query.Query;
+const binary_tree = @import("binary_tree.zig");
 
 const meta = @import("meta.zig");
 const Testing = @import("Testing.zig");
@@ -41,6 +42,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
     };
 
     return struct {
+        pub const BinaryTree = binary_tree.FromConfig(sorted_components.len + 1, BitMask);
         pub const OpaqueArchetype = opaque_archetype.FromComponentMask(BitMask);
 
         const ArcheContainer = @This();
@@ -53,6 +55,8 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
         archetypes: ArrayList(OpaqueArchetype),
         bit_encodings: ArrayList(BitMask.Bits),
         entity_references: ArrayList(EntityRef),
+
+        tree: BinaryTree,
 
         component_sizes: [sorted_components.len]u32,
 
@@ -68,8 +72,11 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
             var bit_encodings = try ArrayList(BitMask.Bits).initCapacity(allocator, pre_alloc_amount);
             errdefer bit_encodings.deinit();
 
-            var entity_references = try ArrayList(EntityRef).initCapacity(allocator, pre_alloc_amount);
+            const entity_references = try ArrayList(EntityRef).initCapacity(allocator, pre_alloc_amount);
             errdefer entity_references.deinit();
+
+            const tree = try BinaryTree.init(allocator, pre_alloc_amount);
+            errdefer tree.deinit();
 
             comptime var component_sizes: [sorted_components.len]u32 = undefined;
             inline for (sorted_components, &component_sizes) |Component, *size| {
@@ -86,6 +93,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                 .archetypes = archetypes,
                 .bit_encodings = bit_encodings,
                 .entity_references = entity_references,
+                .tree = tree,
                 .component_sizes = component_sizes,
                 .empty_bytes = .{},
             };
@@ -98,13 +106,15 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
             self.archetypes.deinit();
             self.bit_encodings.deinit();
             self.entity_references.deinit();
+            self.tree.deinit();
         }
 
         pub inline fn clearRetainingCapacity(self: *ArcheContainer) void {
             const zone = ztracy.ZoneNC(@src(), "Container clear", Color.arche_container);
             defer zone.End();
 
-            // Do not clear node_bit_paths & bit_path_relation since archetypes persist
+            // Do not clear bit_encodings or tree since archetypes persist
+            //
             self.entity_references.clearRetainingCapacity();
 
             for (self.archetypes.items) |*archetype| {
@@ -193,7 +203,9 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
 
                         // register archetype bit encoding
                         try self.bit_encodings.append(new_encoding);
-                        errdefer _ = self.node_bit_paths.pop();
+                        errdefer _ = self.bit_encodings.pop();
+
+                        try self.tree.appendChain(@intCast(u32, opaque_archetype_index), new_encoding);
 
                         std.debug.assert(self.bit_encodings.items.len == self.archetypes.items.len);
 
@@ -302,6 +314,8 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                 try self.archetypes.append(new_archetype);
                 errdefer _ = self.archetypes.pop();
 
+                try self.tree.appendChain(@intCast(u32, opaque_archetype_index), new_encoding);
+
                 std.debug.assert(self.bit_encodings.items.len == self.archetypes.items.len);
 
                 new_archetype_index = opaque_archetype_index;
@@ -352,37 +366,6 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
             return self.archetypes.items[opaque_archetype_index].hasComponents(component_bit);
         }
 
-        /// Query archetypes containing all component bits
-        /// caller own the returned memory
-        pub fn getArchetypesWithComponents(
-            self: ArcheContainer,
-            allocator: Allocator,
-            include_bitmap: BitMask.Bits,
-            exclude_bitmap: BitMask.Bits,
-        ) error{OutOfMemory}![]*OpaqueArchetype {
-            const zone = ztracy.ZoneNC(@src(), "Container getArchetypesWithComponents", Color.arche_container);
-            defer zone.End();
-
-            std.debug.assert(include_bitmap & exclude_bitmap == 0);
-
-            var resulting_archetypes = ArrayList(*OpaqueArchetype).init(allocator);
-            errdefer resulting_archetypes.deinit();
-
-            // TODO: implement inplace zero alloc binary traversal
-            //       we can actually use stack array, biggest stack for traversal is submitted_component.len :)
-            // TODO: benchmark between brute force and tree traversal
-            // https://www.geeksforgeeks.org/inorder-tree-traversal-without-recursion/
-
-            // brute force search of queried nodes which should be fast for smaller amount of nodes (limit of ????-?????? of nodes)
-            for (self.bit_encodings.items, 0..) |bit_path, path_index| {
-                if ((bit_path & include_bitmap) == include_bitmap and (bit_path & exclude_bitmap == 0)) {
-                    try resulting_archetypes.append(&self.archetypes.items[path_index]);
-                }
-            }
-
-            return resulting_archetypes.toOwnedSlice();
-        }
-
         pub fn getComponent(self: ArcheContainer, entity: Entity, comptime Component: type) ecez_error.ArchetypeError!Component {
             const zone = ztracy.ZoneNC(@src(), "Container getComponent", Color.arche_container);
             defer zone.End();
@@ -408,7 +391,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                 },
                 else => {},
             }
-            @compileError("Get component can only find a component which has to be struct, or pointer to struct");
+            @compileError("Get component can only find a components (struct, or pointer to struct)");
         }
 
         /// This function can initialize the storage for the components of a given entity
@@ -502,6 +485,8 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
 
                 try self.bit_encodings.append(initial_bit_encoding);
                 errdefer _ = self.bit_encodings.pop();
+
+                try self.tree.appendChain(@intCast(u32, opaque_archetype_index), initial_bit_encoding);
 
                 try self.archetypes.items[opaque_archetype_index].registerEntity(
                     entity,
@@ -617,184 +602,4 @@ test "ArcheContainer hasComponent works" {
     try testing.expectEqual(true, container.hasComponent(entity, Testing.Component.A));
     try testing.expectEqual(false, container.hasComponent(entity, Testing.Component.B));
     try testing.expectEqual(true, container.hasComponent(entity, Testing.Component.C));
-}
-
-test "ArcheContainer getArchetypesWithComponents returns matching archetypes" {
-    var container = try TestContainer.init(testing.allocator);
-    defer container.deinit();
-
-    const initial_state = Testing.Archetype.C{
-        .c = Testing.Component.C{},
-    };
-    const entity = (try container.createEntity(initial_state)).entity;
-    {
-        const arch = try container.getArchetypesWithComponents(
-            testing.allocator,
-            Testing.Bits.C,
-            Testing.Bits.None,
-        );
-        defer testing.allocator.free(arch);
-        try testing.expectEqual(@as(usize, 1), arch.len);
-    }
-    {
-        const arch = try container.getArchetypesWithComponents(
-            testing.allocator,
-            Testing.Bits.B,
-            Testing.Bits.None,
-        );
-        defer testing.allocator.free(arch);
-        try testing.expectEqual(@as(usize, 0), arch.len);
-    }
-    {
-        const arch = try container.getArchetypesWithComponents(
-            testing.allocator,
-            Testing.Bits.A,
-            Testing.Bits.None,
-        );
-        defer testing.allocator.free(arch);
-        try testing.expectEqual(@as(usize, 0), arch.len);
-    }
-
-    _ = try container.setComponent(entity, Testing.Component.A{});
-    {
-        const arch = try container.getArchetypesWithComponents(
-            testing.allocator,
-            Testing.Bits.C,
-            Testing.Bits.None,
-        );
-        defer testing.allocator.free(arch);
-        try testing.expectEqual(@as(usize, 2), arch.len);
-    }
-    {
-        const arch = try container.getArchetypesWithComponents(
-            testing.allocator,
-            Testing.Bits.B,
-            Testing.Bits.None,
-        );
-        defer testing.allocator.free(arch);
-        try testing.expectEqual(@as(usize, 0), arch.len);
-    }
-    {
-        const arch = try container.getArchetypesWithComponents(
-            testing.allocator,
-            Testing.Bits.A,
-            Testing.Bits.None,
-        );
-        defer testing.allocator.free(arch);
-        try testing.expectEqual(@as(usize, 1), arch.len);
-    }
-
-    _ = try container.setComponent(entity, Testing.Component.B{});
-    {
-        const arch = try container.getArchetypesWithComponents(
-            testing.allocator,
-            Testing.Bits.C,
-            Testing.Bits.None,
-        );
-        defer testing.allocator.free(arch);
-        try testing.expectEqual(@as(usize, 3), arch.len);
-    }
-    {
-        const arch = try container.getArchetypesWithComponents(
-            testing.allocator,
-            Testing.Bits.B,
-            Testing.Bits.None,
-        );
-        defer testing.allocator.free(arch);
-        try testing.expectEqual(@as(usize, 1), arch.len);
-    }
-    {
-        const arch = try container.getArchetypesWithComponents(
-            testing.allocator,
-            Testing.Bits.A,
-            Testing.Bits.None,
-        );
-        defer testing.allocator.free(arch);
-        try testing.expectEqual(@as(usize, 2), arch.len);
-    }
-
-    {
-        const arch = try container.getArchetypesWithComponents(
-            testing.allocator,
-            Testing.Bits.A | Testing.Bits.C,
-            Testing.Bits.None,
-        );
-        defer testing.allocator.free(arch);
-        try testing.expectEqual(@as(usize, 2), arch.len);
-    }
-    {
-        const arch = try container.getArchetypesWithComponents(
-            testing.allocator,
-            Testing.Bits.A | Testing.Bits.B,
-            Testing.Bits.None,
-        );
-        defer testing.allocator.free(arch);
-        try testing.expectEqual(@as(usize, 1), arch.len);
-    }
-    {
-        const arch = try container.getArchetypesWithComponents(
-            testing.allocator,
-            Testing.Bits.B | Testing.Bits.C,
-            Testing.Bits.None,
-        );
-        defer testing.allocator.free(arch);
-        try testing.expectEqual(@as(usize, 1), arch.len);
-    }
-}
-
-test "ArcheContainer getArchetypesWithComponents can exclude archetypes" {
-    var container = try TestContainer.init(testing.allocator);
-    defer container.deinit();
-
-    // make sure the container have Archetype {A}, {B}, {C}, {AB}, {AC}, {ABC}
-    _ = try container.createEntity(Testing.Archetype.A{});
-    _ = try container.createEntity(Testing.Archetype.B{});
-    _ = try container.createEntity(Testing.Archetype.C{});
-    _ = try container.createEntity(Testing.Archetype.AB{});
-    _ = try container.createEntity(Testing.Archetype.AC{});
-    _ = try container.createEntity(Testing.Archetype.ABC{});
-
-    // ask for A, excluding C
-    {
-        const arch = try container.getArchetypesWithComponents(
-            testing.allocator,
-            Testing.Bits.A,
-            Testing.Bits.C,
-        );
-        defer testing.allocator.free(arch);
-        try testing.expectEqual(@as(usize, 2), arch.len);
-    }
-
-    // ask for A, excluding B, C
-    {
-        const arch = try container.getArchetypesWithComponents(
-            testing.allocator,
-            Testing.Bits.A,
-            Testing.Bits.B | Testing.Bits.C,
-        );
-        defer testing.allocator.free(arch);
-        try testing.expectEqual(@as(usize, 1), arch.len);
-    }
-
-    // ask for B, excluding A
-    {
-        const arch = try container.getArchetypesWithComponents(
-            testing.allocator,
-            Testing.Bits.B,
-            Testing.Bits.A,
-        );
-        defer testing.allocator.free(arch);
-        try testing.expectEqual(@as(usize, 1), arch.len);
-    }
-
-    // ask for C, excluding B
-    {
-        const arch = try container.getArchetypesWithComponents(
-            testing.allocator,
-            Testing.Bits.C,
-            Testing.Bits.B,
-        );
-        defer testing.allocator.free(arch);
-        try testing.expectEqual(@as(usize, 2), arch.len);
-    }
 }

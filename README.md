@@ -119,9 +119,6 @@ var happy_healhy_monster_iter = try World.Query(
     .{SadTag, SickTag}                   // these are our exclude types
 ).submit(world, std.testing.allocator);
 
-// iterators have to do some allocations for now, so we need to make sure to deinit iterator when done using it
-defer happy_healhy_monster_iter.deinit();
-
 while (happy_healhy_monster_iter.next()) |happy_healhy_monster| {
     // these monsters are not sick or sad so they become more happy :)
     happy_healhy_monster.monster.mood_rating += 1;
