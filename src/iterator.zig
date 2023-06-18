@@ -12,8 +12,10 @@ const query = @import("query.zig");
 pub fn FromTypes(
     comptime names: []const []const u8,
     comptime sorted_outer_types: []const type,
-    comptime component_bitmap: anytype,
+    comptime include_bitmap: anytype,
+    comptime exclude_bitmap: anytype,
     comptime OpaqueArchetype: type,
+    comptime BinaryTree: type,
 ) type {
     return struct {
         pub const Item = meta.ComponentStruct(names, sorted_outer_types);
@@ -22,23 +24,21 @@ pub fn FromTypes(
         /// storage details
         const Iterator = @This();
 
-        allocator: Allocator,
-        query_result: []const *OpaqueArchetype,
+        all_archetypes: []OpaqueArchetype,
+        tree: BinaryTree,
+        tree_cursor: BinaryTree.IterCursor,
 
         storage_buffer: OpaqueArchetype.StorageData,
         outer_storage_buffer: [sorted_outer_types.len][]u8,
 
-        outer_cursor: i32 = -1,
         inner_cursor: usize = 0,
 
-        /// Initialize an ``iterator``. The ``iterator`` will own the ``query_result`` meaning the caller must make sure to call
-        /// ```js
-        ///     iterator.deinit();
-        /// ```
-        pub fn init(allocator: Allocator, query_result: []const *OpaqueArchetype) Iterator {
+        /// Initialize an ``iterator``
+        pub fn init(all_archetypes: []OpaqueArchetype, tree: BinaryTree) Iterator {
             return Iterator{
-                .allocator = allocator,
-                .query_result = query_result,
+                .all_archetypes = all_archetypes,
+                .tree = tree,
+                .tree_cursor = BinaryTree.IterCursor.fromRoot(),
                 .storage_buffer = OpaqueArchetype.StorageData{
                     .inner_len = 0,
                     .outer = undefined,
@@ -47,66 +47,20 @@ pub fn FromTypes(
             };
         }
 
-        pub fn deinit(self: Iterator) void {
-            self.allocator.free(self.query_result);
-        }
-
         pub fn next(self: *Iterator) ?Item {
-            const zone = ztracy.ZoneNC(@src(), "Query Iterator next", Color.iterator);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.iterator);
             defer zone.End();
-
-            if (self.query_result.len == 0) {
-                return null;
-            }
 
             // check if inner iteration is complete
             while (self.inner_cursor >= self.storage_buffer.inner_len) {
-                // check if we are completly done iterating
-                if ((self.outer_cursor + 1) >= self.query_result.len) {
+                if (self.tree.iterate(include_bitmap, exclude_bitmap, &self.tree_cursor)) |next_archetype_index| {
+                    self.inner_cursor = 0;
+                    self.storage_buffer.outer = &self.outer_storage_buffer;
+                    self.all_archetypes[next_archetype_index].getStorageData(&self.storage_buffer, include_bitmap);
+                } else {
                     return null;
                 }
-
-                self.outer_cursor += 1;
-                self.inner_cursor = 0;
-                self.storage_buffer.outer = &self.outer_storage_buffer;
-
-                self.query_result[@intCast(usize, self.outer_cursor)].getStorageData(&self.storage_buffer, component_bitmap);
             }
-
-            self.inner_cursor += 1;
-            return populateItem(self.storage_buffer, self.inner_cursor - 1);
-        }
-
-        /// Retrieve an item from a flat index, this operation is **not** 0(1)
-        pub fn at(self: Iterator, index: usize) ?Item {
-            const zone = ztracy.ZoneNC(@src(), "Query Iterator at", Color.iterator);
-            defer zone.End();
-
-            var cursor: usize = 0;
-            for (0..self.query_result.len) |outer_index| {
-                for (0..self.query_result[outer_index].entities.count()) |inner_index| {
-                    if (cursor != index) {
-                        cursor += 1;
-                        continue;
-                    }
-
-                    var temp_storage_data_buffer: [sorted_outer_types.len][]u8 = undefined;
-                    var temp_storage_data = OpaqueArchetype.StorageData{
-                        .inner_len = 0,
-                        .outer = &temp_storage_data_buffer,
-                    };
-                    self.query_result[outer_index].getStorageData(&temp_storage_data, component_bitmap);
-
-                    return populateItem(temp_storage_data, inner_index);
-                }
-            }
-
-            return null;
-        }
-
-        inline fn populateItem(populated_storage_data: OpaqueArchetype.StorageData, inner_index: usize) Item {
-            const zone = ztracy.ZoneNC(@src(), "Query Iterator populateItem", Color.iterator);
-            defer zone.End();
 
             var item: Item = undefined;
             const item_fields = std.meta.fields(Item);
@@ -117,9 +71,9 @@ pub fn FromTypes(
                         if (@sizeOf(pointer.child) == 0) {
                             @field(item, field.name) = &pointer.child{};
                         } else {
-                            const from = inner_index * @sizeOf(pointer.child);
+                            const from = self.inner_cursor * @sizeOf(pointer.child);
                             const to = from + @sizeOf(pointer.child);
-                            const bytes = populated_storage_data.outer[type_index][from..to];
+                            const bytes = self.storage_buffer.outer[type_index][from..to];
 
                             @field(item, field.name) = @ptrCast(
                                 field.type,
@@ -131,9 +85,9 @@ pub fn FromTypes(
                         if (@sizeOf(field.type) == 0) {
                             @field(item, field.name) = field.type{};
                         } else {
-                            const from = inner_index * @sizeOf(field.type);
+                            const from = self.inner_cursor * @sizeOf(field.type);
                             const to = from + @sizeOf(field.type);
-                            const bytes = populated_storage_data.outer[type_index][from..to];
+                            const bytes = self.storage_buffer.outer[type_index][from..to];
 
                             @field(item, field.name) = @ptrCast(
                                 *field.type,
@@ -143,6 +97,8 @@ pub fn FromTypes(
                     },
                 }
             }
+
+            self.inner_cursor += 1;
             return item;
         }
     };
@@ -159,43 +115,55 @@ const entity_type = @import("entity_type.zig");
 const Entity = entity_type.Entity;
 
 const TestOpaqueArchetype = @import("opaque_archetype.zig").FromComponentMask(Testing.ComponentBitmask);
+const TestTree = @import("binary_tree.zig").FromConfig(Testing.AllComponentsArr.len + 1, Testing.ComponentBitmask);
 
 test "value iterating works" {
+    var tree = try TestTree.init(testing.allocator, 12);
+    defer tree.deinit();
+
+    tree.appendChain(@as(u32, 0), Testing.Bits.A | Testing.Bits.B) catch unreachable;
+    tree.appendChain(@as(u32, 1), Testing.Bits.All) catch unreachable;
+
     const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
+    var archetypes: [2]TestOpaqueArchetype = .{
+        TestOpaqueArchetype.init(testing.allocator, Testing.Bits.A | Testing.Bits.B) catch unreachable,
+        TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All) catch unreachable,
+    };
+    defer {
+        for (&archetypes) |*archetype| {
+            archetype.deinit();
+        }
+    }
 
-    var archetype_ab = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.A | Testing.Bits.B);
-    defer archetype_ab.deinit();
-
+    var data: [3][]const u8 = undefined;
     for (0..100) |i| {
         const a = A{ .value = @intCast(u32, i) };
         const b = B{ .value = @intCast(u8, i) };
-        var data: [2][]const u8 = undefined;
         data[0] = std.mem.asBytes(&a);
         data[1] = std.mem.asBytes(&b);
-        try archetype_ab.registerEntity(Entity{ .id = @intCast(entity_type.EntityId, i) }, &data, sizes);
+        try archetypes[0].registerEntity(
+            Entity{ .id = @intCast(entity_type.EntityId, i) },
+            data[0..2],
+            sizes,
+        );
     }
-
-    var archetype_abc = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All);
-    defer archetype_abc.deinit();
 
     for (100..200) |i| {
         const a = A{ .value = @intCast(u32, i) };
         const b = B{ .value = @intCast(u8, i) };
-        var data: [3][]const u8 = undefined;
         data[0] = std.mem.asBytes(&a);
         data[1] = std.mem.asBytes(&b);
         data[2] = &[0]u8{};
-        try archetype_abc.registerEntity(Entity{ .id = @intCast(entity_type.EntityId, i) }, &data, sizes);
+        try archetypes[1].registerEntity(
+            Entity{ .id = @intCast(entity_type.EntityId, i) },
+            data[0..3],
+            sizes,
+        );
     }
 
     {
-        const A_Iterator = FromTypes(
-            &[_][]const u8{"a"},
-            &[_]type{A},
-            Testing.Bits.A,
-            TestOpaqueArchetype,
-        );
-        var iter = A_Iterator.init(std.testing.allocator, &[_]*TestOpaqueArchetype{ &archetype_ab, &archetype_abc });
+        const A_Iterator = FromTypes(&[_][]const u8{"a"}, &[_]type{A}, Testing.Bits.A, Testing.Bits.None, TestOpaqueArchetype, TestTree);
+        var iter = A_Iterator.init(&archetypes, tree);
 
         var i: u32 = 0;
         while (iter.next()) |item| {
@@ -206,13 +174,8 @@ test "value iterating works" {
     }
 
     {
-        const B_Iterator = FromTypes(
-            &[_][]const u8{"b"},
-            &[_]type{B},
-            Testing.Bits.B,
-            TestOpaqueArchetype,
-        );
-        var iter = B_Iterator.init(std.testing.allocator, &[_]*TestOpaqueArchetype{ &archetype_ab, &archetype_abc });
+        const B_Iterator = FromTypes(&[_][]const u8{"b"}, &[_]type{B}, Testing.Bits.B, Testing.Bits.None, TestOpaqueArchetype, TestTree);
+        var iter = B_Iterator.init(&archetypes, tree);
 
         var i: u32 = 0;
         while (iter.next()) |item| {
@@ -223,13 +186,8 @@ test "value iterating works" {
     }
 
     {
-        const A_B_Iterator = FromTypes(
-            &[_][]const u8{ "a", "b" },
-            &[_]type{ A, B },
-            Testing.Bits.A | Testing.Bits.B,
-            TestOpaqueArchetype,
-        );
-        var iter = A_B_Iterator.init(std.testing.allocator, &[_]*TestOpaqueArchetype{ &archetype_ab, &archetype_abc });
+        const A_B_Iterator = FromTypes(&[_][]const u8{ "a", "b" }, &[_]type{ A, B }, Testing.Bits.A | Testing.Bits.B, Testing.Bits.None, TestOpaqueArchetype, TestTree);
+        var iter = A_B_Iterator.init(&archetypes, tree);
 
         var i: u32 = 0;
         while (iter.next()) |item| {
@@ -241,13 +199,8 @@ test "value iterating works" {
     }
 
     {
-        const A_B_C_Iterator = FromTypes(
-            &[_][]const u8{ "a", "b", "c" },
-            &[_]type{ A, B, C },
-            Testing.Bits.All,
-            TestOpaqueArchetype,
-        );
-        var iter = A_B_C_Iterator.init(std.testing.allocator, &[_]*TestOpaqueArchetype{&archetype_abc});
+        const A_B_C_Iterator = FromTypes(&[_][]const u8{ "a", "b", "c" }, &[_]type{ A, B, C }, Testing.Bits.All, Testing.Bits.None, TestOpaqueArchetype, TestTree);
+        var iter = A_B_C_Iterator.init(&archetypes, tree);
 
         var i: u32 = 100;
         while (iter.next()) |item| {
@@ -261,10 +214,16 @@ test "value iterating works" {
 }
 
 test "ptr iterating works and can mutate storage data" {
+    var tree = try TestTree.init(testing.allocator, 5);
+    defer tree.deinit();
+    tree.appendChain(@as(u32, 0), Testing.Bits.All) catch unreachable;
+
     const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
 
-    var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All);
-    defer archetype.deinit();
+    var archetypes = [_]TestOpaqueArchetype{
+        try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All),
+    };
+    defer archetypes[0].deinit();
 
     for (0..100) |i| {
         const a = A{ .value = @intCast(u32, i) };
@@ -273,18 +232,13 @@ test "ptr iterating works and can mutate storage data" {
         data[0] = std.mem.asBytes(&a);
         data[1] = std.mem.asBytes(&b);
         data[2] = &[0]u8{};
-        try archetype.registerEntity(Entity{ .id = @intCast(entity_type.EntityId, i) }, &data, sizes);
+        try archetypes[0].registerEntity(Entity{ .id = @intCast(entity_type.EntityId, i) }, &data, sizes);
     }
 
     {
         {
-            const A_Iterator = FromTypes(
-                &[_][]const u8{"a_ptr"},
-                &[_]type{*A},
-                Testing.Bits.A,
-                TestOpaqueArchetype,
-            );
-            var mutate_iter = A_Iterator.init(std.testing.allocator, &[_]*TestOpaqueArchetype{&archetype});
+            const A_Iterator = FromTypes(&[_][]const u8{"a_ptr"}, &[_]type{*A}, Testing.Bits.A, Testing.Bits.None, TestOpaqueArchetype, TestTree);
+            var mutate_iter = A_Iterator.init(&archetypes, tree);
             var i: u32 = 0;
             while (mutate_iter.next()) |item| {
                 item.a_ptr.value += 1;
@@ -293,178 +247,13 @@ test "ptr iterating works and can mutate storage data" {
         }
 
         {
-            const A_Iterator = FromTypes(
-                &[_][]const u8{"a"},
-                &[_]type{A},
-                Testing.Bits.A,
-                TestOpaqueArchetype,
-            );
-            var iter = A_Iterator.init(std.testing.allocator, &[_]*TestOpaqueArchetype{&archetype});
+            const A_Iterator = FromTypes(&[_][]const u8{"a"}, &[_]type{A}, Testing.Bits.A, Testing.Bits.None, TestOpaqueArchetype, TestTree);
+            var iter = A_Iterator.init(&archetypes, tree);
             var i: u32 = 0;
             while (iter.next()) |item| {
                 try testing.expectEqual(Testing.Component.A{ .value = i + 1 }, item.a);
                 i += 1;
             }
         }
-    }
-}
-
-test "value at index works" {
-    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
-
-    var archetype_ab = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.A | Testing.Bits.B);
-    defer archetype_ab.deinit();
-
-    for (0..100) |i| {
-        const a = A{ .value = @intCast(u32, i) };
-        const b = B{ .value = @intCast(u8, i) };
-        var data: [2][]const u8 = undefined;
-        data[0] = std.mem.asBytes(&a);
-        data[1] = std.mem.asBytes(&b);
-        try archetype_ab.registerEntity(Entity{ .id = @intCast(entity_type.EntityId, i) }, &data, sizes);
-    }
-
-    var archetype_abc = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All);
-    defer archetype_abc.deinit();
-
-    for (100..200) |i| {
-        const a = A{ .value = @intCast(u32, i) };
-        const b = B{ .value = @intCast(u8, i) };
-        var data: [3][]const u8 = undefined;
-        data[0] = std.mem.asBytes(&a);
-        data[1] = std.mem.asBytes(&b);
-        data[2] = &[0]u8{};
-        try archetype_abc.registerEntity(Entity{ .id = @intCast(entity_type.EntityId, i) }, &data, sizes);
-    }
-
-    {
-        const A_Iterator = FromTypes(
-            &[_][]const u8{"a"},
-            &[_]type{A},
-            Testing.Bits.A,
-            TestOpaqueArchetype,
-        );
-        var iter = A_Iterator.init(std.testing.allocator, &[_]*TestOpaqueArchetype{ &archetype_ab, &archetype_abc });
-
-        for (&[_]u32{ 0, 99, 100, 199 }) |index| {
-            const result = iter.at(index).?;
-            try testing.expectEqual(
-                Testing.Component.A{ .value = @intCast(u32, index) },
-                result.a,
-            );
-        }
-        try testing.expectEqual(@as(?A_Iterator.Item, null), iter.at(200));
-    }
-
-    {
-        const B_Iterator = FromTypes(
-            &[_][]const u8{"b"},
-            &[_]type{B},
-            Testing.Bits.B,
-            TestOpaqueArchetype,
-        );
-        var iter = B_Iterator.init(std.testing.allocator, &[_]*TestOpaqueArchetype{ &archetype_ab, &archetype_abc });
-
-        for (&[_]u32{ 0, 99, 100, 199 }) |index| {
-            const result = iter.at(index).?;
-            try testing.expectEqual(
-                Testing.Component.B{ .value = @intCast(u8, index) },
-                result.b,
-            );
-        }
-        try testing.expectEqual(@as(?B_Iterator.Item, null), iter.at(200));
-    }
-
-    {
-        const A_B_Iterator = FromTypes(
-            &[_][]const u8{ "a", "b" },
-            &[_]type{ A, B },
-            Testing.Bits.A | Testing.Bits.B,
-            TestOpaqueArchetype,
-        );
-        var iter = A_B_Iterator.init(std.testing.allocator, &[_]*TestOpaqueArchetype{ &archetype_ab, &archetype_abc });
-
-        for (&[_]u32{ 0, 99, 100, 199 }) |index| {
-            const result = iter.at(index).?;
-
-            try testing.expectEqual(
-                Testing.Component.A{ .value = @intCast(u32, index) },
-                result.a,
-            );
-
-            try testing.expectEqual(
-                Testing.Component.B{ .value = @intCast(u8, index) },
-                result.b,
-            );
-        }
-        try testing.expectEqual(@as(?A_B_Iterator.Item, null), iter.at(200));
-    }
-
-    {
-        const A_B_C_Iterator = FromTypes(
-            &[_][]const u8{ "a", "b", "c" },
-            &[_]type{ A, B, C },
-            Testing.Bits.All,
-            TestOpaqueArchetype,
-        );
-        var iter = A_B_C_Iterator.init(std.testing.allocator, &[_]*TestOpaqueArchetype{&archetype_abc});
-
-        for (&[_]u32{ 0, 99 }) |index| {
-            const result = iter.at(index).?;
-
-            try testing.expectEqual(
-                Testing.Component.A{ .value = @intCast(u32, index + 100) },
-                result.a,
-            );
-
-            try testing.expectEqual(
-                Testing.Component.B{ .value = @intCast(u8, index + 100) },
-                result.b,
-            );
-
-            try testing.expectEqual(Testing.Component.C{}, result.c);
-        }
-        try testing.expectEqual(@as(?A_B_C_Iterator.Item, null), iter.at(100));
-    }
-}
-
-test "ptr at works and can mutate storage data" {
-    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
-
-    var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All);
-    defer archetype.deinit();
-
-    for (0..100) |i| {
-        const a = A{ .value = @intCast(u32, i) };
-        const b = B{ .value = @intCast(u8, i) };
-        var data: [3][]const u8 = undefined;
-        data[0] = std.mem.asBytes(&a);
-        data[1] = std.mem.asBytes(&b);
-        data[2] = &[0]u8{};
-        try archetype.registerEntity(Entity{ .id = @intCast(entity_type.EntityId, i) }, &data, sizes);
-    }
-
-    {
-        const A_B_C_Iterator = FromTypes(
-            &[_][]const u8{ "a_ptr", "b_ptr", "c" },
-            &[_]type{ *A, *B, C },
-            Testing.Bits.All,
-            TestOpaqueArchetype,
-        );
-        var iter = A_B_C_Iterator.init(std.testing.allocator, &[_]*TestOpaqueArchetype{&archetype});
-        for (&[_]u32{ 0, 99 }) |index| {
-            const result = iter.at(index).?;
-
-            result.a_ptr.value += @as(u32, 1);
-            result.b_ptr.value += @as(u8, 1);
-        }
-
-        for (&[_]u32{ 0, 99 }) |index| {
-            const result = iter.at(index).?;
-
-            try testing.expectEqual(index + 1, @intCast(u32, result.a_ptr.value));
-            try testing.expectEqual(index + 1, @intCast(u32, result.b_ptr.value));
-        }
-        try testing.expectEqual(@as(?A_B_C_Iterator.Item, null), iter.at(100));
     }
 }

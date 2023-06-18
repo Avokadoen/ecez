@@ -1,6 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const ztracy = @import("ztracy");
+const tree_color = @import("misc.zig").Color.tree;
+
 pub fn FromConfig(comptime max_depth: u32, comptime BitMask: type) type {
     const bit_count = @typeInfo(BitMask.Bits).Int.bits;
 
@@ -35,10 +38,10 @@ pub fn FromConfig(comptime max_depth: u32, comptime BitMask: type) type {
 
         node_list: NodeList,
 
-        pub fn init(
-            allocator: Allocator,
-            initial_capacity: usize,
-        ) error{OutOfMemory}!BinaryTree {
+        pub fn init(allocator: Allocator, initial_capacity: usize) error{OutOfMemory}!BinaryTree {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, tree_color);
+            defer zone.End();
+
             var list = try NodeList.initCapacity(allocator, initial_capacity);
             list.appendAssumeCapacity(Node.root());
 
@@ -48,12 +51,18 @@ pub fn FromConfig(comptime max_depth: u32, comptime BitMask: type) type {
         }
 
         pub fn deinit(self: BinaryTree) void {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, tree_color);
+            defer zone.End();
+
             self.node_list.deinit();
         }
 
         // TODO: state machine to track if we have hit a missing tree branch which means we should just keep instantiating nodes
         /// append a new node at destination by creating the intermediate nodes as well
         pub fn appendChain(self: *BinaryTree, data_index: u32, destination: BitMask.Bits) error{OutOfMemory}!void {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, tree_color);
+            defer zone.End();
+
             std.debug.assert(destination > 0);
 
             var current_index: usize = 0;
@@ -116,6 +125,12 @@ pub fn FromConfig(comptime max_depth: u32, comptime BitMask: type) type {
         };
         /// Iterate the tree, iter_stack *must* have atleast one element.
         pub fn iterate(self: BinaryTree, include_bits: BitMask.Bits, exclude_bits: BitMask.Bits, iter_cursor: *IterCursor) ?u32 {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, tree_color);
+            defer zone.End();
+
+            if (iter_cursor.stack.is_empty()) {
+                return null;
+            }
 
             // grab the initial node index
             var current_node_index: ?u32 = iter_cursor.stack.pop();
@@ -214,6 +229,8 @@ test "iterate with empty include and exclude mask iterate all" {
         try testing.expectEqual(@intCast(TestMask.Bits, expected), iter.bitmask);
     }
 
+    try testing.expectEqual(@as(?u32, null), tree.iterate(0, 0, &iter));
+    try testing.expectEqual(@as(?u32, null), tree.iterate(0, 0, &iter));
     try testing.expectEqual(@as(?u32, null), tree.iterate(0, 0, &iter));
 }
 

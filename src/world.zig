@@ -20,7 +20,7 @@ const Color = @import("misc.zig").Color;
 const SystemMetadata = meta.SystemMetadata;
 
 const query = @import("query.zig");
-const Iterator = @import("iterator.zig").FromTypes;
+const iterator = @import("iterator.zig");
 
 const Testing = @import("Testing.zig");
 
@@ -340,7 +340,7 @@ fn CreateWorld(
             const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.world);
             defer zone.End();
 
-            // prime job execution for dispatch
+            // initiate job executions for dispatch
             if (self.execution_job_queue.isStarted() == false) {
                 self.execution_job_queue.start();
             }
@@ -526,11 +526,11 @@ fn CreateWorld(
         /// Parameters:
         ///     - include_types: all the components you would like to iterate over with the specified field name that should map to the
         ///                      component type. (see IncludeType)
-        ///     - exclude_types: all the components that should make a given entity exluded from the query result
+        ///     - exclude_types: all the components that should be excluded from the query result
         ///
         /// Example:
         /// ```
-        /// var a_iter = try World.Query(.{ world.IncludeType{ .name = "a", .type = A }}, .{B}).submit(world, std.testing.allocator);
+        /// var a_iter = World.Query(.{ world.include("a", A) }, .{B}).submit(world, std.testing.allocator);
         /// defer a_iter.deinit();
         ///
         /// while (a_iter.next()) |item| {
@@ -638,23 +638,23 @@ fn CreateWorld(
                 }
             }
 
-            const IterType = Iterator(&query_result_names, &include_outer_type_arr, include_bitmask, OpaqueArchetype);
+            const IterType = iterator.FromTypes(
+                &query_result_names,
+                &include_outer_type_arr,
+                include_bitmask,
+                exclude_bitmask,
+                OpaqueArchetype,
+                Container.BinaryTree,
+            );
 
             return struct {
                 pub const Iter = IterType;
 
-                pub fn submit(world: World, allocator: Allocator) error{OutOfMemory}!Iter {
-                    const zone = ztracy.ZoneNC(@src(), "Query", Color.world);
+                pub fn submit(world: World) Iter {
+                    const zone = ztracy.ZoneNC(@src(), "Query submit", Color.world);
                     defer zone.End();
 
-                    // extract data relative to system for each relevant archetype
-                    const archetypes = try world.container.getArchetypesWithComponents(
-                        allocator,
-                        include_bitmask,
-                        exclude_bitmask,
-                    );
-
-                    return Iter.init(allocator, archetypes);
+                    return Iter.init(world.container.archetypes.items, world.container.tree);
                 }
             };
         }
@@ -1626,11 +1626,10 @@ test "query with single include type works" {
 
     {
         var index: usize = 0;
-        var a_iter = try World.Query(
+        var a_iter = World.Query(
             .{query.include("a", Testing.Component.A)},
             .{},
-        ).submit(world, std.testing.allocator);
-        defer a_iter.deinit();
+        ).submit(world);
 
         while (a_iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
@@ -1655,11 +1654,10 @@ test "query with multiple include type works" {
     }
 
     {
-        var a_b_iter = try World.Query(.{
+        var a_b_iter = World.Query(.{
             query.include("a", Testing.Component.A),
             query.include("b", Testing.Component.B),
-        }, .{}).submit(world, std.testing.allocator);
-        defer a_b_iter.deinit();
+        }, .{}).submit(world);
 
         var index: usize = 0;
         while (a_b_iter.next()) |item| {
@@ -1690,10 +1688,9 @@ test "query with single ptr include type works" {
 
     {
         var index: usize = 0;
-        var a_iter = try World.Query(.{
+        var a_iter = World.Query(.{
             query.include("a_ptr", *Testing.Component.A),
-        }, .{}).submit(world, std.testing.allocator);
-        defer a_iter.deinit();
+        }, .{}).submit(world);
 
         while (a_iter.next()) |item| {
             item.a_ptr.value += 1;
@@ -1703,10 +1700,9 @@ test "query with single ptr include type works" {
 
     {
         var index: usize = 1;
-        var a_iter = try World.Query(.{
+        var a_iter = World.Query(.{
             query.include("a", Testing.Component.A),
-        }, .{}).submit(world, std.testing.allocator);
-        defer a_iter.deinit();
+        }, .{}).submit(world);
 
         while (a_iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
@@ -1737,10 +1733,9 @@ test "query with single include type and single exclude works" {
     }
 
     {
-        var iter = try World.Query(.{
+        var iter = World.Query(.{
             query.include("a", Testing.Component.A),
-        }, .{Testing.Component.B}).submit(world, std.testing.allocator);
-        defer iter.deinit();
+        }, .{Testing.Component.B}).submit(world);
 
         var index: usize = 100;
         while (iter.next()) |item| {
@@ -1780,11 +1775,10 @@ test "query with single include type and multiple exclude works" {
     }
 
     {
-        var iter = try World.Query(
+        var iter = World.Query(
             .{query.include("a", Testing.Component.A)},
             .{ Testing.Component.B, Testing.Component.C },
-        ).submit(world, std.testing.allocator);
-        defer iter.deinit();
+        ).submit(world);
 
         var index: usize = 200;
         while (iter.next()) |item| {
