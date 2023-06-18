@@ -602,6 +602,7 @@ fn CreateWorld(
                     defer zone.End();
 
                     const param_types = comptime metadata.paramArgTypes();
+                    var arguments: std.meta.Tuple(&param_types) = undefined;
 
                     var storage_buffer: [component_query_types.len][]u8 = undefined;
                     var storage = OpaqueArchetype.StorageData{
@@ -618,7 +619,6 @@ fn CreateWorld(
                         self_job.world.container.archetypes.items[archetype_index].getStorageData(&storage, include_bitmask);
 
                         for (0..storage.inner_len) |inner_index| {
-                            var arguments: std.meta.Tuple(&param_types) = undefined;
                             inline for (param_types, 0..) |Param, j| {
                                 switch (metadata.params[j]) {
                                     .component_value => {
@@ -629,8 +629,6 @@ fn CreateWorld(
                                             const to = from + param_size;
                                             const bytes = storage.outer[field_map[j]][from..to];
                                             arguments[j] = @ptrCast(*Param, @alignCast(@alignOf(Param), bytes.ptr)).*;
-                                        } else {
-                                            arguments[j] = Param{};
                                         }
                                     },
                                     .component_ptr => {
@@ -641,8 +639,6 @@ fn CreateWorld(
                                             const to = from + param_size;
                                             const bytes = storage.outer[field_map[j]][from..to];
                                             arguments[j] = @ptrCast(Param, @alignCast(@alignOf(component_query_types[j]), bytes.ptr));
-                                        } else {
-                                            arguments[j] = &component_query_types[j]{};
                                         }
                                     },
                                     .event_argument_value => arguments[j] = @ptrCast(*meta.EventArgument(ExtraArgumentType), &self_job.extra_argument).*,
