@@ -112,11 +112,13 @@ const include = ecez.query.include;
 var happy_healhy_monster_iter = try World.Query(
     // notice that Monster components will be mutable through pointer semantics
     .{
+        // these are our include types
         include("monster", *Monster), 
         include("happy", HappyTag), 
         include("healthy", HealthyTag),
-    }, // these are our include types  
-    .{SadTag, SickTag}                   // these are our exclude types
+    },
+    // these are our exclude types
+    .{SadTag, SickTag}
 ).submit(world, std.testing.allocator);
 
 while (happy_healhy_monster_iter.next()) |happy_healhy_monster| {
@@ -133,7 +135,7 @@ if (happy_healhy_monster_iter.at(5)) |fifth_happy_monster| {
 ```
 
 
-### Multithreading is done thorugh [zjobs](https://github.com/michal-z/zig-gamedev/tree/main/libs/zjobs)
+### Multithreading is done through [zjobs](https://github.com/michal-z/zig-gamedev/tree/main/libs/zjobs)
 
 zjobs is as the name suggest a job based multithreading API. 
 
