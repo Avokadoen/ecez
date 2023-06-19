@@ -53,7 +53,6 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
 
         allocator: Allocator,
         archetypes: ArrayList(OpaqueArchetype),
-        bit_encodings: ArrayList(BitMask.Bits),
         entity_references: ArrayList(EntityRef),
 
         tree: BinaryTree,
@@ -67,10 +66,6 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
 
             var archetypes = try ArrayList(OpaqueArchetype).initCapacity(allocator, pre_alloc_amount);
             errdefer archetypes.deinit();
-
-            // TODO: no longer need (stored in the archetype)
-            var bit_encodings = try ArrayList(BitMask.Bits).initCapacity(allocator, pre_alloc_amount);
-            errdefer bit_encodings.deinit();
 
             const entity_references = try ArrayList(EntityRef).initCapacity(allocator, pre_alloc_amount);
             errdefer entity_references.deinit();
@@ -86,12 +81,10 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
             const void_bitmask = @as(BitMask.Bits, 0);
             const void_archetype = try OpaqueArchetype.init(allocator, void_bitmask);
             archetypes.appendAssumeCapacity(void_archetype);
-            bit_encodings.appendAssumeCapacity(void_bitmask);
 
             return ArcheContainer{
                 .allocator = allocator,
                 .archetypes = archetypes,
-                .bit_encodings = bit_encodings,
                 .entity_references = entity_references,
                 .tree = tree,
                 .component_sizes = component_sizes,
@@ -104,7 +97,6 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                 archetype.deinit();
             }
             self.archetypes.deinit();
-            self.bit_encodings.deinit();
             self.entity_references.deinit();
             self.tree.deinit();
         }
@@ -113,7 +105,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
             const zone = ztracy.ZoneNC(@src(), "Container clear", Color.arche_container);
             defer zone.End();
 
-            // Do not clear bit_encodings or tree since archetypes persist
+            // Do not clear tree since archetypes persist
             //
             self.entity_references.clearRetainingCapacity();
 
@@ -164,7 +156,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
 
             const new_component_global_index = comptime componentIndex(@TypeOf(component));
 
-            const old_bit_encoding = self.bit_encodings.items[current_bit_index];
+            const old_bit_encoding = self.archetypes.items[current_bit_index].component_bitmask;
             const new_bit = @as(BitMask.Bits, 1 << new_component_global_index);
 
             // try to update component in current archetype
@@ -201,13 +193,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                         try self.archetypes.append(new_archetype);
                         errdefer _ = self.archetypes.pop();
 
-                        // register archetype bit encoding
-                        try self.bit_encodings.append(new_encoding);
-                        errdefer _ = self.bit_encodings.pop();
-
                         try self.tree.appendChain(opaque_archetype_index, new_encoding);
-
-                        std.debug.assert(self.bit_encodings.items.len == self.archetypes.items.len);
 
                         new_archetype_index = opaque_archetype_index;
                         break :maybe_create_archetype_blk true;
@@ -271,7 +257,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
             }
 
             // get old path and count how many components are stored in the entity
-            const old_encoding = self.bit_encodings.items[old_archetype_index];
+            const old_encoding = self.archetypes.items[old_archetype_index].component_bitmask;
             const old_component_count = @popCount(old_encoding);
 
             // remove the entity and it's components from the old archetype
@@ -307,16 +293,10 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
 
                 const opaque_archetype_index = @intCast(u32, self.archetypes.items.len);
 
-                // register archetype bit encoding
-                try self.bit_encodings.append(new_encoding);
-                errdefer _ = self.bit_encodings.pop();
-
                 try self.archetypes.append(new_archetype);
                 errdefer _ = self.archetypes.pop();
 
                 try self.tree.appendChain(opaque_archetype_index, new_encoding);
-
-                std.debug.assert(self.bit_encodings.items.len == self.archetypes.items.len);
 
                 new_archetype_index = opaque_archetype_index;
                 break :archetype_create_blk true;
@@ -344,7 +324,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
 
         pub inline fn getEntityBitEncoding(self: ArcheContainer, entity: Entity) BitMask.Bits {
             const encoding_index = self.entity_references.items[entity.id];
-            return self.bit_encodings.items[encoding_index];
+            return self.archetypes.items[encoding_index].component_bitmask;
         }
 
         pub inline fn hasComponent(self: ArcheContainer, entity: Entity, comptime Component: type) bool {
@@ -473,9 +453,6 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                 const opaque_archetype_index = @intCast(u32, self.archetypes.items.len);
                 try self.archetypes.append(new_archetype);
                 errdefer _ = self.archetypes.pop();
-
-                try self.bit_encodings.append(initial_bit_encoding);
-                errdefer _ = self.bit_encodings.pop();
 
                 try self.tree.appendChain(opaque_archetype_index, initial_bit_encoding);
 
