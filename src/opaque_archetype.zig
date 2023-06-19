@@ -291,7 +291,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
         pub fn getStorageData(
             self: *OpaqueArchetype,
             storage: *StorageData,
-            comptime filter_bitmask: ComponentMask.Bits,
+            filter_bitmask: ComponentMask.Bits,
         ) void {
             std.debug.assert(filter_bitmask & self.component_bitmask == filter_bitmask);
 

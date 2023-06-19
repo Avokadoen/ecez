@@ -47,10 +47,17 @@ var world = try ecez.WorldBuilder().WithComponents(.{
             // moveSystem is a single function that will be registered 
             moveSystem,
             // ...
-        }, .{})
+        }, .{}),
+        Event("on_mouse_click", .{fireWandSystem}, .{MouseArg})
     }).init(allocator, .{});
 
-try world.triggerEvent(.update_loop, .{});
+try world.triggerEvent(.update_loop, .{}, .{});
+
+// Trigger event can take event "scoped" arguments, like here where we include a mouse event.
+// Events can also exclude components when executing systems. In this example we will not call
+// "fireWantSystem" on any entity components if the entity has a MonsterTag component.
+try world.triggerEvent(.on_mouse_click, .{@as(MouseArg, mouse)}, .{ MonsterTag });
+
 ```
 
 ### Implicit multithreading of systems
