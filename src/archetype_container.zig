@@ -183,7 +183,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
 
                     const total_local_components: u32 = @popCount(new_encoding);
 
-                    var new_archetype_index = self.encodingToArchetypeIndex(new_encoding);
+                    var new_archetype_index = self.tree.getNodeDataIndex(new_encoding);
 
                     var new_archetype_created: bool = maybe_create_archetype_blk: {
                         // if the archetype already exist
@@ -197,7 +197,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                         );
                         errdefer new_archetype.deinit();
 
-                        const opaque_archetype_index = self.archetypes.items.len;
+                        const opaque_archetype_index = @intCast(u32, self.archetypes.items.len);
                         try self.archetypes.append(new_archetype);
                         errdefer _ = self.archetypes.pop();
 
@@ -205,7 +205,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                         try self.bit_encodings.append(new_encoding);
                         errdefer _ = self.bit_encodings.pop();
 
-                        try self.tree.appendChain(@intCast(u32, opaque_archetype_index), new_encoding);
+                        try self.tree.appendChain(opaque_archetype_index, new_encoding);
 
                         std.debug.assert(self.bit_encodings.items.len == self.archetypes.items.len);
 
@@ -293,7 +293,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                 break :remove_index_calc_blk remove_index;
             };
 
-            var new_archetype_index = self.encodingToArchetypeIndex(new_encoding);
+            var new_archetype_index = self.tree.getNodeDataIndex(new_encoding);
 
             const new_component_count = old_component_count - 1;
             var new_archetype_created = archetype_create_blk: {
@@ -305,7 +305,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                 var new_archetype = try OpaqueArchetype.init(self.allocator, new_encoding);
                 errdefer new_archetype.deinit();
 
-                const opaque_archetype_index = self.archetypes.items.len;
+                const opaque_archetype_index = @intCast(u32, self.archetypes.items.len);
 
                 // register archetype bit encoding
                 try self.bit_encodings.append(new_encoding);
@@ -314,7 +314,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                 try self.archetypes.append(new_archetype);
                 errdefer _ = self.archetypes.pop();
 
-                try self.tree.appendChain(@intCast(u32, opaque_archetype_index), new_encoding);
+                try self.tree.appendChain(opaque_archetype_index, new_encoding);
 
                 std.debug.assert(self.bit_encodings.items.len == self.archetypes.items.len);
 
@@ -340,15 +340,6 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
             );
 
             return new_archetype_created;
-        }
-
-        pub inline fn encodingToArchetypeIndex(self: ArcheContainer, bit_encoding: BitMask.Bits) ?usize {
-            for (self.bit_encodings.items, 0..) |bit_encoding_item, bit_encoding_index| {
-                if (bit_encoding_item == bit_encoding) {
-                    return bit_encoding_index;
-                }
-            }
-            return null;
         }
 
         pub inline fn getEntityBitEncoding(self: ArcheContainer, entity: Entity) BitMask.Bits {
@@ -460,7 +451,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                 }
             }
 
-            var new_archetype_index = self.encodingToArchetypeIndex(initial_bit_encoding);
+            var new_archetype_index = self.tree.getNodeDataIndex(initial_bit_encoding);
 
             var new_archetype_created: bool = regiser_entity_blk: {
                 // if the archetype already exist
@@ -479,14 +470,14 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                 );
                 errdefer new_archetype.deinit();
 
-                const opaque_archetype_index = self.archetypes.items.len;
+                const opaque_archetype_index = @intCast(u32, self.archetypes.items.len);
                 try self.archetypes.append(new_archetype);
                 errdefer _ = self.archetypes.pop();
 
                 try self.bit_encodings.append(initial_bit_encoding);
                 errdefer _ = self.bit_encodings.pop();
 
-                try self.tree.appendChain(@intCast(u32, opaque_archetype_index), initial_bit_encoding);
+                try self.tree.appendChain(opaque_archetype_index, initial_bit_encoding);
 
                 try self.archetypes.items[opaque_archetype_index].registerEntity(
                     entity,

@@ -18,7 +18,7 @@ pub fn FromConfig(comptime max_depth: u32, comptime BitMask: type) type {
 
             pub fn root() Node {
                 return Node{
-                    .data_index = null,
+                    .data_index = 0,
                     .bit_pos = 0,
                     .child = [_]?u32{null} ** 2,
                 };
@@ -86,6 +86,23 @@ pub fn FromConfig(comptime max_depth: u32, comptime BitMask: type) type {
             }
 
             self.node_list.items[current_index].data_index = data_index;
+        }
+
+        pub fn getNodeDataIndex(self: BinaryTree, destination: BitMask.Bits) ?u32 {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, tree_color);
+            defer zone.End();
+
+            var current_index: usize = 0;
+            const step_count = bit_count - @clz(destination);
+            for (0..step_count) |step| {
+                const shift = @intCast(BitMask.Shift, step);
+
+                const child_index: usize = if (((destination >> shift) & 1) == 1) Node.right else Node.left;
+
+                current_index = self.node_list.items[current_index].child[child_index] orelse return null;
+            }
+
+            return self.node_list.items[current_index].data_index;
         }
 
         pub const IterStack = struct {
@@ -458,5 +475,29 @@ test "iterate with include A exlude B iterate all expected" {
         }
 
         try testing.expectEqual(@as(?u32, null), tree.iterate(Testing.Bits.A, Testing.Bits.B, &iter));
+    }
+}
+
+test "getNodeDataIndex return null when missing" {
+    const all_combination_count = std.math.pow(u32, 2, Testing.AllComponentsArr.len);
+    var tree = try TestTree.init(testing.allocator, all_combination_count);
+    defer tree.deinit();
+
+    try testing.expectEqual(@as(?u32, null), tree.getNodeDataIndex(1));
+}
+
+test "getNodeDataIndex return data index" {
+    const all_combination_count = std.math.pow(u32, 2, Testing.AllComponentsArr.len);
+    var tree = try TestTree.init(testing.allocator, all_combination_count);
+    defer tree.deinit();
+
+    for (1..all_combination_count) |mock_data_index| {
+        const bitmask = @intCast(TestMask.Bits, mock_data_index);
+        tree.appendChain(@intCast(u32, mock_data_index), bitmask) catch unreachable;
+    }
+
+    for (1..all_combination_count) |mock_data_index| {
+        const bitmask = @intCast(TestMask.Bits, mock_data_index);
+        try testing.expectEqual(@intCast(u32, mock_data_index), tree.getNodeDataIndex(bitmask).?);
     }
 }
