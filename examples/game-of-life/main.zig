@@ -90,7 +90,7 @@ pub fn main() anyerror!void {
         // wait for previous update and render
         world.waitEvent(.loop);
         // schedule a new update cycle
-        try world.triggerEvent(.loop, .{});
+        try world.triggerEvent(.loop, .{}, .{});
 
         refresh_delay.timedWait(std.time.ns_per_s) catch {};
     }
