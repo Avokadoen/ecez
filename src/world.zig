@@ -69,7 +69,7 @@ fn WorldIntermediate(comptime prev_components: anytype, comptime prev_shared_sta
         }
 
         /// build the world instance which can be initialized
-        pub fn init(allocator: Allocator, shared_state: anytype) !CreateWorld(prev_components, prev_shared_state, prev_events) {
+        pub fn init(allocator: Allocator, shared_state: anytype) error{OutOfMemory}!CreateWorld(prev_components, prev_shared_state, prev_events) {
             return CreateWorld(prev_components, prev_shared_state, prev_events).init(allocator, shared_state);
         }
     };
@@ -144,7 +144,7 @@ fn CreateWorld(
         /// Parameters:
         ///     - allocator: allocator used when initiating entities
         ///     - shared_state: a tuple with an initial state for ALL shared state data declared when constructing world type
-        pub fn init(allocator: Allocator, shared_state: anytype) !World {
+        pub fn init(allocator: Allocator, shared_state: anytype) error{OutOfMemory}!World {
             const zone = ztracy.ZoneNC(@src(), "World init", Color.world);
             defer zone.End();
 
@@ -225,7 +225,7 @@ fn CreateWorld(
         /// Parameters:
         ///     - entity:    the entity that should be assigned the component value
         ///     - component: the new component value
-        pub fn removeComponent(self: *World, entity: Entity, comptime Component: type) !void {
+        pub fn removeComponent(self: *World, entity: Entity, comptime Component: type) error{ EntityMissing, OutOfMemory }!void {
             const zone = ztracy.ZoneNC(@src(), "World removeComponent", Color.world);
             defer zone.End();
             const new_archetype_created = try self.container.removeComponent(entity, Component);
@@ -246,7 +246,7 @@ fn CreateWorld(
         /// Parameters:
         ///     - entity:    the entity to retrieve Component from
         ///     - Component: the type of the component to retrieve
-        pub fn getComponent(self: *World, entity: Entity, comptime Component: type) ecez_error.ArchetypeError!Component {
+        pub fn getComponent(self: *World, entity: Entity, comptime Component: type) error{ ComponentMissing, EntityMissing }!Component {
             const zone = ztracy.ZoneNC(@src(), "World getComponent", Color.world);
             defer zone.End();
             return self.container.getComponent(entity, Component);
