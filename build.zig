@@ -83,11 +83,13 @@ pub fn build(b: *std.Build) void {
 
     const Example = struct {
         name: []const u8,
+        link_libc: bool,
     };
 
-    inline for ([_]Example{.{
-        .name = "game-of-life",
-    }}) |example| {
+    inline for ([_]Example{
+        .{ .name = "game-of-life", .link_libc = false },
+        .{ .name = "benchmark-instantiate-similar", .link_libc = true },
+    }) |example| {
         const path = "examples/" ++ example.name ++ "/main.zig";
         var exe = b.addExecutable(.{
             .name = example.name,
@@ -101,6 +103,10 @@ pub fn build(b: *std.Build) void {
         exe.addModule("ztracy", ztracy_package.module);
         ztracy.link(exe, .{ .enable_ztracy = enable_tracy });
         exe.addModule("zjobs", zjobs_package.module);
+
+        if (example.link_libc) {
+            exe.linkLibC();
+        }
 
         b.installArtifact(exe);
 

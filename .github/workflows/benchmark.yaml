@@ -1,0 +1,65 @@
+name: benchmark
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '*.md'
+      - '.vscode/**'
+  pull_request:
+    paths-ignore:
+      - '*.md'
+      - '.vscode/**'
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: Poop benchmark
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download zig
+        run: sudo snap install zig --classic --edge
+
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2
+
+      - name: Build examples head
+        run: zig build -Doptimize=ReleaseFast
+
+      - name: Rename head benchmark
+        run: mv zig-out/bin/benchmark-instantiate-similar benchmark-instantiate-similar-head
+
+      - name: Checkout previous commit
+        run: git checkout HEAD^
+
+      - name: debug
+        run: ls zig-out/bin/
+
+      - name: Delete head build
+        run: |
+          rm -rf zig-out
+          rm -rf zig-cache
+
+      - name: Build examples prev
+        run: zig build -Doptimize=ReleaseFast -Denable-tracy=false
+
+      - name: debug
+        run: ls zig-out/bin/
+
+      - name: Rename prev benchmark
+        run: mv zig-out/bin/benchmark-instantiate-similar benchmark-instantiate-similar-prev
+
+      - name: Download poop
+        run: wget -O poop 'https://github.com/andrewrk/poop/releases/download/0.3.0/x86_64-linux-poop'
+
+      - name: Benchmark diff
+        run: poop "benchmark-instantiate-similar-prev" "benchmark-instantiate-similar-head"
+
+
+

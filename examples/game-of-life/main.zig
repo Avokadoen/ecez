@@ -52,13 +52,9 @@ pub fn main() anyerror!void {
         const cell_create_zone = ztracy.ZoneNC(@src(), "Create Cells", Color.Light.purple);
         defer cell_create_zone.End();
 
-        // Workaround issue https://github.com/ziglang/zig/issues/3915 by declaring a type for entity,
-        // should be valid to use createEntity(.{ Component1, Component2 }) in most cases ...
-        const Cell = std.meta.Tuple(&[_]type{ GridPos, Health });
-
         var i: usize = 0;
         while (i < cell_count) : (i += 1) {
-            _ = try world.createEntity(Cell{
+            _ = try world.createEntity(.{
                 GridPos{
                     .x = @intCast(u8, i % grid_dimensions),
                     .y = @intCast(u8, i / grid_dimensions),
@@ -73,10 +69,9 @@ pub fn main() anyerror!void {
         const line_create_zone = ztracy.ZoneNC(@src(), "Create New Lines", Color.Light.green);
         defer line_create_zone.End();
 
-        const Line = std.meta.Tuple(&[_]type{LinePos});
         var i: u8 = 1;
         while (i <= new_lines) : (i += 1) {
-            _ = try world.createEntity(Line{LinePos{ .nth = i }});
+            _ = try world.createEntity(.{LinePos{ .nth = i }});
         }
     }
 
