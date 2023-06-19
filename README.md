@@ -55,7 +55,7 @@ try world.triggerEvent(.update_loop, .{}, .{});
 
 // Trigger event can take event "scoped" arguments, like here where we include a mouse event.
 // Events can also exclude components when executing systems. In this example we will not call
-// "fireWantSystem" on any entity components if the entity has a MonsterTag component.
+// "fireWandSystem" on any entity components if the entity has a MonsterTag component.
 try world.triggerEvent(.on_mouse_click, .{@as(MouseArg, mouse)}, .{ MonsterTag });
 
 ```
