@@ -657,29 +657,36 @@ fn CreateWorld(
                     )) |archetype_index| {
                         self_job.world.container.archetypes.items[archetype_index].getStorageData(&storage, include_bitmask);
 
+                        const entities = self_job.world.container.archetypes.items[archetype_index].entities.keys();
                         for (0..storage.inner_len) |inner_index| {
                             inline for (param_types, 0..) |Param, j| {
                                 switch (metadata.params[j]) {
                                     .component_value => {
+                                        const component_index = if (metadata.has_entity_argument) j - 1 else j;
+
                                         // get size of the parameter type
                                         const param_size = @sizeOf(Param);
                                         if (param_size > 0) {
                                             const from = inner_index * param_size;
                                             const to = from + param_size;
-                                            const bytes = storage.outer[field_map[j]][from..to];
+                                            const bytes = storage.outer[field_map[component_index]][from..to];
                                             arguments[j] = @ptrCast(*Param, @alignCast(@alignOf(Param), bytes.ptr)).*;
                                         }
                                     },
                                     .component_ptr => {
+                                        const component_index = if (metadata.has_entity_argument) j - 1 else j;
+                                        const CompQueryTypes = component_query_types[component_index];
+
                                         // get size of the type the pointer is pointing to
-                                        const param_size = @sizeOf(component_query_types[j]);
+                                        const param_size = @sizeOf(CompQueryTypes);
                                         if (param_size > 0) {
                                             const from = inner_index * param_size;
                                             const to = from + param_size;
-                                            const bytes = storage.outer[field_map[j]][from..to];
-                                            arguments[j] = @ptrCast(Param, @alignCast(@alignOf(component_query_types[j]), bytes.ptr));
+                                            const bytes = storage.outer[field_map[component_index]][from..to];
+                                            arguments[j] = @ptrCast(Param, @alignCast(@alignOf(CompQueryTypes), bytes.ptr));
                                         }
                                     },
+                                    .entity => arguments[j] = entities[inner_index],
                                     .event_argument_value => arguments[j] = @ptrCast(*meta.EventArgument(ExtraArgumentType), &self_job.extra_argument).*,
                                     .event_argument_ptr => arguments[j] = @ptrCast(*meta.EventArgument(extra_argument_child_type), self_job.extra_argument),
                                     .shared_state_value => arguments[j] = self_job.world.getSharedStateWithSharedStateType(Param),
@@ -1354,6 +1361,76 @@ test "event can have many shared state" {
     try testing.expectEqual(B{ .value = 12 }, try world.getComponent(entity_b, B));
 }
 
+test "events can access current entity" {
+    // define a system type
+    const SystemType = struct {
+        pub fn systemOne(entity: Entity, a: *Testing.Component.A) void {
+            a.value += @intCast(u32, entity.id);
+        }
+    };
+
+    var world = try WorldStub.WithEvents(.{
+        Event("onFoo", .{SystemType}, .{}),
+    }).init(testing.allocator, .{});
+    defer world.deinit();
+
+    var entities: [100]Entity = undefined;
+    for (&entities, 0..) |*entity, iter| {
+        const initial_state = AEntityType{
+            .a = .{ .value = @intCast(u32, iter) },
+        };
+        entity.* = try world.createEntity(initial_state);
+    }
+
+    try world.triggerEvent(.onFoo, .{}, .{});
+    world.waitEvent(.onFoo);
+
+    for (entities) |entity| {
+        try testing.expectEqual(
+            Testing.Component.A{ .value = @intCast(u32, entity.id) * 2 },
+            try world.getComponent(entity, Testing.Component.A),
+        );
+    }
+}
+
+test "events entity access remain correct after single removeComponent" {
+    // define a system type
+    const SystemType = struct {
+        pub fn systemOne(entity: Entity, a: *Testing.Component.A) void {
+            a.value += @intCast(u32, entity.id);
+        }
+    };
+
+    var world = try WorldStub.WithEvents(.{
+        Event("onFoo", .{SystemType}, .{}),
+    }).init(testing.allocator, .{});
+    defer world.deinit();
+
+    var entities: [100]Entity = undefined;
+    for (&entities, 0..) |*entity, iter| {
+        const initial_state = AEntityType{
+            .a = .{ .value = @intCast(u32, iter) },
+        };
+        entity.* = try world.createEntity(initial_state);
+    }
+
+    try world.triggerEvent(.onFoo, .{}, .{});
+    world.waitEvent(.onFoo);
+
+    for (entities[0..50]) |entity| {
+        try testing.expectEqual(
+            Testing.Component.A{ .value = @intCast(u32, entity.id) * 2 },
+            try world.getComponent(entity, Testing.Component.A),
+        );
+    }
+    for (entities[51..100]) |entity| {
+        try testing.expectEqual(
+            Testing.Component.A{ .value = @intCast(u32, entity.id) * 2 },
+            try world.getComponent(entity, Testing.Component.A),
+        );
+    }
+}
+
 test "events can accepts event related data" {
     const MouseInput = struct { x: u32, y: u32 };
     // define a system type
@@ -1870,14 +1947,19 @@ test "reproducer: component data is mangled by having more than one entity" {
 
     {
         const entity = try world.createEntity(.{});
-        const obj = RenderContext.ObjectMetadata{ .a = entity, .b = 0, .c = undefined };
+        const obj = RenderContext.ObjectMetadata{ .a = entity, .b = 5, .c = undefined };
         try world.setComponent(entity, obj);
         const instance = Editor.InstanceHandle{ .a = 1, .b = 2, .c = 3 };
         try world.setComponent(entity, instance);
 
+        const entity_obj = try world.getComponent(entity, RenderContext.ObjectMetadata);
         try testing.expectEqual(
-            obj,
-            try world.getComponent(entity, RenderContext.ObjectMetadata),
+            obj.a,
+            entity_obj.a,
+        );
+        try testing.expectEqual(
+            obj.b,
+            entity_obj.b,
         );
         try testing.expectEqual(
             instance,
@@ -1886,14 +1968,19 @@ test "reproducer: component data is mangled by having more than one entity" {
     }
     {
         const entity = try world.createEntity(.{});
-        const obj = RenderContext.ObjectMetadata{ .a = entity, .b = 0, .c = undefined };
+        const obj = RenderContext.ObjectMetadata{ .a = entity, .b = 2, .c = undefined };
         try world.setComponent(entity, obj);
         const instance = Editor.InstanceHandle{ .a = 1, .b = 1, .c = 1 };
         try world.setComponent(entity, instance);
 
+        const entity_obj = try world.getComponent(entity, RenderContext.ObjectMetadata);
         try testing.expectEqual(
-            obj,
-            try world.getComponent(entity, RenderContext.ObjectMetadata),
+            obj.a,
+            entity_obj.a,
+        );
+        try testing.expectEqual(
+            obj.b,
+            entity_obj.b,
         );
         try testing.expectEqual(
             instance,

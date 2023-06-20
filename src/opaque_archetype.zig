@@ -162,11 +162,8 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
 
                 const component_size = all_component_sizes[cursor - 1];
 
-                // TODO: remove if?
-                if (component_size > 0) {
-                    // TODO: proper errdefer
-                    try self.component_storage[comp_index].appendSlice(data[comp_index][0..component_size]);
-                }
+                // TODO: proper errdefer
+                try self.component_storage[comp_index].appendSlice(data[comp_index][0..component_size]);
             }
         }
 
@@ -197,35 +194,40 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
 
                 const component_size = all_component_sizes[cursor - 1];
 
-                if (component_size > 0) {
-                    // copy data to buffer
-                    const from_bytes = moving_kv.value * component_size;
-                    const to_bytes = from_bytes + component_size;
-                    const component_bytes = self.component_storage[comp_index].items[from_bytes..to_bytes];
-                    std.mem.copy(u8, buffer[comp_index], component_bytes);
-
-                    // remove data from storage
-                    {
-                        // shift data to the left (moving extracted bytes to the end of the array)
-                        std.mem.rotate(u8, self.component_storage[comp_index].items[from_bytes..], component_size);
-
-                        // mark extracted bytes as invalid
-                        const new_len = self.component_storage[comp_index].items.len - component_size;
-                        // new_len is always less than previous len, so it can't fail
-                        self.component_storage[comp_index].shrinkRetainingCapacity(new_len);
-                    }
+                if (component_size < 0) {
+                    continue;
                 }
+
+                // copy data to buffer
+                const remove_bytes = remove_slice_calc_blk: {
+                    const remove_from_bytes = moving_kv.value * component_size;
+                    const remove_to_bytes = remove_from_bytes + component_size;
+                    const bytes = self.component_storage[comp_index].items[remove_from_bytes..remove_to_bytes];
+                    @memcpy(buffer[comp_index][0..component_size], bytes);
+                    break :remove_slice_calc_blk bytes;
+                };
+
+                const entity_count = self.entities.count();
+                if (entity_count > 0) {
+                    // remove data from storage, by overwriting it with the swapped entity bytes
+                    const moved_bytes = slice_calc_blk: {
+                        const moved_from_bytes = entity_count * component_size;
+                        const moved_to_bytes = moved_from_bytes + component_size;
+                        break :slice_calc_blk self.component_storage[comp_index].items[moved_from_bytes..moved_to_bytes];
+                    };
+                    @memcpy(remove_bytes, moved_bytes);
+                }
+
+                // mark extracted bytes as invalid
+                const new_len = self.component_storage[comp_index].items.len - component_size;
+                // new_len is always less than previous len, so it can't fail
+                self.component_storage[comp_index].shrinkRetainingCapacity(new_len);
             }
 
-            // remove entity and update entity values for all entities with component data to the right of removed entity
-            // TODO: faster way of doing this?
-            // https://devlog.hexops.com/2022/zig-hashmaps-explained/
-            for (self.entities.values()) |*component_index| {
-                // if the entity was located after removed entity, we shift it left
-                // to occupy vacant memory
-                if (component_index.* > moving_kv.value) {
-                    component_index.* -= 1;
-                }
+            var values = self.entities.values();
+            if (values.len > moving_kv.value) {
+                // update the value of the entity that was moved from being last element to new position of the removed entity
+                values[moving_kv.value] = moving_kv.value;
             }
         }
 

@@ -154,7 +154,8 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
 
             const current_bit_index = self.entity_references.items[entity.id];
 
-            const new_component_global_index = comptime componentIndex(@TypeOf(component));
+            const Component = @TypeOf(component);
+            const new_component_global_index = comptime componentIndex(Component);
 
             const old_bit_encoding = self.archetypes.items[current_bit_index].component_bitmask;
             const new_bit = @as(BitMask.Bits, 1 << new_component_global_index);
@@ -215,7 +216,10 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                     // insert the new component at it's correct location
                     var rhd = data[new_local_component_index..total_local_components];
                     std.mem.rotate([]u8, rhd, rhd.len - 1);
-                    std.mem.copy(u8, data[new_local_component_index], std.mem.asBytes(&component));
+                    @memcpy(
+                        data[new_local_component_index][0..@sizeOf(Component)],
+                        std.mem.asBytes(&component),
+                    );
 
                     const unwrapped_index = new_archetype_index.?;
 

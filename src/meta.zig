@@ -4,6 +4,8 @@ const Type = std.builtin.Type;
 
 const testing = std.testing;
 
+const Entity = @import("entity_type.zig").Entity;
+
 pub const secret_field = "magic_secret_sauce";
 pub const shared_secret_field = "shared_magic_secret_sauce";
 pub const event_argument_secret_field = "event_magic_secret_sauce";
@@ -20,6 +22,7 @@ pub const SystemMetadata = struct {
     pub const Arg = enum {
         component_ptr,
         component_value,
+        entity,
         event_argument_ptr,
         event_argument_value,
         shared_state_ptr,
@@ -32,6 +35,7 @@ pub const SystemMetadata = struct {
     fn_info: FnInfo,
     component_params_count: usize,
     params: []const Arg,
+    has_entity_argument: bool,
 
     /// initalize metadata for a system using a supplied function type info
     pub fn init(
@@ -69,17 +73,26 @@ pub const SystemMetadata = struct {
             not_component_parsing,
         };
 
+        var has_entity_argument: bool = false;
         var component_params_count: usize = 0;
         var parsing_state = ParsingState.component_parsing;
         var params: [fn_info.params.len]Arg = undefined;
-        inline for (fn_info.params, 0..) |param, i| {
-            const T = param.type orelse {
+        inline for (&params, fn_info.params, 0..) |*param, param_info, i| {
+            const T = param_info.type orelse {
                 const err_msg = std.fmt.comptimePrint("system {s} argument {d} is missing type", .{
                     function_name,
                     i,
                 });
                 @compileError(err_msg);
             };
+
+            if (i == 0 and T == Entity) {
+                param.* = Arg.entity;
+                has_entity_argument = true;
+                continue;
+            } else if (T == Entity) {
+                @compileError("entity argument must be the first argument");
+            }
 
             // TODO: refactor this beast
             switch (@typeInfo(T)) {
@@ -98,21 +111,21 @@ pub const SystemMetadata = struct {
                         // if argument is a shared state argument or event we are done parsing components
                         if (@hasField(pointer.child, shared_secret_field)) {
                             parsing_state = .not_component_parsing;
-                            params[i] = Arg.shared_state_ptr;
+                            param.* = Arg.shared_state_ptr;
                         } else if (@hasField(pointer.child, view_secret_field)) {
                             @compileError("view argument can't be pointers");
                         } else if (@hasField(pointer.child, event_argument_secret_field)) {
                             parsing_state = .not_component_parsing;
-                            params[i] = Arg.event_argument_ptr;
+                            param.* = Arg.event_argument_ptr;
                         } else {
-                            component_params_count = i + 1;
-                            params[i] = Arg.component_ptr;
+                            component_params_count = i + if (has_entity_argument) 0 else 1;
+                            param.* = Arg.component_ptr;
                         }
                     } else {
                         // we are now done parsing components which means that any argument
                         // must be either shared state, or an event argument
                         if (@hasField(pointer.child, shared_secret_field)) {
-                            params[i] = Arg.shared_state_ptr;
+                            param.* = Arg.shared_state_ptr;
                         } else if (@hasField(pointer.child, view_secret_field)) {
                             @compileError("view argument can't be pointers");
                         } else if (@hasField(pointer.child, event_argument_secret_field)) {
@@ -139,26 +152,26 @@ pub const SystemMetadata = struct {
                         // if argument is a shared state argument or event we are done parsing components
                         if (@hasField(T, shared_secret_field)) {
                             parsing_state = .not_component_parsing;
-                            params[i] = Arg.shared_state_value;
+                            param.* = Arg.shared_state_value;
                         } else if (@hasField(T, event_argument_secret_field)) {
                             parsing_state = .not_component_parsing;
-                            params[i] = Arg.event_argument_value;
+                            param.* = Arg.event_argument_value;
                         } else if (@hasField(T, view_secret_field)) {
                             parsing_state = .not_component_parsing;
-                            params[i] = Arg.view;
+                            param.* = Arg.view;
                         } else {
-                            component_params_count = i + 1;
-                            params[i] = Arg.component_value;
+                            component_params_count = i + if (has_entity_argument) 0 else 1;
+                            param.* = Arg.component_value;
                         }
                     } else {
                         // we are now done parsing components which means that any argument
                         // must be either shared state, or an event argument
                         if (@hasField(T, shared_secret_field)) {
-                            params[i] = Arg.shared_state_value;
+                            param.* = Arg.shared_state_value;
                         } else if (@hasField(T, event_argument_secret_field)) {
-                            params[i] = Arg.event_argument_value;
+                            param.* = Arg.event_argument_value;
                         } else if (@hasField(T, view_secret_field)) {
-                            params[i] = Arg.view;
+                            param.* = Arg.view;
                         } else {
                             const pre_arg_str = switch (params[i - 1]) {
                                 .component_ptr, .component_value => unreachable,
@@ -189,7 +202,8 @@ pub const SystemMetadata = struct {
             .depend_on_indices_range = depend_on_indices_range,
             .fn_info = fn_info,
             .component_params_count = component_params_count,
-            .params = params[0..],
+            .params = &params,
+            .has_entity_argument = has_entity_argument,
         };
     }
 
@@ -207,8 +221,11 @@ pub const SystemMetadata = struct {
     /// Get the argument types as proper component types
     /// This function will extrapolate inner types from pointers
     pub fn componentQueryArgTypes(comptime self: SystemMetadata) [self.component_params_count]type {
+        const start_index = if (self.has_entity_argument) 1 else 0;
+        const end_index = self.component_params_count + start_index;
+
         comptime var params: [self.component_params_count]type = undefined;
-        inline for (&params, self.fn_info.params[0..self.component_params_count]) |*param, arg| {
+        inline for (&params, self.fn_info.params[start_index..end_index]) |*param, arg| {
             switch (@typeInfo(arg.type.?)) {
                 .Pointer => |p| {
                     param.* = p.child;
