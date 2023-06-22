@@ -315,8 +315,8 @@ fn CreateWorld(
                 self.execution_job_queue.start();
             }
 
-            var event_jobs_in_flight = &self.event_jobs_in_flight[@enumToInt(event)];
-            const triggered_event = events[@enumToInt(event)];
+            var event_jobs_in_flight = &self.event_jobs_in_flight[@intFromEnum(event)];
+            const triggered_event = events[@intFromEnum(event)];
 
             // TODO: verify systems and arguments in type initialization
             const EventExtraArgument = @TypeOf(event_extra_argument);
@@ -411,7 +411,7 @@ fn CreateWorld(
             const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.world);
             defer zone.End();
 
-            for (self.event_jobs_in_flight[@enumToInt(event)]) |job_in_flight| {
+            for (self.event_jobs_in_flight[@intFromEnum(event)]) |job_in_flight| {
                 self.execution_job_queue.wait(job_in_flight);
             }
         }
@@ -422,7 +422,7 @@ fn CreateWorld(
             defer zone.End();
 
             inline for (0..events.len) |i| {
-                self.waitEvent(@intToEnum(EventsEnum, i));
+                self.waitEvent(@enumFromInt(EventsEnum, i));
             }
         }
 

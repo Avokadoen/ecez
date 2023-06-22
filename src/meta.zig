@@ -1097,9 +1097,9 @@ test "GenerateEventEnum generate expected enum" {
         Event("eventOne", .{}, void),
         Event("eventTwo", .{}, void),
     });
-    try testing.expectEqual(0, @enumToInt(EventEnum.eventZero));
-    try testing.expectEqual(1, @enumToInt(EventEnum.eventOne));
-    try testing.expectEqual(2, @enumToInt(EventEnum.eventTwo));
+    try testing.expectEqual(0, @intFromEnum(EventEnum.eventZero));
+    try testing.expectEqual(1, @intFromEnum(EventEnum.eventOne));
+    try testing.expectEqual(2, @intFromEnum(EventEnum.eventTwo));
 }
 
 test "systemCount count systems" {
