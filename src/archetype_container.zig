@@ -200,31 +200,29 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                         break :maybe_create_archetype_blk true;
                     };
 
+                    // fetch a view of the component data
                     var data: [sorted_components.len][]u8 = undefined;
-                    inline for (&data) |*data_entry| {
-                        var buf: [biggest_component_size]u8 = undefined;
-                        data_entry.* = &buf;
-                    }
-
-                    // remove the entity and it's components from the old archetype
-                    try self.archetypes.items[current_bit_index].swapRemoveEntity(
+                    try self.archetypes.items[current_bit_index].fetchEntityComponentView(
                         entity,
-                        data[0 .. total_local_components - 1],
                         self.component_sizes,
+                        data[0 .. total_local_components - 1],
                     );
 
-                    // insert the new component at it's correct location
+                    // move the data slices around to make room for the new component data
                     var rhd = data[new_local_component_index..total_local_components];
                     std.mem.rotate([]u8, rhd, rhd.len - 1);
-                    @memcpy(
-                        data[new_local_component_index][0..@sizeOf(Component)],
-                        std.mem.asBytes(&component),
-                    );
+
+                    // copy the new component bytes to a stack buffer and assing the datat entry to this buffer
+                    var buf: [biggest_component_size]u8 = undefined;
+                    @memcpy(buf[0..@sizeOf(Component)], std.mem.asBytes(&component));
+                    data[new_local_component_index] = &buf;
 
                     const unwrapped_index = new_archetype_index.?;
-
-                    // register the entity in the new archetype
+                    // register the component bytes and entity to it's new archetype
                     try self.archetypes.items[unwrapped_index].registerEntity(entity, data[0..total_local_components], self.component_sizes);
+
+                    // remove the entity and it's components from the old archetype, we know entity exist in old archetype because we called fetchEntityComponentView successfully
+                    self.archetypes.items[current_bit_index].swapRemoveEntity(entity, self.component_sizes) catch unreachable;
 
                     // update entity reference
                     self.entity_references.items[entity.id] = @intCast(
@@ -254,38 +252,16 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
 
             const old_archetype_index = self.entity_references.items[entity.id];
 
-            var data: [sorted_components.len][]u8 = undefined;
-            inline for (&data) |*data_entry| {
-                var buf: [biggest_component_size]u8 = undefined;
-                data_entry.* = &buf;
-            }
-
             // get old path and count how many components are stored in the entity
             const old_encoding = self.archetypes.items[old_archetype_index].component_bitmask;
             const old_component_count = @popCount(old_encoding);
-
-            // remove the entity and it's components from the old archetype
-            try self.archetypes.items[old_archetype_index].swapRemoveEntity(
-                entity,
-                data[0..old_component_count],
-                self.component_sizes,
-            );
-            // TODO: handle error, this currently can lead to corrupt entities!
 
             const global_remove_component_index = comptime componentIndex(Component);
             const remove_bit = @as(BitMask.Bits, 1 << global_remove_component_index);
             const new_encoding = old_encoding & ~remove_bit;
 
-            var local_remove_component_index: usize = remove_index_calc_blk: {
-                // calculate mask that filters out most significant bits
-                const remove_after_bits_mask = remove_bit - 1;
-                const remove_index = @popCount(old_encoding & remove_after_bits_mask);
-                break :remove_index_calc_blk remove_index;
-            };
-
             var new_archetype_index = self.tree.getNodeDataIndex(new_encoding);
 
-            const new_component_count = old_component_count - 1;
             var new_archetype_created = archetype_create_blk: {
                 // if archetype already exist
                 if (new_archetype_index != null) {
@@ -306,16 +282,31 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                 break :archetype_create_blk true;
             };
 
+            var local_remove_component_index: usize = remove_index_calc_blk: {
+                // calculate mask that filters out most significant bits
+                const remove_after_bits_mask = remove_bit - 1;
+                const remove_index = @popCount(old_encoding & remove_after_bits_mask);
+                break :remove_index_calc_blk remove_index;
+            };
+
+            // fetch a view of the component data
+            var data: [sorted_components.len][]u8 = undefined;
+            try self.archetypes.items[old_archetype_index].fetchEntityComponentView(
+                entity,
+                self.component_sizes,
+                data[0..old_component_count],
+            );
+
+            // move the data slices around to make room for the new component data
             var rhd = data[local_remove_component_index..old_component_count];
             std.mem.rotate([]u8, rhd, 1);
 
-            // register the entity in the new archetype
             const unwrapped_index = new_archetype_index.?;
-            try self.archetypes.items[unwrapped_index].registerEntity(
-                entity,
-                data[0..new_component_count],
-                self.component_sizes,
-            );
+            // register the component bytes and entity to it's new archetype
+            try self.archetypes.items[unwrapped_index].registerEntity(entity, data[0 .. old_component_count - 1], self.component_sizes);
+
+            // register the entity in the new archetype, we know entity exist in old archetype because we called fetchEntityComponentView successfully
+            self.archetypes.items[old_archetype_index].swapRemoveEntity(entity, self.component_sizes) catch unreachable;
 
             // update entity reference
             self.entity_references.items[entity.id] = @intCast(
