@@ -437,7 +437,6 @@ fn CreateWorld(
             return self.shared_state[index];
         }
 
-        // blocked by: https://github.com/ziglang/zig/issues/5497
         /// set a shared state using the shared state's inner type
         pub fn setSharedState(self: *World, state: anytype) void {
             const ActualType = meta.SharedState(@TypeOf(state));
@@ -481,7 +480,7 @@ fn CreateWorld(
         ///    std.debug.print("{any}", .{item.a});
         /// }
         /// ```
-        pub fn Query(comptime include_types: anytype, comptime exclude_types: anytype) type {
+        pub fn Query(comptime include_entity: bool, comptime include_types: anytype, comptime exclude_types: anytype) type {
             const include_type_info = @typeInfo(@TypeOf(include_types));
             if (include_type_info != .Struct) {
                 @compileError("query include types must be a tuple of types");
@@ -583,6 +582,7 @@ fn CreateWorld(
             }
 
             const IterType = iterator.FromTypes(
+                include_entity,
                 &query_result_names,
                 &include_outer_type_arr,
                 include_bitmask,
@@ -1713,6 +1713,7 @@ test "query with single include type works" {
     {
         var index: usize = 0;
         var a_iter = World.Query(
+            false,
             .{query.include("a", Testing.Component.A)},
             .{},
         ).submit(world);
@@ -1740,7 +1741,7 @@ test "query with multiple include type works" {
     }
 
     {
-        var a_b_iter = World.Query(.{
+        var a_b_iter = World.Query(false, .{
             query.include("a", Testing.Component.A),
             query.include("b", Testing.Component.B),
         }, .{}).submit(world);
@@ -1774,9 +1775,11 @@ test "query with single ptr include type works" {
 
     {
         var index: usize = 0;
-        var a_iter = World.Query(.{
-            query.include("a_ptr", *Testing.Component.A),
-        }, .{}).submit(world);
+        var a_iter = World.Query(
+            false,
+            .{query.include("a_ptr", *Testing.Component.A)},
+            .{},
+        ).submit(world);
 
         while (a_iter.next()) |item| {
             item.a_ptr.value += 1;
@@ -1786,9 +1789,11 @@ test "query with single ptr include type works" {
 
     {
         var index: usize = 1;
-        var a_iter = World.Query(.{
-            query.include("a", Testing.Component.A),
-        }, .{}).submit(world);
+        var a_iter = World.Query(
+            false,
+            .{query.include("a", Testing.Component.A)},
+            .{},
+        ).submit(world);
 
         while (a_iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
@@ -1819,9 +1824,11 @@ test "query with single include type and single exclude works" {
     }
 
     {
-        var iter = World.Query(.{
-            query.include("a", Testing.Component.A),
-        }, .{Testing.Component.B}).submit(world);
+        var iter = World.Query(
+            false,
+            .{query.include("a", Testing.Component.A)},
+            .{Testing.Component.B},
+        ).submit(world);
 
         var index: usize = 100;
         while (iter.next()) |item| {
@@ -1862,6 +1869,7 @@ test "query with single include type and multiple exclude works" {
 
     {
         var iter = World.Query(
+            false,
             .{query.include("a", Testing.Component.A)},
             .{ Testing.Component.B, Testing.Component.C },
         ).submit(world);
@@ -1872,6 +1880,75 @@ test "query with single include type and multiple exclude works" {
                 .value = @intCast(u32, index),
             }, item.a);
 
+            index += 1;
+        }
+    }
+}
+
+test "query with entity only works" {
+    const World = WorldStub.Build();
+    var world = try World.init(std.testing.allocator, .{});
+    defer world.deinit();
+
+    var entities: [200]Entity = undefined;
+    for (entities[0..100], 0..) |*entity, index| {
+        entity.* = try world.createEntity(AEntityType{
+            .a = .{ .value = @intCast(u32, index) },
+        });
+    }
+    for (entities[100..200], 100..) |*entity, index| {
+        entity.* = try world.createEntity(AbEntityType{
+            .a = .{ .value = @intCast(u32, index) },
+            .b = .{ .value = @intCast(u8, index) },
+        });
+    }
+
+    {
+        var iter = World.Query(
+            true,
+            .{query.include("a", Testing.Component.A)},
+            .{},
+        ).submit(world);
+
+        var index: usize = 0;
+        while (iter.next()) |item| {
+            try std.testing.expectEqual(entities[index], item.entity);
+            index += 1;
+        }
+    }
+}
+
+test "query with entity and include and exclude only works" {
+    const World = WorldStub.Build();
+    var world = try World.init(std.testing.allocator, .{});
+    defer world.deinit();
+
+    var entities: [200]Entity = undefined;
+    for (entities[0..100], 0..) |*entity, index| {
+        entity.* = try world.createEntity(AEntityType{
+            .a = .{ .value = @intCast(u32, index) },
+        });
+    }
+    for (entities[100..200], 100..) |*entity, index| {
+        entity.* = try world.createEntity(AbEntityType{
+            .a = .{ .value = @intCast(u32, index) },
+            .b = .{ .value = @intCast(u8, index) },
+        });
+    }
+
+    {
+        var iter = World.Query(
+            true,
+            .{query.include("a", Testing.Component.A)},
+            .{Testing.Component.B},
+        ).submit(world);
+
+        var index: usize = 0;
+        while (iter.next()) |item| {
+            try std.testing.expectEqual(entities[index], item.entity);
+            try std.testing.expectEqual(Testing.Component.A{
+                .value = @intCast(u32, index),
+            }, item.a);
             index += 1;
         }
     }

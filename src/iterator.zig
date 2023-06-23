@@ -10,6 +10,7 @@ const query = @import("query.zig");
 
 /// Initialize an iterator given an sorted slice of types
 pub fn FromTypes(
+    comptime include_entity: bool,
     comptime names: []const []const u8,
     comptime sorted_outer_types: []const type,
     comptime include_bitmap: anytype,
@@ -17,13 +18,41 @@ pub fn FromTypes(
     comptime OpaqueArchetype: type,
     comptime BinaryTree: type,
 ) type {
+    const entity_count = if (include_entity) 1 else 0;
+
+    const all_type_count = sorted_outer_types.len + entity_count;
+
+    const all_types = type_blk: {
+        var types: [all_type_count]type = undefined;
+
+        types[0] = Entity;
+
+        inline for (types[entity_count..], sorted_outer_types) |*@"type", Component| {
+            @"type".* = Component;
+        }
+        break :type_blk types;
+    };
+
+    const all_names = name_blk: {
+        var _names: [all_type_count][]const u8 = undefined;
+
+        _names[0] = "entity";
+
+        inline for (_names[entity_count..], names) |*_name, name| {
+            _name.* = name;
+        }
+
+        break :name_blk _names;
+    };
+
     return struct {
-        pub const Item = meta.ComponentStruct(names, sorted_outer_types);
+        pub const Item = meta.ComponentStruct(&all_names, &all_types);
 
         /// This iterator allow users to iterate results of queries without having to care about internal
         /// storage details
         const Iterator = @This();
 
+        entities: []Entity,
         all_archetypes: []OpaqueArchetype,
         tree: BinaryTree,
         tree_cursor: BinaryTree.IterCursor,
@@ -39,6 +68,7 @@ pub fn FromTypes(
             defer zone.End();
 
             return Iterator{
+                .entities = undefined,
                 .all_archetypes = all_archetypes,
                 .tree = tree,
                 .tree_cursor = BinaryTree.IterCursor.fromRoot(),
@@ -60,6 +90,10 @@ pub fn FromTypes(
                     self.inner_cursor = 0;
                     self.storage_buffer.outer = &self.outer_storage_buffer;
                     self.all_archetypes[next_archetype_index].getStorageData(&self.storage_buffer, include_bitmap);
+
+                    if (include_entity == true) {
+                        self.entities = self.all_archetypes[next_archetype_index].entities.keys();
+                    }
                 } else {
                     return null;
                 }
@@ -67,7 +101,12 @@ pub fn FromTypes(
 
             var item: Item = undefined;
             const item_fields = std.meta.fields(Item);
-            inline for (item_fields, 0..) |field, type_index| {
+
+            if (include_entity) {
+                item.entity = self.entities[self.inner_cursor];
+            }
+
+            inline for (item_fields[entity_count..], 0..) |field, type_index| {
                 const field_type_info = @typeInfo(field.type);
                 switch (field_type_info) {
                     .Pointer => |pointer| {
@@ -165,7 +204,15 @@ test "value iterating works" {
     }
 
     {
-        const A_Iterator = FromTypes(&[_][]const u8{"a"}, &[_]type{A}, Testing.Bits.A, Testing.Bits.None, TestOpaqueArchetype, TestTree);
+        const A_Iterator = FromTypes(
+            false,
+            &[_][]const u8{"a"},
+            &[_]type{A},
+            Testing.Bits.A,
+            Testing.Bits.None,
+            TestOpaqueArchetype,
+            TestTree,
+        );
         var iter = A_Iterator.init(&archetypes, tree);
 
         var i: u32 = 0;
@@ -177,7 +224,15 @@ test "value iterating works" {
     }
 
     {
-        const B_Iterator = FromTypes(&[_][]const u8{"b"}, &[_]type{B}, Testing.Bits.B, Testing.Bits.None, TestOpaqueArchetype, TestTree);
+        const B_Iterator = FromTypes(
+            false,
+            &[_][]const u8{"b"},
+            &[_]type{B},
+            Testing.Bits.B,
+            Testing.Bits.None,
+            TestOpaqueArchetype,
+            TestTree,
+        );
         var iter = B_Iterator.init(&archetypes, tree);
 
         var i: u32 = 0;
@@ -189,7 +244,15 @@ test "value iterating works" {
     }
 
     {
-        const A_B_Iterator = FromTypes(&[_][]const u8{ "a", "b" }, &[_]type{ A, B }, Testing.Bits.A | Testing.Bits.B, Testing.Bits.None, TestOpaqueArchetype, TestTree);
+        const A_B_Iterator = FromTypes(
+            false,
+            &[_][]const u8{ "a", "b" },
+            &[_]type{ A, B },
+            Testing.Bits.A | Testing.Bits.B,
+            Testing.Bits.None,
+            TestOpaqueArchetype,
+            TestTree,
+        );
         var iter = A_B_Iterator.init(&archetypes, tree);
 
         var i: u32 = 0;
@@ -202,7 +265,15 @@ test "value iterating works" {
     }
 
     {
-        const A_B_C_Iterator = FromTypes(&[_][]const u8{ "a", "b", "c" }, &[_]type{ A, B, C }, Testing.Bits.All, Testing.Bits.None, TestOpaqueArchetype, TestTree);
+        const A_B_C_Iterator = FromTypes(
+            false,
+            &[_][]const u8{ "a", "b", "c" },
+            &[_]type{ A, B, C },
+            Testing.Bits.All,
+            Testing.Bits.None,
+            TestOpaqueArchetype,
+            TestTree,
+        );
         var iter = A_B_C_Iterator.init(&archetypes, tree);
 
         var i: u32 = 100;
@@ -240,7 +311,15 @@ test "ptr iterating works and can mutate storage data" {
 
     {
         {
-            const A_Iterator = FromTypes(&[_][]const u8{"a_ptr"}, &[_]type{*A}, Testing.Bits.A, Testing.Bits.None, TestOpaqueArchetype, TestTree);
+            const A_Iterator = FromTypes(
+                false,
+                &[_][]const u8{"a_ptr"},
+                &[_]type{*A},
+                Testing.Bits.A,
+                Testing.Bits.None,
+                TestOpaqueArchetype,
+                TestTree,
+            );
             var mutate_iter = A_Iterator.init(&archetypes, tree);
             var i: u32 = 0;
             while (mutate_iter.next()) |item| {
@@ -250,7 +329,15 @@ test "ptr iterating works and can mutate storage data" {
         }
 
         {
-            const A_Iterator = FromTypes(&[_][]const u8{"a"}, &[_]type{A}, Testing.Bits.A, Testing.Bits.None, TestOpaqueArchetype, TestTree);
+            const A_Iterator = FromTypes(
+                false,
+                &[_][]const u8{"a"},
+                &[_]type{A},
+                Testing.Bits.A,
+                Testing.Bits.None,
+                TestOpaqueArchetype,
+                TestTree,
+            );
             var iter = A_Iterator.init(&archetypes, tree);
             var i: u32 = 0;
             while (iter.next()) |item| {

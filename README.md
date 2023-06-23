@@ -116,7 +116,9 @@ const include = ecez.query.include;
 // we want to iterate over all Monsters, HappyTag and HealthyTag components grouped by entity,
 // we filter out all monsters that might have the previously mentioned components if they also have 
 // a SadTag or SickTag attached to the same entity
+const include_entity_id = false;
 var happy_healhy_monster_iter = try World.Query(
+    include_entity_id,
     // notice that Monster components will be mutable through pointer semantics
     .{
         // these are our include types
