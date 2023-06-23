@@ -427,12 +427,12 @@ fn CreateWorld(
         }
 
         /// get a shared state using the inner type
-        pub fn getSharedState(self: World, comptime InnerType: type) meta.SharedState(InnerType) {
-            return self.getSharedStateWithSharedStateType(meta.SharedState(InnerType));
+        pub fn getSharedStateInnerType(self: World, comptime InnerType: type) meta.SharedState(InnerType) {
+            return self.getSharedStateWithOuterType(meta.SharedState(InnerType));
         }
 
         /// get a shared state using ecez.SharedState(InnerType) retrieve it's current value
-        pub fn getSharedStateWithSharedStateType(self: World, comptime T: type) T {
+        pub fn getSharedStateWithOuterType(self: World, comptime T: type) T {
             const index = indexOfSharedType(T);
             return self.shared_state[index];
         }
@@ -689,7 +689,7 @@ fn CreateWorld(
                                     .entity => arguments[j] = entities[inner_index],
                                     .event_argument_value => arguments[j] = @ptrCast(*meta.EventArgument(ExtraArgumentType), &self_job.extra_argument).*,
                                     .event_argument_ptr => arguments[j] = @ptrCast(*meta.EventArgument(extra_argument_child_type), self_job.extra_argument),
-                                    .shared_state_value => arguments[j] = self_job.world.getSharedStateWithSharedStateType(Param),
+                                    .shared_state_value => arguments[j] = self_job.world.getSharedStateWithOuterType(Param),
                                     .shared_state_ptr => arguments[j] = self_job.world.getSharedStatePtrWithSharedStateType(Param),
                                     .view => @compileError("view not implemented yet"),
                                 }
@@ -986,8 +986,8 @@ test "getSharedState retrieve state" {
     });
     defer world.deinit();
 
-    try testing.expectEqual(@as(u32, 4), world.getSharedState(Testing.Component.A).value);
-    try testing.expectEqual(@as(u8, 2), world.getSharedState(Testing.Component.B).value);
+    try testing.expectEqual(@as(u32, 4), world.getSharedStateInnerType(Testing.Component.A).value);
+    try testing.expectEqual(@as(u8, 2), world.getSharedStateInnerType(Testing.Component.B).value);
 }
 
 test "setSharedState retrieve state" {
@@ -2025,7 +2025,7 @@ test "reproducer: Dispatcher does not include new components to systems previous
     // t1: 1 + 1 = 2
     // t2: t1 + 1 + 1 + 1 + 1
     // = 6
-    try testing.expectEqual(@as(u32, 6), world.getSharedState(Tracker).count);
+    try testing.expectEqual(@as(u32, 6), world.getSharedStateInnerType(Tracker).count);
 }
 
 // this reproducer never had an issue filed, so no issue number
