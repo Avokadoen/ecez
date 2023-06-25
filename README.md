@@ -91,6 +91,30 @@ var world = try ecez.WorldBuilder().WithComponents(.{
     }).init(allocator, .{});
 ```
 
+
+```mermaid
+---
+title: System execution sequence
+---
+sequenceDiagram
+    % our systems
+    participant calculateDamage
+    participant printHelloWorld
+    participant applyDrag
+    participant move
+
+    par move blocked 
+        par execute unblocked systems
+            calculateDamage->>calculateDamage: 
+            printHelloWorld->>printHelloWorld: 
+            applyDrag->>applyDrag: 
+        end
+        applyDrag->>move: applyDrag done
+        printHelloWorld->>move: printHelloWorld done
+    end
+    move->>move: run
+```
+
 ### Queries
 
 You can query the api instance for all components of certain type and filter out instances of said components that also have unwanted sibling components.
