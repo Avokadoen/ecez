@@ -10,7 +10,6 @@ pub const secret_field = "magic_secret_sauce";
 pub const shared_secret_field = "shared_magic_secret_sauce";
 pub const event_argument_secret_field = "event_magic_secret_sauce";
 pub const system_depend_on_secret_field = "system_depend_on_secret_sauce";
-pub const view_secret_field = "view_secret_sauce";
 pub const event_magic = 0xaa_bb_cc;
 
 const DependOnRange = struct {
@@ -27,7 +26,6 @@ pub const SystemMetadata = struct {
         event_argument_value,
         shared_state_ptr,
         shared_state_value,
-        view,
     };
 
     depend_on_indices_range: ?DependOnRange,
@@ -112,8 +110,6 @@ pub const SystemMetadata = struct {
                         if (@hasField(pointer.child, shared_secret_field)) {
                             parsing_state = .not_component_parsing;
                             param.* = Arg.shared_state_ptr;
-                        } else if (@hasField(pointer.child, view_secret_field)) {
-                            @compileError("view argument can't be pointers");
                         } else if (@hasField(pointer.child, event_argument_secret_field)) {
                             parsing_state = .not_component_parsing;
                             param.* = Arg.event_argument_ptr;
@@ -126,8 +122,6 @@ pub const SystemMetadata = struct {
                         // must be either shared state, or an event argument
                         if (@hasField(pointer.child, shared_secret_field)) {
                             param.* = Arg.shared_state_ptr;
-                        } else if (@hasField(pointer.child, view_secret_field)) {
-                            @compileError("view argument can't be pointers");
                         } else if (@hasField(pointer.child, event_argument_secret_field)) {
                             @compileError("event argument can't be pointers");
                         } else {
@@ -135,7 +129,6 @@ pub const SystemMetadata = struct {
                                 .component_ptr, .component_value => unreachable,
                                 .event_argument_value => "event",
                                 .shared_state_ptr, .shared_state_value => "shared state",
-                                .view => "view",
                                 else => {},
                             };
                             const err_msg = std.fmt.comptimePrint("system {s} argument {d} is a component but comes after {s}", .{
@@ -156,9 +149,6 @@ pub const SystemMetadata = struct {
                         } else if (@hasField(T, event_argument_secret_field)) {
                             parsing_state = .not_component_parsing;
                             param.* = Arg.event_argument_value;
-                        } else if (@hasField(T, view_secret_field)) {
-                            parsing_state = .not_component_parsing;
-                            param.* = Arg.view;
                         } else {
                             component_params_count = i + if (has_entity_argument) 0 else 1;
                             param.* = Arg.component_value;
@@ -170,14 +160,11 @@ pub const SystemMetadata = struct {
                             param.* = Arg.shared_state_value;
                         } else if (@hasField(T, event_argument_secret_field)) {
                             param.* = Arg.event_argument_value;
-                        } else if (@hasField(T, view_secret_field)) {
-                            param.* = Arg.view;
                         } else {
                             const pre_arg_str = switch (params[i - 1]) {
                                 .component_ptr, .component_value => unreachable,
                                 .event_argument_value => "event",
                                 .shared_state_ptr, .shared_state_value => "shared state",
-                                .view => "view",
                                 else => {},
                             };
                             const err_msg = std.fmt.comptimePrint("system {s} argument {d} is a component but comes after {s}", .{
@@ -792,45 +779,6 @@ pub fn typeMap(comptime type_tuple: anytype, comptime runtime_tuple_type: type) 
     return map;
 }
 
-/// used by the View function to get a view of data which can be iterated
-pub fn ViewIterator(comptime T: type) type {
-    return struct {
-        const Iter2D = @This();
-
-        // read only view
-        internal: []const []const T,
-        inner_arr: []const T,
-
-        outer_index: usize,
-        inner_index: usize,
-
-        pub inline fn init(internal: []const []const T) Iter2D {
-            return Iter2D{
-                .internal = internal,
-                .inner_arr = undefined,
-                .outer_index = 0,
-                .inner_index = std.math.maxInt(usize),
-            };
-        }
-
-        pub fn next(self: *Iter2D) ?T {
-            if (self.inner_index >= self.inner_arr.len) {
-                if (self.outer_index < self.internal.len) {
-                    self.inner_arr = self.internal[self.outer_index];
-                    self.outer_index += 1;
-                    self.inner_index = 0;
-                } else {
-                    return null;
-                }
-            }
-
-            const rtr_index = self.inner_index;
-            self.inner_index += 1;
-            return self.inner_arr[rtr_index];
-        }
-    };
-}
-
 pub fn SharedStateStorage(comptime shared_state: anytype) type {
     const shared_info = blk: {
         const info = @typeInfo(@TypeOf(shared_state));
@@ -1210,25 +1158,6 @@ test "typeMap maps a type tuple to a value tuple" {
     try testing.expectEqual(2, type_map[0]);
     try testing.expectEqual(1, type_map[1]);
     try testing.expectEqual(0, type_map[2]);
-}
-
-test "ViewIterator can iterate a double array" {
-    const Iter = ViewIterator(usize);
-
-    const inner_arr = [3]usize{ 0, 1, 2 };
-    const arr: [3][]const usize = .{
-        &inner_arr,
-        &inner_arr,
-        &inner_arr,
-    };
-    var iter = Iter.init(&arr);
-    var i: usize = 0;
-    while (iter.next()) |elem| {
-        try testing.expectEqual(i % 3, elem);
-        i += 1;
-    }
-
-    try testing.expectEqual(@as(usize, 9), i);
 }
 
 test "SharedStateStorage generate suitable storage tuple" {
