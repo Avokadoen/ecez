@@ -106,15 +106,15 @@ fn CreateWorld(
         // TODO: move to meta
         const Type = std.builtin.Type;
         var fields: [event_count]Type.StructField = undefined;
-        for (&fields, 0..) |*field, i| {
-            const event_system_count = events[i].system_count;
+        inline for (&fields, events, 0..) |*field, event, i| {
+            const default_value = [_]JobId{.none} ** event.system_count;
             var num_buf: [8]u8 = undefined;
             field.* = Type.StructField{
                 .name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable,
-                .type = [event_system_count]JobId,
-                .default_value = null,
+                .type = [event.system_count]JobId,
+                .default_value = @ptrCast(*const anyopaque, &default_value),
                 .is_comptime = false,
-                .alignment = @alignOf([event_system_count]JobId),
+                .alignment = @alignOf([event.system_count]JobId),
             };
         }
 
@@ -137,8 +137,6 @@ fn CreateWorld(
 
         execution_job_queue: JobQueue,
         event_jobs_in_flight: EventJobsInFlight,
-
-        // TODO: event jobs in flight
 
         /// intialize the world structure
         /// Parameters:
@@ -164,20 +162,12 @@ fn CreateWorld(
             var execution_job_queue = JobQueue.init();
             errdefer execution_job_queue.deinit();
 
-            var event_jobs_in_flight: EventJobsInFlight = undefined;
-            {
-                const event_jobs_in_flight_info = @typeInfo(EventJobsInFlight).Struct;
-                inline for (event_jobs_in_flight_info.fields, 0..) |_, i| {
-                    event_jobs_in_flight[i] = [_]JobId{JobId.none} ** events[i].system_count;
-                }
-            }
-
             return World{
                 .allocator = allocator,
                 .container = container,
                 .shared_state = actual_shared_state,
                 .execution_job_queue = execution_job_queue,
-                .event_jobs_in_flight = event_jobs_in_flight,
+                .event_jobs_in_flight = EventJobsInFlight{},
             };
         }
 
