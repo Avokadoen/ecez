@@ -267,9 +267,9 @@ fn CreateWorld(
         /// ```
         /// const World = WorldBuilder.WithEvents(.{Event("onMouse", .{onMouseSystem}, .{MouseArg})}
         /// // ... world creation etc ...
-        /// try world.triggerEvent(.onMouse, @as(MouseArg, mouse), .{RatComponent});
+        /// world.triggerEvent(.onMouse, @as(MouseArg, mouse), .{RatComponent});
         /// ```
-        pub fn triggerEvent(self: *World, comptime event: EventsEnum, event_extra_argument: anytype, comptime exclude_types: anytype) error{OutOfMemory}!void {
+        pub fn triggerEvent(self: *World, comptime event: EventsEnum, event_extra_argument: anytype, comptime exclude_types: anytype) void {
             const tracy_zone_name = comptime std.fmt.comptimePrint("World trigger {s}", .{@tagName(event)});
             const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.world);
             defer zone.End();
@@ -1022,7 +1022,7 @@ test "event can mutate components" {
     };
     const entity = try world.createEntity(initial_state);
 
-    try world.triggerEvent(.onFoo, .{}, .{});
+    world.triggerEvent(.onFoo, .{}, .{});
     world.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -1049,7 +1049,7 @@ test "event parameter order is independent" {
     };
     const entity = try world.createEntity(initial_state);
 
-    try world.triggerEvent(.onFoo, .{}, .{});
+    world.triggerEvent(.onFoo, .{}, .{});
     world.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -1085,7 +1085,7 @@ test "event exclude types exclude entities" {
         .c = Testing.Component.C{},
     });
 
-    try world.triggerEvent(.onFoo, .{}, .{ Testing.Component.B, Testing.Component.C });
+    world.triggerEvent(.onFoo, .{}, .{ Testing.Component.B, Testing.Component.C });
     world.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -1105,7 +1105,7 @@ test "event exclude types exclude entities" {
         try world.getComponent(abc_entity, Testing.Component.A),
     );
 
-    try world.triggerEvent(.onFoo, .{}, .{Testing.Component.B});
+    world.triggerEvent(.onFoo, .{}, .{Testing.Component.B});
     world.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -1161,7 +1161,7 @@ test "events can be registered through struct or individual function(s)" {
     };
     const entity = try world.createEntity(initial_state);
 
-    try world.triggerEvent(.onFoo, .{}, .{});
+    world.triggerEvent(.onFoo, .{}, .{});
     world.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -1210,7 +1210,7 @@ test "events call systems" {
         break :blk try world.createEntity(initial_state);
     };
 
-    try world.triggerEvent(.onFoo, .{}, .{});
+    world.triggerEvent(.onFoo, .{}, .{});
     world.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -1226,7 +1226,7 @@ test "events call systems" {
         try world.getComponent(entity2, Testing.Component.A),
     );
 
-    try world.triggerEvent(.onBar, .{}, .{});
+    world.triggerEvent(.onBar, .{}, .{});
     world.waitEvent(.onBar);
 
     try testing.expectEqual(
@@ -1259,7 +1259,7 @@ test "events can access shared state" {
         .a = Testing.Component.A{ .value = 0 },
     };
     const entity = try world.createEntity(initial_state);
-    try world.triggerEvent(.onFoo, .{}, .{});
+    world.triggerEvent(.onFoo, .{}, .{});
     world.waitEvent(.onFoo);
 
     try testing.expectEqual(shared_a, try world.getComponent(entity, A));
@@ -1288,7 +1288,7 @@ test "events can mutate shared state" {
     };
     _ = try world.createEntity(initial_state);
 
-    try world.triggerEvent(.onFoo, .{}, .{});
+    world.triggerEvent(.onFoo, .{}, .{});
     world.waitEvent(.onFoo);
 
     try testing.expectEqual(@as(u8, 2), world.shared_state[0].value);
@@ -1354,7 +1354,7 @@ test "event can have many shared state" {
     };
     const entity_b = try world.createEntity(initial_state_b);
 
-    try world.triggerEvent(.onFoo, .{}, .{});
+    world.triggerEvent(.onFoo, .{}, .{});
     world.waitEvent(.onFoo);
 
     try testing.expectEqual(A{ .value = 6 }, try world.getComponent(entity_a, A));
@@ -1382,7 +1382,7 @@ test "events can access current entity" {
         entity.* = try world.createEntity(initial_state);
     }
 
-    try world.triggerEvent(.onFoo, .{}, .{});
+    world.triggerEvent(.onFoo, .{}, .{});
     world.waitEvent(.onFoo);
 
     for (entities) |entity| {
@@ -1414,7 +1414,7 @@ test "events entity access remain correct after single removeComponent" {
         entity.* = try world.createEntity(initial_state);
     }
 
-    try world.triggerEvent(.onFoo, .{}, .{});
+    world.triggerEvent(.onFoo, .{}, .{});
     world.waitEvent(.onFoo);
 
     for (entities[0..50]) |entity| {
@@ -1451,7 +1451,7 @@ test "events can accepts event related data" {
     };
     const entity = try world.createEntity(initial_state);
 
-    try world.triggerEvent(.onFoo, MouseInput{ .x = 40, .y = 2 }, .{});
+    world.triggerEvent(.onFoo, MouseInput{ .x = 40, .y = 2 }, .{});
     world.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -1482,7 +1482,7 @@ test "Event can mutate event extra argument" {
     // make sure test is not modified in an illegal manner
     try testing.expect(initial_state.a.value != event_a.value);
 
-    try world.triggerEvent(.onFoo, &event_a, .{});
+    world.triggerEvent(.onFoo, &event_a, .{});
     world.waitEvent(.onFoo);
 
     try testing.expectEqual(initial_state.a, event_a);
@@ -1514,7 +1514,7 @@ test "event caching works" {
         break :blk try world.createEntity(initial_state);
     };
 
-    try world.triggerEvent(.onEvent1, .{}, .{});
+    world.triggerEvent(.onEvent1, .{}, .{});
     world.waitEvent(.onEvent1);
 
     try testing.expectEqual(Testing.Component.A{ .value = 1 }, try world.getComponent(
@@ -1524,7 +1524,7 @@ test "event caching works" {
 
     // move entity to archetype A, B
     try world.setComponent(entity1, Testing.Component.B{ .value = 0 });
-    try world.triggerEvent(.onEvent1, .{}, .{});
+    world.triggerEvent(.onEvent1, .{}, .{});
     world.waitEvent(.onEvent1);
 
     try testing.expectEqual(Testing.Component.A{ .value = 2 }, try world.getComponent(
@@ -1532,7 +1532,7 @@ test "event caching works" {
         Testing.Component.A,
     ));
 
-    try world.triggerEvent(.onEvent2, .{}, .{});
+    world.triggerEvent(.onEvent2, .{}, .{});
     world.waitEvent(.onEvent2);
 
     try testing.expectEqual(Testing.Component.B{ .value = 1 }, try world.getComponent(
@@ -1549,7 +1549,7 @@ test "event caching works" {
         break :blk try world.createEntity(initial_state);
     };
 
-    try world.triggerEvent(.onEvent1, .{}, .{});
+    world.triggerEvent(.onEvent1, .{}, .{});
     world.waitEvent(.onEvent1);
 
     try testing.expectEqual(
@@ -1557,7 +1557,7 @@ test "event caching works" {
         try world.getComponent(entity2, Testing.Component.A),
     );
 
-    try world.triggerEvent(.onEvent2, .{}, .{});
+    world.triggerEvent(.onEvent2, .{}, .{});
     world.waitEvent(.onEvent2);
 
     try testing.expectEqual(
@@ -1579,7 +1579,7 @@ test "Event with no archetypes does not crash" {
     defer world.deinit();
 
     for (0..100) |_| {
-        try world.triggerEvent(.onEvent1, .{}, .{});
+        world.triggerEvent(.onEvent1, .{}, .{});
         world.waitEvent(.onEvent1);
     }
 }
@@ -1629,10 +1629,10 @@ test "DependOn makes a events race free" {
         entity.* = try world.createEntity(inital_state);
     }
 
-    try world.triggerEvent(.onEvent, .{}, .{});
+    world.triggerEvent(.onEvent, .{}, .{});
     world.waitEvent(.onEvent);
 
-    try world.triggerEvent(.onEvent, .{}, .{});
+    world.triggerEvent(.onEvent, .{}, .{});
     world.waitEvent(.onEvent);
 
     for (entities) |entity| {
@@ -1682,10 +1682,10 @@ test "Event DependOn events can have multiple dependencies" {
         entity.* = try world.createEntity(inital_state);
     }
 
-    try world.triggerEvent(.onFoo, .{}, .{});
+    world.triggerEvent(.onFoo, .{}, .{});
     world.waitEvent(.onFoo);
 
-    try world.triggerEvent(.onFoo, .{}, .{});
+    world.triggerEvent(.onFoo, .{}, .{});
     world.waitEvent(.onFoo);
 
     for (entities) |entity| {
@@ -2089,13 +2089,13 @@ test "reproducer: Dispatcher does not include new components to systems previous
     _ = try world.createEntity(.{a});
     _ = try world.createEntity(.{a});
 
-    try world.triggerEvent(.onFoo, .{}, .{});
+    world.triggerEvent(.onFoo, .{}, .{});
     world.waitEvent(.onFoo);
 
     _ = try world.createEntity(.{a});
     _ = try world.createEntity(.{a});
 
-    try world.triggerEvent(.onFoo, .{}, .{});
+    world.triggerEvent(.onFoo, .{}, .{});
     world.waitEvent(.onFoo);
 
     // at this point we expect tracker to have a count of:
