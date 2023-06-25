@@ -691,7 +691,6 @@ fn CreateWorld(
                                     .event_argument_ptr => arguments[j] = @ptrCast(*meta.EventArgument(extra_argument_child_type), self_job.extra_argument),
                                     .shared_state_value => arguments[j] = self_job.world.getSharedStateWithOuterType(Param),
                                     .shared_state_ptr => arguments[j] = self_job.world.getSharedStatePtrWithSharedStateType(Param),
-                                    .view => @compileError("view not implemented yet"),
                                 }
                             }
 
