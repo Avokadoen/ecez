@@ -17,6 +17,8 @@ const DependOnRange = struct {
     from: u32,
 };
 
+const max_params = 32;
+
 pub const SystemMetadata = struct {
     pub const Arg = enum {
         component_ptr,
@@ -32,6 +34,7 @@ pub const SystemMetadata = struct {
 
     fn_info: FnInfo,
     component_params_count: usize,
+    params_buffer: [max_params]Arg,
     params: []const Arg,
     has_entity_argument: bool,
 
@@ -41,6 +44,11 @@ pub const SystemMetadata = struct {
         comptime function_type: type,
         comptime fn_info: FnInfo,
     ) SystemMetadata {
+        // blocked by issue https://github.com/ziglang/zig/issues/1291
+        if (fn_info.params.len > max_params) {
+            @compileError("system arguments currently only support up to 32 arguments");
+        }
+
         // TODO: include function name in error messages
         //       blocked by issue https://github.com/ziglang/zig/issues/8270
         // used in error messages
@@ -74,8 +82,10 @@ pub const SystemMetadata = struct {
         var has_entity_argument: bool = false;
         var component_params_count: usize = 0;
         var parsing_state = ParsingState.component_parsing;
-        var params: [fn_info.params.len]Arg = undefined;
-        inline for (&params, fn_info.params, 0..) |*param, param_info, i| {
+
+        var params_buffer: [32]Arg = undefined;
+        var params = params_buffer[0..fn_info.params.len];
+        inline for (params, fn_info.params, 0..) |*param, param_info, i| {
             const T = param_info.type orelse {
                 const err_msg = std.fmt.comptimePrint("system {s} argument {d} is missing type", .{
                     function_name,
@@ -189,7 +199,8 @@ pub const SystemMetadata = struct {
             .depend_on_indices_range = depend_on_indices_range,
             .fn_info = fn_info,
             .component_params_count = component_params_count,
-            .params = &params,
+            .params_buffer = params_buffer,
+            .params = params,
             .has_entity_argument = has_entity_argument,
         };
     }
