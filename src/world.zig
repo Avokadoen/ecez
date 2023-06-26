@@ -112,7 +112,7 @@ fn CreateWorld(
             field.* = Type.StructField{
                 .name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable,
                 .type = [event.system_count]JobId,
-                .default_value = @ptrCast(*const anyopaque, &default_value),
+                .default_value = @ptrCast(&default_value),
                 .is_comptime = false,
                 .alignment = @alignOf([event.system_count]JobId),
             };
@@ -411,8 +411,8 @@ fn CreateWorld(
             const zone = ztracy.ZoneNC(@src(), "World wait idle", Color.world);
             defer zone.End();
 
-            inline for (0..events.len) |i| {
-                self.waitEvent(@enumFromInt(EventsEnum, i));
+            inline for (0..events.len) |event_enum_int| {
+                self.waitEvent(@enumFromInt(event_enum_int));
             }
         }
 
@@ -431,7 +431,7 @@ fn CreateWorld(
         pub fn setSharedState(self: *World, state: anytype) void {
             const ActualType = meta.SharedState(@TypeOf(state));
             const index = indexOfSharedType(ActualType);
-            self.shared_state[index] = @ptrCast(*const ActualType, &state).*;
+            self.shared_state[index] = @as(*const ActualType, @ptrCast(&state)).*;
         }
 
         /// given a shared state type T retrieve it's pointer
@@ -660,25 +660,25 @@ fn CreateWorld(
                                             const from = inner_index * param_size;
                                             const to = from + param_size;
                                             const bytes = storage.outer[field_map[component_index]][from..to];
-                                            arguments[j] = @ptrCast(*Param, @alignCast(@alignOf(Param), bytes.ptr)).*;
+                                            arguments[j] = @as(*Param, @ptrCast(@alignCast(bytes))).*;
                                         }
                                     },
                                     .component_ptr => {
                                         const component_index = if (metadata.has_entity_argument) j - 1 else j;
-                                        const CompQueryTypes = component_query_types[component_index];
+                                        const CompQueryType = component_query_types[component_index];
 
-                                        // get size of the type the pointer is pointing to
-                                        const param_size = @sizeOf(CompQueryTypes);
+                                        // get size of the pointer child type (Param == *CompQueryType)
+                                        const param_size = @sizeOf(CompQueryType);
                                         if (param_size > 0) {
                                             const from = inner_index * param_size;
                                             const to = from + param_size;
                                             const bytes = storage.outer[field_map[component_index]][from..to];
-                                            arguments[j] = @ptrCast(Param, @alignCast(@alignOf(CompQueryTypes), bytes.ptr));
+                                            arguments[j] = @as(*CompQueryType, @ptrCast(@alignCast(bytes)));
                                         }
                                     },
                                     .entity => arguments[j] = entities[inner_index],
-                                    .event_argument_value => arguments[j] = @ptrCast(*meta.EventArgument(ExtraArgumentType), &self_job.extra_argument).*,
-                                    .event_argument_ptr => arguments[j] = @ptrCast(*meta.EventArgument(extra_argument_child_type), self_job.extra_argument),
+                                    .event_argument_value => arguments[j] = @as(*meta.EventArgument(ExtraArgumentType), @ptrCast(&self_job.extra_argument)).*,
+                                    .event_argument_ptr => arguments[j] = @as(*meta.EventArgument(extra_argument_child_type), @ptrCast(self_job.extra_argument)),
                                     .shared_state_value => arguments[j] = self_job.world.getSharedStateWithOuterType(Param),
                                     .shared_state_ptr => arguments[j] = self_job.world.getSharedStatePtrWithSharedStateType(Param),
                                 }
@@ -692,7 +692,7 @@ fn CreateWorld(
                                 //failableCallWrapper(system_ptr.*, arguments);
                                 @compileError("system that can fail are currently unsupported");
                             } else {
-                                const system_ptr = @ptrCast(FuncType, func);
+                                const system_ptr: FuncType = @ptrCast(func);
                                 @call(system_call_modidifer, system_ptr.*, arguments);
                             }
                         }
@@ -991,14 +991,14 @@ test "setSharedState retrieve state" {
 
     try testing.expectEqual(
         new_shared_a,
-        @ptrCast(*Testing.Component.A, world.getSharedStatePtrWithSharedStateType(*meta.SharedState(Testing.Component.A))).*,
+        @as(*Testing.Component.A, @ptrCast(world.getSharedStatePtrWithSharedStateType(*meta.SharedState(Testing.Component.A)))).*,
     );
 }
 
 test "event can mutate components" {
     const SystemStruct = struct {
         pub fn mutateStuff(a: *Testing.Component.A, b: Testing.Component.B) void {
-            a.value += @intCast(u32, b.value);
+            a.value += @as(u32, @intCast(b.value));
         }
     };
 
@@ -1024,7 +1024,7 @@ test "event parameter order is independent" {
     const SystemStruct = struct {
         pub fn mutateStuff(b: Testing.Component.B, c: Testing.Component.C, a: *Testing.Component.A) void {
             _ = c;
-            a.value += @intCast(u32, b.value);
+            a.value += @as(u32, @intCast(b.value));
         }
     };
 
@@ -1290,31 +1290,31 @@ test "event can have many shared state" {
 
     const SystemStruct = struct {
         pub fn system1(a: *A, shared: SharedState(A)) void {
-            a.value += @intCast(u32, shared.value);
+            a.value += @as(u32, @intCast(shared.value));
         }
 
         pub fn system2(a: *A, shared: SharedState(B)) void {
-            a.value += @intCast(u32, shared.value);
+            a.value += @as(u32, @intCast(shared.value));
         }
 
         pub fn system3(a: *A, shared: SharedState(D)) void {
-            a.value += @intCast(u32, shared.value);
+            a.value += @as(u32, @intCast(shared.value));
         }
 
         pub fn system4(b: *B, shared_a: SharedState(A), shared_b: SharedState(B)) void {
-            b.value += @intCast(u8, shared_a.value);
-            b.value += @intCast(u8, shared_b.value);
+            b.value += @as(u8, @intCast(shared_a.value));
+            b.value += @as(u8, @intCast(shared_b.value));
         }
 
         pub fn system5(b: *B, shared_b: SharedState(B), shared_a: SharedState(A)) void {
-            b.value += @intCast(u8, shared_a.value);
-            b.value += @intCast(u8, shared_b.value);
+            b.value += @as(u8, @intCast(shared_a.value));
+            b.value += @as(u8, @intCast(shared_b.value));
         }
 
         pub fn system6(b: *B, shared_c: SharedState(D), shared_b: SharedState(B), shared_a: SharedState(A)) void {
-            b.value += @intCast(u8, shared_a.value);
-            b.value += @intCast(u8, shared_b.value);
-            b.value += @intCast(u8, shared_c.value);
+            b.value += @as(u8, @intCast(shared_a.value));
+            b.value += @as(u8, @intCast(shared_b.value));
+            b.value += @as(u8, @intCast(shared_c.value));
         }
     };
 
@@ -1354,7 +1354,7 @@ test "events can access current entity" {
     // define a system type
     const SystemType = struct {
         pub fn systemOne(entity: Entity, a: *Testing.Component.A) void {
-            a.value += @intCast(u32, entity.id);
+            a.value += @as(u32, @intCast(entity.id));
         }
     };
 
@@ -1366,7 +1366,7 @@ test "events can access current entity" {
     var entities: [100]Entity = undefined;
     for (&entities, 0..) |*entity, iter| {
         const initial_state = AEntityType{
-            .a = .{ .value = @intCast(u32, iter) },
+            .a = .{ .value = @as(u32, @intCast(iter)) },
         };
         entity.* = try world.createEntity(initial_state);
     }
@@ -1376,7 +1376,7 @@ test "events can access current entity" {
 
     for (entities) |entity| {
         try testing.expectEqual(
-            Testing.Component.A{ .value = @intCast(u32, entity.id) * 2 },
+            Testing.Component.A{ .value = @as(u32, @intCast(entity.id)) * 2 },
             try world.getComponent(entity, Testing.Component.A),
         );
     }
@@ -1386,7 +1386,7 @@ test "events entity access remain correct after single removeComponent" {
     // define a system type
     const SystemType = struct {
         pub fn systemOne(entity: Entity, a: *Testing.Component.A) void {
-            a.value += @intCast(u32, entity.id);
+            a.value += @as(u32, @intCast(entity.id));
         }
     };
 
@@ -1398,7 +1398,7 @@ test "events entity access remain correct after single removeComponent" {
     var entities: [100]Entity = undefined;
     for (&entities, 0..) |*entity, iter| {
         const initial_state = AEntityType{
-            .a = .{ .value = @intCast(u32, iter) },
+            .a = .{ .value = @as(u32, @intCast(iter)) },
         };
         entity.* = try world.createEntity(initial_state);
     }
@@ -1408,13 +1408,13 @@ test "events entity access remain correct after single removeComponent" {
 
     for (entities[0..50]) |entity| {
         try testing.expectEqual(
-            Testing.Component.A{ .value = @intCast(u32, entity.id) * 2 },
+            Testing.Component.A{ .value = @as(u32, @intCast(entity.id)) * 2 },
             try world.getComponent(entity, Testing.Component.A),
         );
     }
     for (entities[51..100]) |entity| {
         try testing.expectEqual(
-            Testing.Component.A{ .value = @intCast(u32, entity.id) * 2 },
+            Testing.Component.A{ .value = @as(u32, @intCast(entity.id)) * 2 },
             try world.getComponent(entity, Testing.Component.A),
         );
     }
@@ -1577,21 +1577,21 @@ test "DependOn makes a events race free" {
     const SystemStruct = struct {
         pub fn addStuff1(a: *Testing.Component.A, b: Testing.Component.B) void {
             std.time.sleep(std.time.ns_per_us * 3);
-            a.value += @intCast(u32, b.value);
+            a.value += @as(u32, @intCast(b.value));
         }
 
         pub fn multiplyStuff1(a: *Testing.Component.A, b: Testing.Component.B) void {
             std.time.sleep(std.time.ns_per_us * 2);
-            a.value *= @intCast(u32, b.value);
+            a.value *= @as(u32, @intCast(b.value));
         }
 
         pub fn addStuff2(a: *Testing.Component.A, b: Testing.Component.B) void {
             std.time.sleep(std.time.ns_per_us);
-            a.value += @intCast(u32, b.value);
+            a.value += @as(u32, @intCast(b.value));
         }
 
         pub fn multiplyStuff2(a: *Testing.Component.A, b: Testing.Component.B) void {
-            a.value *= @intCast(u32, b.value);
+            a.value *= @as(u32, @intCast(b.value));
         }
     };
 
@@ -1647,7 +1647,7 @@ test "Event DependOn events can have multiple dependencies" {
         }
 
         pub fn multiplyStuff(a: *Testing.Component.A, b: Testing.Component.B) void {
-            a.value *= @intCast(u32, b.value);
+            a.value *= @as(u32, @intCast(b.value));
         }
     };
 
@@ -1694,8 +1694,8 @@ test "query with single include type works" {
 
     for (0..100) |index| {
         _ = try world.createEntity(AbEntityType{
-            .a = .{ .value = @intCast(u32, index) },
-            .b = .{ .value = @intCast(u8, index) },
+            .a = .{ .value = @as(u32, @intCast(index)) },
+            .b = .{ .value = @as(u8, @intCast(index)) },
         });
     }
 
@@ -1709,7 +1709,7 @@ test "query with single include type works" {
 
         while (a_iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
-                .value = @intCast(u32, index),
+                .value = @as(u32, @intCast(index)),
             }, item.a);
 
             index += 1;
@@ -1724,8 +1724,8 @@ test "query with multiple include type works" {
 
     for (0..100) |index| {
         _ = try world.createEntity(AbEntityType{
-            .a = .{ .value = @intCast(u32, index) },
-            .b = .{ .value = @intCast(u8, index) },
+            .a = .{ .value = @as(u32, @intCast(index)) },
+            .b = .{ .value = @as(u8, @intCast(index)) },
         });
     }
 
@@ -1738,11 +1738,11 @@ test "query with multiple include type works" {
         var index: usize = 0;
         while (a_b_iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
-                .value = @intCast(u32, index),
+                .value = @as(u32, @intCast(index)),
             }, item.a);
 
             try std.testing.expectEqual(Testing.Component.B{
-                .value = @intCast(u8, index),
+                .value = @as(u8, @intCast(index)),
             }, item.b);
 
             index += 1;
@@ -1757,8 +1757,8 @@ test "query with single ptr include type works" {
 
     for (0..100) |index| {
         _ = try world.createEntity(AbEntityType{
-            .a = .{ .value = @intCast(u32, index) },
-            .b = .{ .value = @intCast(u8, index) },
+            .a = .{ .value = @as(u32, @intCast(index)) },
+            .b = .{ .value = @as(u8, @intCast(index)) },
         });
     }
 
@@ -1786,7 +1786,7 @@ test "query with single ptr include type works" {
 
         while (a_iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
-                .value = @intCast(u32, index),
+                .value = @as(u32, @intCast(index)),
             }, item.a);
 
             index += 1;
@@ -1801,14 +1801,14 @@ test "query with single include type and single exclude works" {
 
     for (0..100) |index| {
         _ = try world.createEntity(AbEntityType{
-            .a = .{ .value = @intCast(u32, index) },
-            .b = .{ .value = @intCast(u8, index) },
+            .a = .{ .value = @as(u32, @intCast(index)) },
+            .b = .{ .value = @as(u8, @intCast(index)) },
         });
     }
 
     for (100..200) |index| {
         _ = try world.createEntity(AEntityType{
-            .a = .{ .value = @intCast(u32, index) },
+            .a = .{ .value = @as(u32, @intCast(index)) },
         });
     }
 
@@ -1822,7 +1822,7 @@ test "query with single include type and single exclude works" {
         var index: usize = 100;
         while (iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
-                .value = @intCast(u32, index),
+                .value = @as(u32, @intCast(index)),
             }, item.a);
 
             index += 1;
@@ -1837,22 +1837,22 @@ test "query with single include type and multiple exclude works" {
 
     for (0..100) |index| {
         _ = try world.createEntity(AbEntityType{
-            .a = .{ .value = @intCast(u32, index) },
-            .b = .{ .value = @intCast(u8, index) },
+            .a = .{ .value = @as(u32, @intCast(index)) },
+            .b = .{ .value = @as(u8, @intCast(index)) },
         });
     }
 
     for (100..200) |index| {
         _ = try world.createEntity(AbcEntityType{
-            .a = .{ .value = @intCast(u32, index) },
-            .b = .{ .value = @intCast(u8, index) },
+            .a = .{ .value = @as(u32, @intCast(index)) },
+            .b = .{ .value = @as(u8, @intCast(index)) },
             .c = .{},
         });
     }
 
     for (200..300) |index| {
         _ = try world.createEntity(AEntityType{
-            .a = .{ .value = @intCast(u32, index) },
+            .a = .{ .value = @as(u32, @intCast(index)) },
         });
     }
 
@@ -1866,7 +1866,7 @@ test "query with single include type and multiple exclude works" {
         var index: usize = 200;
         while (iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
-                .value = @intCast(u32, index),
+                .value = @as(u32, @intCast(index)),
             }, item.a);
 
             index += 1;
@@ -1882,13 +1882,13 @@ test "query with entity only works" {
     var entities: [200]Entity = undefined;
     for (entities[0..100], 0..) |*entity, index| {
         entity.* = try world.createEntity(AEntityType{
-            .a = .{ .value = @intCast(u32, index) },
+            .a = .{ .value = @as(u32, @intCast(index)) },
         });
     }
     for (entities[100..200], 100..) |*entity, index| {
         entity.* = try world.createEntity(AbEntityType{
-            .a = .{ .value = @intCast(u32, index) },
-            .b = .{ .value = @intCast(u8, index) },
+            .a = .{ .value = @as(u32, @intCast(index)) },
+            .b = .{ .value = @as(u8, @intCast(index)) },
         });
     }
 
@@ -1915,13 +1915,13 @@ test "query with entity and include and exclude only works" {
     var entities: [200]Entity = undefined;
     for (entities[0..100], 0..) |*entity, index| {
         entity.* = try world.createEntity(AEntityType{
-            .a = .{ .value = @intCast(u32, index) },
+            .a = .{ .value = @as(u32, @intCast(index)) },
         });
     }
     for (entities[100..200], 100..) |*entity, index| {
         entity.* = try world.createEntity(AbEntityType{
-            .a = .{ .value = @intCast(u32, index) },
-            .b = .{ .value = @intCast(u8, index) },
+            .a = .{ .value = @as(u32, @intCast(index)) },
+            .b = .{ .value = @as(u8, @intCast(index)) },
         });
     }
 
@@ -1936,7 +1936,7 @@ test "query with entity and include and exclude only works" {
         while (iter.next()) |item| {
             try std.testing.expectEqual(entities[index], item.entity);
             try std.testing.expectEqual(Testing.Component.A{
-                .value = @intCast(u32, index),
+                .value = @as(u32, @intCast(index)),
             }, item.a);
             index += 1;
         }

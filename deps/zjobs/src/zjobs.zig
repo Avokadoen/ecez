@@ -48,7 +48,7 @@ pub const JobId = enum(u32) {
     }
 
     inline fn fields(id: *const JobId) Fields {
-        return @ptrCast(*const Fields, id).*;
+        return @as(*const Fields, @ptrCast(id)).*;
     }
 
     const Fields = packed struct {
@@ -61,7 +61,7 @@ pub const JobId = enum(u32) {
 
         inline fn id(_fields: *const Fields) JobId {
             comptime assert(@sizeOf(Fields) == @sizeOf(JobId));
-            return @ptrCast(*const JobId, _fields).*;
+            return @as(*const JobId, @ptrCast(_fields)).*;
         }
     };
 };
@@ -156,9 +156,9 @@ pub fn JobQueue(
             std.mem.copy(u8, &self.data, std.mem.asBytes(job));
 
             const exec: *const fn (*Job) void = &@field(Job, "exec");
-            const id = jobId(@truncate(u16, index), new_cycle);
+            const id = jobId(@truncate(index), new_cycle);
 
-            self.exec = @ptrCast(Main, exec);
+            self.exec = @ptrCast(exec);
             self.name = @typeName(Job);
             self.id = id;
             self.prereq = if (prereq != id) prereq else JobId.none;
@@ -1146,7 +1146,7 @@ test "JobQueue throughput" {
         job_ms += job_stat.ms();
     }
 
-    const throughput = @floatFromInt(f64, job_ms) / @floatFromInt(f64, main_ms);
+    const throughput = @as(f64, @floatFromInt(job_ms)) / @as(f64, @floatFromInt(main_ms));
     print("completed {} jobs ({}ms) in {}ms ({d:.1}x)\n", .{ job_count, job_ms, main_ms, throughput });
 }
 

@@ -35,7 +35,7 @@ pub fn TracyAllocator(comptime T: type) type {
         }
 
         pub fn alloc(ctx: *anyopaque, len: usize, ptr_align: u8, ret_addr: usize) ?[*]u8 {
-            const self = @ptrCast(*Self, @alignCast(@alignOf(Self), ctx));
+            const self = @as(*Self, @ptrCast(@alignCast(ctx)));
 
             const underlying = self.getUnderlyingAllocatorPtr();
             const result = underlying.rawAlloc(len, ptr_align, ret_addr);
@@ -48,7 +48,7 @@ pub fn TracyAllocator(comptime T: type) type {
         }
 
         pub fn resize(ctx: *anyopaque, buf: []u8, buf_align: u8, new_len: usize, ret_addr: usize) bool {
-            const self = @ptrCast(*Self, @alignCast(@alignOf(Self), ctx));
+            const self = @as(*Self, @ptrCast(@alignCast(ctx)));
 
             const underlying = self.getUnderlyingAllocatorPtr();
             ztracy.Free(buf.ptr);
@@ -58,7 +58,7 @@ pub fn TracyAllocator(comptime T: type) type {
         }
 
         pub fn free(ctx: *anyopaque, buf: []u8, buf_align: u8, ret_addr: usize) void {
-            const self = @ptrCast(*Self, @alignCast(@alignOf(Self), ctx));
+            const self = @as(*Self, @ptrCast(@alignCast(ctx)));
 
             const underlying = self.getUnderlyingAllocatorPtr();
             underlying.rawFree(buf, buf_align, ret_addr);

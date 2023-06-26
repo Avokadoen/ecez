@@ -128,7 +128,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
             defer zone.End();
 
             // create new entity
-            const entity = Entity{ .id = @intCast(u32, self.entity_references.items.len) };
+            const entity = Entity{ .id = @as(u32, @intCast(self.entity_references.items.len)) };
 
             // allocate the entity reference item and let initializeEntityStorage assign it if it suceeds
             try self.entity_references.append(undefined);
@@ -190,7 +190,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                         );
                         errdefer new_archetype.deinit();
 
-                        const opaque_archetype_index = @intCast(u32, self.archetypes.items.len);
+                        const opaque_archetype_index = @as(u32, @intCast(self.archetypes.items.len));
                         try self.archetypes.append(new_archetype);
                         errdefer _ = self.archetypes.pop();
 
@@ -225,9 +225,9 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                     self.archetypes.items[current_bit_index].swapRemoveEntity(entity, self.component_sizes) catch unreachable;
 
                     // update entity reference
-                    self.entity_references.items[entity.id] = @intCast(
+                    self.entity_references.items[entity.id] = @as(
                         EntityRef,
-                        unwrapped_index,
+                        @intCast(unwrapped_index),
                     );
 
                     return new_archetype_created;
@@ -271,7 +271,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                 var new_archetype = try OpaqueArchetype.init(self.allocator, new_encoding);
                 errdefer new_archetype.deinit();
 
-                const opaque_archetype_index = @intCast(u32, self.archetypes.items.len);
+                const opaque_archetype_index = @as(u32, @intCast(self.archetypes.items.len));
 
                 try self.archetypes.append(new_archetype);
                 errdefer _ = self.archetypes.pop();
@@ -309,9 +309,9 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
             self.archetypes.items[old_archetype_index].swapRemoveEntity(entity, self.component_sizes) catch unreachable;
 
             // update entity reference
-            self.entity_references.items[entity.id] = @intCast(
+            self.entity_references.items[entity.id] = @as(
                 EntityRef,
-                unwrapped_index,
+                @intCast(unwrapped_index),
             );
 
             return new_archetype_created;
@@ -445,7 +445,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                 );
                 errdefer new_archetype.deinit();
 
-                const opaque_archetype_index = @intCast(u32, self.archetypes.items.len);
+                const opaque_archetype_index = @as(u32, @intCast(self.archetypes.items.len));
                 try self.archetypes.append(new_archetype);
                 errdefer _ = self.archetypes.pop();
 
@@ -463,7 +463,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
             };
 
             // register a reference to able to locate entity
-            self.entity_references.items[entity.id] = @intCast(EntityRef, new_archetype_index.?);
+            self.entity_references.items[entity.id] = @as(EntityRef, @intCast(new_archetype_index.?));
 
             return new_archetype_created;
         }

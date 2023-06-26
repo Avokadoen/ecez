@@ -117,10 +117,7 @@ pub fn FromTypes(
                             const to = from + @sizeOf(pointer.child);
                             const bytes = self.storage_buffer.outer[type_index][from..to];
 
-                            @field(item, field.name) = @ptrCast(
-                                field.type,
-                                @alignCast(@alignOf(pointer.child), bytes.ptr),
-                            );
+                            @field(item, field.name) = @ptrCast(@alignCast(bytes));
                         }
                     },
                     else => {
@@ -131,10 +128,7 @@ pub fn FromTypes(
                             const to = from + @sizeOf(field.type);
                             const bytes = self.storage_buffer.outer[type_index][from..to];
 
-                            @field(item, field.name) = @ptrCast(
-                                *field.type,
-                                @alignCast(@alignOf(field.type), bytes.ptr),
-                            ).*;
+                            @field(item, field.name) = @as(*field.type, @ptrCast(@alignCast(bytes))).*;
                         }
                     },
                 }
@@ -179,25 +173,25 @@ test "value iterating works" {
 
     var data: [3][]const u8 = undefined;
     for (0..100) |i| {
-        const a = A{ .value = @intCast(u32, i) };
-        const b = B{ .value = @intCast(u8, i) };
+        const a = A{ .value = @as(u32, @intCast(i)) };
+        const b = B{ .value = @as(u8, @intCast(i)) };
         data[0] = std.mem.asBytes(&a);
         data[1] = std.mem.asBytes(&b);
         try archetypes[0].registerEntity(
-            Entity{ .id = @intCast(entity_type.EntityId, i) },
+            Entity{ .id = @as(entity_type.EntityId, @intCast(i)) },
             data[0..2],
             sizes,
         );
     }
 
     for (100..200) |i| {
-        const a = A{ .value = @intCast(u32, i) };
-        const b = B{ .value = @intCast(u8, i) };
+        const a = A{ .value = @as(u32, @intCast(i)) };
+        const b = B{ .value = @as(u8, @intCast(i)) };
         data[0] = std.mem.asBytes(&a);
         data[1] = std.mem.asBytes(&b);
         data[2] = &[0]u8{};
         try archetypes[1].registerEntity(
-            Entity{ .id = @intCast(entity_type.EntityId, i) },
+            Entity{ .id = @as(entity_type.EntityId, @intCast(i)) },
             data[0..3],
             sizes,
         );
@@ -237,7 +231,7 @@ test "value iterating works" {
 
         var i: u32 = 0;
         while (iter.next()) |item| {
-            try testing.expectEqual(Testing.Component.B{ .value = @intCast(u8, i) }, item.b);
+            try testing.expectEqual(Testing.Component.B{ .value = @as(u8, @intCast(i)) }, item.b);
             i += 1;
         }
         try testing.expectEqual(iter.next(), null);
@@ -258,7 +252,7 @@ test "value iterating works" {
         var i: u32 = 0;
         while (iter.next()) |item| {
             try testing.expectEqual(Testing.Component.A{ .value = i }, item.a);
-            try testing.expectEqual(Testing.Component.B{ .value = @intCast(u8, i) }, item.b);
+            try testing.expectEqual(Testing.Component.B{ .value = @as(u8, @intCast(i)) }, item.b);
             i += 1;
         }
         try testing.expectEqual(iter.next(), null);
@@ -279,7 +273,7 @@ test "value iterating works" {
         var i: u32 = 100;
         while (iter.next()) |item| {
             try testing.expectEqual(Testing.Component.A{ .value = i }, item.a);
-            try testing.expectEqual(Testing.Component.B{ .value = @intCast(u8, i) }, item.b);
+            try testing.expectEqual(Testing.Component.B{ .value = @as(u8, @intCast(i)) }, item.b);
             try testing.expectEqual(Testing.Component.C{}, item.c);
             i += 1;
         }
@@ -300,13 +294,13 @@ test "ptr iterating works and can mutate storage data" {
     defer archetypes[0].deinit();
 
     for (0..100) |i| {
-        const a = A{ .value = @intCast(u32, i) };
-        const b = B{ .value = @intCast(u8, i) };
+        const a = A{ .value = @as(u32, @intCast(i)) };
+        const b = B{ .value = @as(u8, @intCast(i)) };
         var data: [3][]const u8 = undefined;
         data[0] = std.mem.asBytes(&a);
         data[1] = std.mem.asBytes(&b);
         data[2] = &[0]u8{};
-        try archetypes[0].registerEntity(Entity{ .id = @intCast(entity_type.EntityId, i) }, &data, sizes);
+        try archetypes[0].registerEntity(Entity{ .id = @as(entity_type.EntityId, @intCast(i)) }, &data, sizes);
     }
 
     {

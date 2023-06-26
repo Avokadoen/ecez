@@ -45,7 +45,8 @@ pub fn main() anyerror!void {
     }).init(allocator, .{render_target});
     defer world.deinit();
 
-    var rng = std.rand.DefaultPrng.init(@intCast(u64, std.time.timestamp()));
+    const init_seed: u64 = @intCast(std.time.timestamp());
+    var rng = std.rand.DefaultPrng.init(init_seed);
 
     // create all cells
     {
@@ -60,8 +61,8 @@ pub fn main() anyerror!void {
         while (i < cell_count) : (i += 1) {
             _ = try world.createEntity(Cell{
                 GridPos{
-                    .x = @intCast(u8, i % grid_dimensions),
-                    .y = @intCast(u8, i / grid_dimensions),
+                    .x = @intCast(i % grid_dimensions),
+                    .y = @intCast(i / grid_dimensions),
                 },
                 Health{ .alive = rng.random().float(f32) < spawn_threshold },
             });
@@ -119,8 +120,8 @@ fn renderCell(pos: GridPos, health: Health, render_target: *ecez.SharedState(Ren
     const zone = ztracy.ZoneNC(@src(), "Render Cell", Color.Light.red);
     defer zone.End();
 
-    const cell_x = @intCast(usize, pos.x);
-    const cell_y = @intCast(usize, pos.y);
+    const cell_x: usize = @intCast(pos.x);
+    const cell_y: usize = @intCast(pos.y);
 
     const new_line_count = cell_y;
     const start: usize = (cell_x + (cell_y * grid_dimensions)) * characters_per_cell + new_line_count;
@@ -141,7 +142,7 @@ fn renderCell(pos: GridPos, health: Health, render_target: *ecez.SharedState(Ren
 fn renderLine(pos: LinePos, render_target: *ecez.SharedState(RenderTarget)) void {
     const zone = ztracy.ZoneNC(@src(), "Render newline", Color.Light.turquoise);
     defer zone.End();
-    const nth = @intCast(usize, pos.nth);
+    const nth: usize = @intCast(pos.nth);
 
     render_target.output_buffer[nth * grid_dimensions * characters_per_cell + nth - 1] = '\n';
 }
@@ -159,24 +160,24 @@ fn tickCell(pos: GridPos, health: *Health, render_target: ecez.SharedState(Rende
     const zone = ztracy.ZoneNC(@src(), "Update Cell", Color.Light.red);
     defer zone.End();
 
-    const cell_x = @intCast(usize, pos.x);
-    const cell_y = @intCast(usize, pos.y);
+    const cell_x: usize = @intCast(pos.x);
+    const cell_y: usize = @intCast(pos.y);
 
     // again here we have to cheat by reading the output buffer
     const new_line_count = cell_y;
     const start = (cell_x + (cell_y * grid_dimensions)) * characters_per_cell + new_line_count + 1;
 
-    const up = -@intCast(i32, grid_dimensions * characters_per_cell + 1);
+    const up = -@as(i32, @intCast(grid_dimensions * characters_per_cell + 1));
     const down = -up;
     const left = -characters_per_cell;
     const right = characters_per_cell;
-    var index = @intCast(i32, start);
 
+    var index: i32 = @intCast(start);
     var neighbour_sum: u8 = 0;
     for ([_]i32{ left, up, right, right, down, down, left, left }) |delta| {
         index += delta;
         if (index > 0 and index < render_target.output_buffer.len) {
-            if (render_target.output_buffer[@intCast(usize, index)] == 'X') {
+            if (render_target.output_buffer[@intCast(index)] == 'X') {
                 neighbour_sum += 1;
             }
         }

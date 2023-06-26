@@ -91,7 +91,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
                 return ArchetypeError.EntityMissing; // Entity not part of archetype
             };
             if (@sizeOf(Component) == 0) {
-                return @constCast(@ptrCast(*const Component, &self.void_component));
+                return @constCast(@as(*const Component, @ptrCast(&self.void_component)));
             }
 
             const bytes = byte_retrieve_blk: {
@@ -102,7 +102,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
                 break :byte_retrieve_blk self.component_storage[storage_index].items[bytes_from..bytes_to];
             };
 
-            return @constCast(@ptrCast(*const Component, @alignCast(@alignOf(Component), bytes.ptr)));
+            return @constCast(@as(*const Component, @ptrCast(@alignCast(bytes.ptr))));
         }
 
         pub fn setComponent(
@@ -148,10 +148,10 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             var bitmask = self.component_bitmask;
             var cursor: u32 = 0;
             for (self.component_storage) |storage| {
-                const step = @intCast(ComponentMask.Shift, @ctz(bitmask));
+                const step = @as(ComponentMask.Shift, @intCast(@ctz(bitmask)));
                 std.debug.assert((bitmask >> step) & 1 == 1);
                 bitmask = (bitmask >> step) >> 1;
-                cursor += @intCast(u32, step) + 1;
+                cursor += @as(u32, @intCast(step)) + 1;
 
                 const component_size = all_component_sizes[cursor - 1];
                 try storage.ensureUnusedCapacity(component_size);
@@ -178,10 +178,10 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             var bitmask = self.component_bitmask;
             var cursor: u32 = 0;
             for (self.component_storage, data) |*storage, data_entry| {
-                const step = @intCast(ComponentMask.Shift, @ctz(bitmask));
+                const step = @as(ComponentMask.Shift, @intCast(@ctz(bitmask)));
                 std.debug.assert((bitmask >> step) & 1 == 1);
                 bitmask = (bitmask >> step) >> 1;
-                cursor += @intCast(u32, step) + 1;
+                cursor += @as(u32, @intCast(step)) + 1;
 
                 const component_size = all_component_sizes[cursor - 1];
                 // TODO: proper errdefer
@@ -207,11 +207,11 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             var bitmask = self.component_bitmask;
             var cursor: u32 = 0;
             for (self.component_storage, out_buffers) |*storage, *buffer| {
-                const step = @intCast(ComponentMask.Shift, @ctz(bitmask));
+                const step = @as(ComponentMask.Shift, @intCast(@ctz(bitmask)));
                 std.debug.assert((bitmask >> step) & 1 == 1);
                 bitmask = (bitmask >> step) >> 1;
 
-                cursor += @intCast(u32, step) + 1;
+                cursor += @as(u32, @intCast(step)) + 1;
 
                 const component_size = all_component_sizes[cursor - 1];
 
@@ -240,11 +240,11 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             var bitmask = self.component_bitmask;
             var cursor: u32 = 0;
             for (self.component_storage) |*storage| {
-                const step = @intCast(ComponentMask.Shift, @ctz(bitmask));
+                const step = @as(ComponentMask.Shift, @intCast(@ctz(bitmask)));
                 std.debug.assert((bitmask >> step) & 1 == 1);
                 bitmask = (bitmask >> step) >> 1;
 
-                cursor += @intCast(u32, step) + 1;
+                cursor += @as(u32, @intCast(step)) + 1;
 
                 const component_size = all_component_sizes[cursor - 1];
 
@@ -300,11 +300,11 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             var bitmask = self.component_bitmask;
             var cursor: u32 = 0;
             for (0..component_count) |comp_index| {
-                const step = @intCast(ComponentMask.Shift, @ctz(bitmask));
+                const step = @as(ComponentMask.Shift, @intCast(@ctz(bitmask)));
                 std.debug.assert((bitmask >> step) & 1 == 1);
                 bitmask = (bitmask >> step) >> 1;
 
-                cursor += @intCast(u32, step) + 1;
+                cursor += @as(u32, @intCast(step)) + 1;
 
                 const component_size = all_component_sizes[cursor - 1];
 
@@ -354,14 +354,14 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             var bitmask = filter_bitmask;
             var cursor: u32 = 0;
             for (0..component_count) |out_index| {
-                const step = @intCast(ComponentMask.Shift, @ctz(bitmask));
+                const step = @as(ComponentMask.Shift, @intCast(@ctz(bitmask)));
                 std.debug.assert((bitmask >> step) & 1 == 1);
                 bitmask = (bitmask >> step) >> 1;
 
-                cursor += @intCast(ComponentMask.Bits, step) + 1;
+                cursor += @as(ComponentMask.Bits, @intCast(step)) + 1;
 
                 const storage_index = storage_index_calc_blk: {
-                    const current_bit_index = @intCast(ComponentMask.Shift, cursor - 1);
+                    const current_bit_index = @as(ComponentMask.Shift, @intCast(cursor - 1));
                     const previous_bits_filter = (@as(ComponentMask.Bits, 1) << current_bit_index) - 1;
                     const previous_bits = self.component_bitmask & previous_bits_filter;
                     break :storage_index_calc_blk @popCount(previous_bits);
@@ -419,14 +419,14 @@ test "getComponent returns expected value ptrs" {
     defer archetype.deinit();
 
     for (0..100) |i| {
-        const a = A{ .value = @intCast(u32, i) };
-        const b = B{ .value = @intCast(u8, i) };
+        const a = A{ .value = @as(u32, @intCast(i)) };
+        const b = B{ .value = @as(u8, @intCast(i)) };
         var data: [3][]const u8 = undefined;
         data[0] = std.mem.asBytes(&a);
         data[1] = std.mem.asBytes(&b);
         data[2] = &[0]u8{};
         try archetype.registerEntity(
-            Entity{ .id = @intCast(entity_type.EntityId, i) },
+            Entity{ .id = @as(entity_type.EntityId, @intCast(i)) },
             &data,
             sizes,
         );
@@ -435,12 +435,12 @@ test "getComponent returns expected value ptrs" {
     const entity = Entity{ .id = 50 };
 
     try testing.expectEqual(
-        A{ .value = @intCast(u32, 50) },
+        A{ .value = @as(u32, @intCast(50)) },
         (try archetype.getComponent(entity, Testing.Bits.A, A)).*,
     );
 
     try testing.expectEqual(
-        B{ .value = @intCast(u8, 50) },
+        B{ .value = @as(u8, @intCast(50)) },
         (try archetype.getComponent(entity, Testing.Bits.B, B)).*,
     );
 }
@@ -451,10 +451,10 @@ test "setComponent can reassign values" {
     defer archetype.deinit();
 
     for (0..100) |i| {
-        const entity = Entity{ .id = @intCast(entity_type.EntityId, i) };
+        const entity = Entity{ .id = @as(entity_type.EntityId, @intCast(i)) };
 
-        const a = A{ .value = @intCast(u32, i) };
-        const b = B{ .value = @intCast(u8, i) };
+        const a = A{ .value = @as(u32, @intCast(i)) };
+        const b = B{ .value = @as(u8, @intCast(i)) };
         var data: [3][]const u8 = undefined;
         data[0] = std.mem.asBytes(&a);
         data[1] = std.mem.asBytes(&b);
@@ -466,7 +466,7 @@ test "setComponent can reassign values" {
     }
 
     for (0..100) |i| {
-        const entity = Entity{ .id = @intCast(entity_type.EntityId, i) };
+        const entity = Entity{ .id = @as(entity_type.EntityId, @intCast(i)) };
 
         try testing.expectEqual(
             A{ .value = 0 },
@@ -486,10 +486,10 @@ test "fetchEntityComponentView gives correct component views" {
 
     var buffer: [3][]u8 = undefined;
     for (0..100) |i| {
-        const mock_entity = Entity{ .id = @intCast(u32, i) };
-        var a = A{ .value = @intCast(u32, i) };
+        const mock_entity = Entity{ .id = @as(u32, @intCast(i)) };
+        var a = A{ .value = @as(u32, @intCast(i)) };
         buffer[0] = std.mem.asBytes(&a);
-        var b = B{ .value = @intCast(u8, i) };
+        var b = B{ .value = @as(u8, @intCast(i)) };
         buffer[1] = std.mem.asBytes(&b);
         buffer[2] = &[0]u8{};
 
@@ -550,10 +550,10 @@ test "swapRemoveEntity makes entity invalid for archetype" {
     var entities: [100]Entity = undefined;
     var buffer: [3][]u8 = undefined;
     for (&entities, 0..) |*entity, i| {
-        entity.* = Entity{ .id = @intCast(u32, i) };
-        var a = A{ .value = @intCast(u32, i) };
+        entity.* = Entity{ .id = @as(u32, @intCast(i)) };
+        var a = A{ .value = @as(u32, @intCast(i)) };
         buffer[0] = std.mem.asBytes(&a);
-        var b = B{ .value = @intCast(u8, i) };
+        var b = B{ .value = @as(u8, @intCast(i)) };
         buffer[1] = std.mem.asBytes(&b);
         buffer[2] = &[0]u8{};
 
@@ -580,12 +580,12 @@ test "swapRemoveEntity makes entity invalid for archetype" {
     }
 
     for (entities[0..50], 0..) |entity, i| {
-        try testing.expectEqual(A{ .value = @intCast(u32, i) }, (try archetype.getComponent(
+        try testing.expectEqual(A{ .value = @as(u32, @intCast(i)) }, (try archetype.getComponent(
             entity,
             Testing.Bits.A,
             A,
         )).*);
-        try testing.expectEqual(B{ .value = @intCast(u8, i) }, (try archetype.getComponent(
+        try testing.expectEqual(B{ .value = @as(u8, @intCast(i)) }, (try archetype.getComponent(
             entity,
             Testing.Bits.B,
             B,
@@ -598,12 +598,12 @@ test "swapRemoveEntity makes entity invalid for archetype" {
     }
 
     for (entities[51..], 51..) |entity, i| {
-        try testing.expectEqual(A{ .value = @intCast(u32, i) }, (try archetype.getComponent(
+        try testing.expectEqual(A{ .value = @as(u32, @intCast(i)) }, (try archetype.getComponent(
             entity,
             Testing.Bits.A,
             A,
         )).*);
-        try testing.expectEqual(B{ .value = @intCast(u8, i) }, (try archetype.getComponent(
+        try testing.expectEqual(B{ .value = @as(u8, @intCast(i)) }, (try archetype.getComponent(
             entity,
             Testing.Bits.B,
             B,
@@ -623,10 +623,10 @@ test "removeEntity removes entity and components" {
 
     var buffer: [3][]u8 = undefined;
     for (0..100) |i| {
-        const mock_entity = Entity{ .id = @intCast(u32, i) };
-        var a = A{ .value = @intCast(u32, i) };
+        const mock_entity = Entity{ .id = @as(u32, @intCast(i)) };
+        var a = A{ .value = @as(u32, @intCast(i)) };
         buffer[0] = std.mem.asBytes(&a);
-        var b = B{ .value = @intCast(u8, i) };
+        var b = B{ .value = @as(u8, @intCast(i)) };
         buffer[1] = std.mem.asBytes(&b);
         buffer[2] = &[0]u8{};
 
@@ -641,24 +641,24 @@ test "removeEntity removes entity and components" {
     }
 
     for (0..50) |i| {
-        const mock_entity = Entity{ .id = @intCast(u32, i) };
+        const mock_entity = Entity{ .id = @as(u32, @intCast(i)) };
         const a_comp = try archetype.getComponent(mock_entity, Testing.Bits.A, Testing.Component.A);
-        try testing.expectEqual(A{ .value = @intCast(u32, i) }, a_comp.*);
+        try testing.expectEqual(A{ .value = @as(u32, @intCast(i)) }, a_comp.*);
 
         const b_comp = try archetype.getComponent(mock_entity, Testing.Bits.B, Testing.Component.B);
-        try testing.expectEqual(B{ .value = @intCast(u8, i) }, b_comp.*);
+        try testing.expectEqual(B{ .value = @as(u8, @intCast(i)) }, b_comp.*);
 
         const c_comp = try archetype.getComponent(mock_entity, Testing.Bits.C, Testing.Component.C);
         try testing.expectEqual(C{}, c_comp.*);
     }
 
     for (51..100) |i| {
-        const mock_entity = Entity{ .id = @intCast(u32, i) };
+        const mock_entity = Entity{ .id = @as(u32, @intCast(i)) };
         const a_comp = try archetype.getComponent(mock_entity, Testing.Bits.A, Testing.Component.A);
-        try testing.expectEqual(A{ .value = @intCast(u32, i) }, a_comp.*);
+        try testing.expectEqual(A{ .value = @as(u32, @intCast(i)) }, a_comp.*);
 
         const b_comp = try archetype.getComponent(mock_entity, Testing.Bits.B, Testing.Component.B);
-        try testing.expectEqual(B{ .value = @intCast(u8, i) }, b_comp.*);
+        try testing.expectEqual(B{ .value = @as(u8, @intCast(i)) }, b_comp.*);
 
         const c_comp = try archetype.getComponent(mock_entity, Testing.Bits.C, Testing.Component.C);
         try testing.expectEqual(C{}, c_comp.*);
@@ -673,10 +673,10 @@ test "getStorageData retrieves components view" {
     {
         var buffer: [3][]u8 = undefined;
         for (0..100) |i| {
-            const mock_entity = Entity{ .id = @intCast(u32, i) };
-            var a = A{ .value = @intCast(u32, i) };
+            const mock_entity = Entity{ .id = @as(u32, @intCast(i)) };
+            var a = A{ .value = @as(u32, @intCast(i)) };
             buffer[0] = std.mem.asBytes(&a);
-            var b = B{ .value = @intCast(u8, i) };
+            var b = B{ .value = @as(u8, @intCast(i)) };
             buffer[1] = std.mem.asBytes(&b);
             buffer[2] = &[0]u8{};
 
@@ -698,8 +698,8 @@ test "getStorageData retrieves components view" {
                 const from = i * @sizeOf(Testing.Component.A);
                 const to = from + @sizeOf(Testing.Component.A);
                 const bytes = storage.outer[0][from..to];
-                const a = @ptrCast(*const Testing.Component.A, @alignCast(@alignOf(Testing.Component.A), bytes)).*;
-                try testing.expectEqual(Testing.Component.A{ .value = @intCast(u32, i) }, a);
+                const a = @as(*const Testing.Component.A, @ptrCast(@alignCast(bytes))).*;
+                try testing.expectEqual(Testing.Component.A{ .value = @as(u32, @intCast(i)) }, a);
             }
         }
     }
@@ -712,16 +712,16 @@ test "getStorageData retrieves components view" {
             const from = i * @sizeOf(Testing.Component.A);
             const to = from + @sizeOf(Testing.Component.A);
             const bytes = storage.outer[0][from..to];
-            const a = @ptrCast(*const Testing.Component.A, @alignCast(@alignOf(Testing.Component.A), bytes)).*;
-            try testing.expectEqual(Testing.Component.A{ .value = @intCast(u32, i) }, a);
+            const a = @as(*const Testing.Component.A, @ptrCast(@alignCast(bytes))).*;
+            try testing.expectEqual(Testing.Component.A{ .value = @as(u32, @intCast(i)) }, a);
         }
 
         {
             const from = i * @sizeOf(Testing.Component.B);
             const to = from + @sizeOf(Testing.Component.B);
             const bytes = storage.outer[1][from..to];
-            const b = @ptrCast(*const Testing.Component.B, @alignCast(@alignOf(Testing.Component.B), bytes)).*;
-            try testing.expectEqual(Testing.Component.B{ .value = @intCast(u8, i) }, b);
+            const b = @as(*const Testing.Component.B, @ptrCast(@alignCast(bytes))).*;
+            try testing.expectEqual(Testing.Component.B{ .value = @as(u8, @intCast(i)) }, b);
         }
     }
 }

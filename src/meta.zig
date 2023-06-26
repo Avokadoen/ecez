@@ -853,7 +853,7 @@ pub fn SharedState(comptime State: type) type {
     shared_state_fields[state_info.fields.len] = Type.StructField{
         .name = shared_secret_field,
         .type = u8,
-        .default_value = @ptrCast(?*const anyopaque, &default_value),
+        .default_value = @ptrCast(&default_value),
         .is_comptime = true,
         .alignment = 0,
     };
@@ -885,7 +885,7 @@ pub fn EventArgument(comptime Argument: type) type {
     event_fields[argument_info.fields.len] = Type.StructField{
         .name = event_argument_secret_field,
         .type = u8,
-        .default_value = @ptrCast(?*const anyopaque, &default_value),
+        .default_value = @ptrCast(&default_value),
         .is_comptime = true,
         .alignment = 0,
     };
@@ -1096,7 +1096,7 @@ test "createSystemInfo generate accurate system information" {
     try testing.expectEqual(1, info.metadata[1].params.len);
     try testing.expectEqual(1, info.metadata[2].params.len);
 
-    const hello_ptr = @ptrCast(*const info.function_types[1], info.functions[1]);
+    const hello_ptr: *const info.function_types[1] = @ptrCast(info.functions[1]);
     var a: A = .{ .a = 0 };
     hello_ptr.*(&a);
     try testing.expectEqual(a.a, 1);

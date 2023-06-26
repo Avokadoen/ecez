@@ -27,7 +27,7 @@ pub fn FromConfig(comptime max_depth: u32, comptime BitMask: type) type {
             pub fn empty(bit_pos: usize) Node {
                 return Node{
                     .data_index = null,
-                    .bit_pos = @intCast(BitMask.Shift, bit_pos),
+                    .bit_pos = @as(BitMask.Shift, @intCast(bit_pos)),
                     .child = [_]?u32{null} ** 2,
                 };
             }
@@ -69,7 +69,7 @@ pub fn FromConfig(comptime max_depth: u32, comptime BitMask: type) type {
 
             const step_count = bit_count - @clz(destination);
             for (0..step_count) |step| {
-                const shift = @intCast(BitMask.Shift, step);
+                const shift = @as(BitMask.Shift, @intCast(step));
 
                 const child_index: usize = if (((destination >> shift) & 1) == 1) Node.right else Node.left;
 
@@ -80,7 +80,7 @@ pub fn FromConfig(comptime max_depth: u32, comptime BitMask: type) type {
 
                     const index = self.node_list.items.len;
                     try self.node_list.append(Node.empty(step));
-                    self.node_list.items[current_index].child[child_index] = @intCast(u32, index);
+                    self.node_list.items[current_index].child[child_index] = @as(u32, @intCast(index));
                     break :step_blk index;
                 };
             }
@@ -95,7 +95,7 @@ pub fn FromConfig(comptime max_depth: u32, comptime BitMask: type) type {
             var current_index: usize = 0;
             const step_count = bit_count - @clz(destination);
             for (0..step_count) |step| {
-                const shift = @intCast(BitMask.Shift, step);
+                const shift = @as(BitMask.Shift, @intCast(step));
 
                 const child_index: usize = if (((destination >> shift) & 1) == 1) Node.right else Node.left;
 
@@ -227,8 +227,8 @@ test "iterate with empty include and exclude mask iterate all" {
     defer tree.deinit();
 
     for (1..all_combination_count) |mock_data_index| {
-        const bitmask = @intCast(TestMask.Bits, mock_data_index);
-        tree.appendChain(@intCast(u32, mock_data_index), bitmask) catch unreachable;
+        const bitmask = @as(TestMask.Bits, @intCast(mock_data_index));
+        tree.appendChain(@as(u32, @intCast(mock_data_index)), bitmask) catch unreachable;
     }
 
     var iter = TestTree.IterCursor.fromRoot();
@@ -243,7 +243,7 @@ test "iterate with empty include and exclude mask iterate all" {
     }) |expected| {
         const data_index = tree.iterate(0, 0, &iter);
         try testing.expectEqual(expected, data_index.?);
-        try testing.expectEqual(@intCast(TestMask.Bits, expected), iter.bitmask);
+        try testing.expectEqual(@as(TestMask.Bits, @intCast(expected)), iter.bitmask);
     }
 
     try testing.expectEqual(@as(?u32, null), tree.iterate(0, 0, &iter));
@@ -257,8 +257,8 @@ test "iterate with include bit(s), but empty exclude mask iterate all expected" 
     defer tree.deinit();
 
     for (1..all_combination_count) |mock_data_index| {
-        const bitmask = @intCast(TestMask.Bits, mock_data_index);
-        tree.appendChain(@intCast(u32, mock_data_index), bitmask) catch unreachable;
+        const bitmask = @as(TestMask.Bits, @intCast(mock_data_index));
+        tree.appendChain(@as(u32, @intCast(mock_data_index)), bitmask) catch unreachable;
     }
 
     {
@@ -271,7 +271,7 @@ test "iterate with include bit(s), but empty exclude mask iterate all expected" 
         }) |expected| {
             const data_index = tree.iterate(Testing.Bits.A, 0, &iter);
             try testing.expectEqual(expected, data_index.?);
-            try testing.expectEqual(@intCast(TestMask.Bits, expected), iter.bitmask);
+            try testing.expectEqual(@as(TestMask.Bits, @intCast(expected)), iter.bitmask);
         }
 
         try testing.expectEqual(@as(?u32, null), tree.iterate(Testing.Bits.A, 0, &iter));
@@ -287,7 +287,7 @@ test "iterate with include bit(s), but empty exclude mask iterate all expected" 
         }) |expected| {
             const data_index = tree.iterate(Testing.Bits.B, 0, &iter);
             try testing.expectEqual(expected, data_index.?);
-            try testing.expectEqual(@intCast(TestMask.Bits, expected), iter.bitmask);
+            try testing.expectEqual(@as(TestMask.Bits, @intCast(expected)), iter.bitmask);
         }
 
         try testing.expectEqual(@as(?u32, null), tree.iterate(Testing.Bits.B, 0, &iter));
@@ -303,7 +303,7 @@ test "iterate with include bit(s), but empty exclude mask iterate all expected" 
         }) |expected| {
             const data_index = tree.iterate(Testing.Bits.C, 0, &iter);
             try testing.expectEqual(expected, data_index.?);
-            try testing.expectEqual(@intCast(TestMask.Bits, expected), iter.bitmask);
+            try testing.expectEqual(@as(TestMask.Bits, @intCast(expected)), iter.bitmask);
         }
 
         try testing.expectEqual(@as(?u32, null), tree.iterate(Testing.Bits.C, 0, &iter));
@@ -317,7 +317,7 @@ test "iterate with include bit(s), but empty exclude mask iterate all expected" 
         }) |expected| {
             const data_index = tree.iterate(Testing.Bits.A | Testing.Bits.B, 0, &iter);
             try testing.expectEqual(expected, data_index.?);
-            try testing.expectEqual(@intCast(TestMask.Bits, expected), iter.bitmask);
+            try testing.expectEqual(@as(TestMask.Bits, @intCast(expected)), iter.bitmask);
         }
 
         try testing.expectEqual(@as(?u32, null), tree.iterate(Testing.Bits.A | Testing.Bits.B, 0, &iter));
@@ -331,7 +331,7 @@ test "iterate with include bit(s), but empty exclude mask iterate all expected" 
         }) |expected| {
             const data_index = tree.iterate(Testing.Bits.A | Testing.Bits.C, 0, &iter);
             try testing.expectEqual(expected, data_index.?);
-            try testing.expectEqual(@intCast(TestMask.Bits, expected), iter.bitmask);
+            try testing.expectEqual(@as(TestMask.Bits, @intCast(expected)), iter.bitmask);
         }
 
         try testing.expectEqual(@as(?u32, null), tree.iterate(Testing.Bits.A | Testing.Bits.C, 0, &iter));
@@ -345,7 +345,7 @@ test "iterate with include bit(s), but empty exclude mask iterate all expected" 
         }) |expected| {
             const data_index = tree.iterate(Testing.Bits.B | Testing.Bits.C, 0, &iter);
             try testing.expectEqual(expected, data_index.?);
-            try testing.expectEqual(@intCast(TestMask.Bits, expected), iter.bitmask);
+            try testing.expectEqual(@as(TestMask.Bits, @intCast(expected)), iter.bitmask);
         }
 
         try testing.expectEqual(@as(?u32, null), tree.iterate(Testing.Bits.B | Testing.Bits.C, 0, &iter));
@@ -358,7 +358,7 @@ test "iterate with include bit(s), but empty exclude mask iterate all expected" 
         }) |expected| {
             const data_index = tree.iterate(Testing.Bits.All, 0, &iter);
             try testing.expectEqual(expected, data_index.?);
-            try testing.expectEqual(@intCast(TestMask.Bits, expected), iter.bitmask);
+            try testing.expectEqual(@as(TestMask.Bits, @intCast(expected)), iter.bitmask);
         }
 
         try testing.expectEqual(@as(?u32, null), tree.iterate(Testing.Bits.All, 0, &iter));
@@ -371,8 +371,8 @@ test "iterate with empty include bits, but exclude mask bit(s) iterate all expec
     defer tree.deinit();
 
     for (1..all_combination_count) |mock_data_index| {
-        const bitmask = @intCast(TestMask.Bits, mock_data_index);
-        tree.appendChain(@intCast(u32, mock_data_index), bitmask) catch unreachable;
+        const bitmask = @as(TestMask.Bits, @intCast(mock_data_index));
+        tree.appendChain(@as(u32, @intCast(mock_data_index)), bitmask) catch unreachable;
     }
 
     {
@@ -384,7 +384,7 @@ test "iterate with empty include bits, but exclude mask bit(s) iterate all expec
         }) |expected| {
             const data_index = tree.iterate(0, Testing.Bits.A, &iter);
             try testing.expectEqual(expected, data_index.?);
-            try testing.expectEqual(@intCast(TestMask.Bits, expected), iter.bitmask);
+            try testing.expectEqual(@as(TestMask.Bits, @intCast(expected)), iter.bitmask);
         }
 
         try testing.expectEqual(@as(?u32, null), tree.iterate(0, Testing.Bits.A, &iter));
@@ -399,7 +399,7 @@ test "iterate with empty include bits, but exclude mask bit(s) iterate all expec
         }) |expected| {
             const data_index = tree.iterate(0, Testing.Bits.B, &iter);
             try testing.expectEqual(expected, data_index.?);
-            try testing.expectEqual(@intCast(TestMask.Bits, expected), iter.bitmask);
+            try testing.expectEqual(@as(TestMask.Bits, @intCast(expected)), iter.bitmask);
         }
 
         try testing.expectEqual(@as(?u32, null), tree.iterate(0, Testing.Bits.B, &iter));
@@ -414,7 +414,7 @@ test "iterate with empty include bits, but exclude mask bit(s) iterate all expec
         }) |expected| {
             const data_index = tree.iterate(0, Testing.Bits.C, &iter);
             try testing.expectEqual(expected, data_index.?);
-            try testing.expectEqual(@intCast(TestMask.Bits, expected), iter.bitmask);
+            try testing.expectEqual(@as(TestMask.Bits, @intCast(expected)), iter.bitmask);
         }
 
         try testing.expectEqual(@as(?u32, null), tree.iterate(0, Testing.Bits.C, &iter));
@@ -459,8 +459,8 @@ test "iterate with include A exlude B iterate all expected" {
     defer tree.deinit();
 
     for (1..all_combination_count) |mock_data_index| {
-        const bitmask = @intCast(TestMask.Bits, mock_data_index);
-        tree.appendChain(@intCast(u32, mock_data_index), bitmask) catch unreachable;
+        const bitmask = @as(TestMask.Bits, @intCast(mock_data_index));
+        tree.appendChain(@as(u32, @intCast(mock_data_index)), bitmask) catch unreachable;
     }
 
     {
@@ -471,7 +471,7 @@ test "iterate with include A exlude B iterate all expected" {
         }) |expected| {
             const data_index = tree.iterate(Testing.Bits.A, Testing.Bits.B, &iter);
             try testing.expectEqual(expected, data_index.?);
-            try testing.expectEqual(@intCast(TestMask.Bits, expected), iter.bitmask);
+            try testing.expectEqual(@as(TestMask.Bits, @intCast(expected)), iter.bitmask);
         }
 
         try testing.expectEqual(@as(?u32, null), tree.iterate(Testing.Bits.A, Testing.Bits.B, &iter));
@@ -492,12 +492,12 @@ test "getNodeDataIndex return data index" {
     defer tree.deinit();
 
     for (1..all_combination_count) |mock_data_index| {
-        const bitmask = @intCast(TestMask.Bits, mock_data_index);
-        tree.appendChain(@intCast(u32, mock_data_index), bitmask) catch unreachable;
+        const bitmask = @as(TestMask.Bits, @intCast(mock_data_index));
+        tree.appendChain(@as(u32, @intCast(mock_data_index)), bitmask) catch unreachable;
     }
 
     for (1..all_combination_count) |mock_data_index| {
-        const bitmask = @intCast(TestMask.Bits, mock_data_index);
-        try testing.expectEqual(@intCast(u32, mock_data_index), tree.getNodeDataIndex(bitmask).?);
+        const bitmask = @as(TestMask.Bits, @intCast(mock_data_index));
+        try testing.expectEqual(@as(u32, @intCast(mock_data_index)), tree.getNodeDataIndex(bitmask).?);
     }
 }
