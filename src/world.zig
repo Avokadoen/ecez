@@ -1127,11 +1127,7 @@ test "events can be registered through struct or individual function(s)" {
     };
 
     const SystemStruct2 = struct {
-        pub fn func3(a: *Testing.Component.A) void {
-            a.value += 1;
-        }
-
-        pub fn func4(a: *Testing.Component.A) void {
+        pub fn func3(a: *Testing.Component.B) void {
             a.value += 1;
         }
     };
@@ -1139,14 +1135,15 @@ test "events can be registered through struct or individual function(s)" {
     var world = try WorldStub.WithEvents(.{
         Event("onFoo", .{
             SystemStruct1.func1,
-            SystemStruct1.func2,
+            DependOn(SystemStruct1.func2, .{SystemStruct1.func1}),
             SystemStruct2,
         }, .{}),
     }).init(testing.allocator, .{});
     defer world.deinit();
 
-    const initial_state = AEntityType{
+    const initial_state = Testing.Archetype.AB{
         .a = Testing.Component.A{ .value = 0 },
+        .b = Testing.Component.B{ .value = 0 },
     };
     const entity = try world.createEntity(initial_state);
 
@@ -1154,8 +1151,12 @@ test "events can be registered through struct or individual function(s)" {
     world.waitEvent(.onFoo);
 
     try testing.expectEqual(
-        Testing.Component.A{ .value = 4 },
+        Testing.Component.A{ .value = 2 },
         try world.getComponent(entity, Testing.Component.A),
+    );
+    try testing.expectEqual(
+        Testing.Component.B{ .value = 1 },
+        try world.getComponent(entity, Testing.Component.B),
     );
 }
 
