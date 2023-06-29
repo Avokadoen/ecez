@@ -24,7 +24,7 @@ zig build run-game-of-life
 
 ## Features
 
-As mentioned, the current state of the API is very much Work in Progress (WIP). The framework is to some degree functional and can be played with. Current *implemented* features are
+As mentioned, the current state of the API is very much Work in Progress (WIP). The framework is to some degree functional and can be played with. Current *implemented* features are:
 
 ### Compile time based and type safe API
 Zig's comptime feature is utilized to perform static reflection on the usage of the API to validate usage and report useful messages to the user (in theory :)). 
@@ -59,6 +59,71 @@ world.triggerEvent(.update_loop, .{}, .{});
 world.triggerEvent(.on_mouse_click, .{@as(MouseArg, mouse)}, .{ MonsterTag });
 
 ```
+
+#### Special system arguments
+
+Systems can have arguments that has a unique semantical meaning.
+Currently there are 3 special arguments:
+ * Entity - give the system access to the current entity
+ * EventArgument - data that is relevant to an triggered event
+ * SharedState - data that is global to the world instance
+
+ ##### Examples 
+
+Example of EventArgument
+```zig
+    const MouseMove = struct { x: u32, y: u32,  };
+    const OnMouseMove = struct {
+        // We see the argument annotated by EventArgument which hints ecez that this will be supplied on trigger
+        pub fn system(thing: *ThingThatCares, mouse: EventArgument(MouseMove)) void {
+            thing.value = mouse.x + mouse.y;
+        }
+    };
+
+    var world = try WorldBuilder().WithComponents(...).WithEvents(.{
+        // We include the inner type of the EventArgument when we register the event
+        Event("onMouseMove", .{OnMouseMove}, MouseMove),
+    }).init(testing.allocator, .{});
+
+    // register some entities with ThingThatCares component ...
+
+    // As the event is triggered we supply event specific data
+    world.triggerEvent(.onMouseMove, MouseMove{ .x = 40, .y = 2 }, .{});
+```
+
+Example of SharedState
+```zig
+    const OnKill = struct {
+        pub fn system(health: Health, kill_counter: *SharedState(KillCounter)) void {
+            health = 0;
+            kill_counter.count += 1;
+        }
+    };
+
+    const World = try WorldBuilder().WithComponents(...).WithEvents(.{
+        // We include the inner type of the EventArgument when we register the event
+        Event("onKill", .{OnKill}, .{}),
+    });
+```
+
+Example of Entity
+```zig
+    const System = struct {
+        pub fn system(entity: Entity, health: Health) void {
+            // ...
+        }
+    };
+```
+
+Both SharedState and EventArgument can be mutable by using a pointer
+
+
+#### System restrictions
+
+There are some restrictions to how you can define systems:
+ * If the system takes the current entity argument, then the entity must be the *first* argument
+ * Components must come *before* special arguments (event data and shared data, but not entity)
+    * Event data and shared data must come *after* any component or entity argument
 
 ### Implicit multithreading of systems
 
@@ -115,6 +180,10 @@ sequenceDiagram
     move->>move: run
 ```
 
+#### Multithreading is done through [zjobs](https://github.com/michal-z/zig-gamedev/tree/main/libs/zjobs)
+
+zjobs is as the name suggest a job based multithreading API. 
+
 ### Queries
 
 You can query the api instance for all components of certain type and filter out instances of said components that also have unwanted sibling components.
@@ -166,11 +235,6 @@ if (happy_healhy_monster_iter.at(5)) |fifth_happy_monster| {
 }
 
 ```
-
-
-### Multithreading is done through [zjobs](https://github.com/michal-z/zig-gamedev/tree/main/libs/zjobs)
-
-zjobs is as the name suggest a job based multithreading API. 
 
 ### Tracy integration using [ztracy](https://github.com/michal-z/zig-gamedev/tree/main/libs/ztracy)
 ![ztracy](media/ztracy.png)
