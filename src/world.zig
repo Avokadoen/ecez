@@ -311,7 +311,7 @@ fn CreateWorld(
             // TODO: verify systems and arguments in type initialization
             const EventExtraArgument = @TypeOf(event_extra_argument);
             if (@sizeOf(triggered_event.EventArgument) > 0) {
-                if (comptime meta.isEventArgument(EventExtraArgument)) {
+                if (comptime meta.isSpecialArgument(.event, EventExtraArgument)) {
                     @compileError("event arguments should not be wrapped in EventArgument type when triggering an event");
                 }
                 if (EventExtraArgument != triggered_event.EventArgument) {
@@ -1422,7 +1422,10 @@ test "events entity access remain correct after single removeComponent" {
 }
 
 test "events can accepts event related data" {
-    const MouseInput = struct { x: u32, y: u32 };
+    const MouseInput = struct {
+        x: u32,
+        y: u32,
+    };
     // define a system type
     const SystemType = struct {
         pub fn systemOne(a: *Testing.Component.A, mouse: EventArgument(MouseInput)) void {

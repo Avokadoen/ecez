@@ -24,4 +24,5 @@ test {
     _ = @import("opaque_archetype.zig");
     _ = @import("query.zig");
     _ = @import("world.zig");
+    _ = @import("meta.zig");
 }

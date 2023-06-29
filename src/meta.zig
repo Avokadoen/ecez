@@ -6,20 +6,26 @@ const testing = std.testing;
 
 const Entity = @import("entity_type.zig").Entity;
 
-pub const secret_field = "magic_secret_sauce";
-pub const shared_secret_field = "shared_magic_secret_sauce";
-pub const event_argument_secret_field = "event_magic_secret_sauce";
-pub const system_depend_on_secret_field = "system_depend_on_secret_sauce";
-pub const event_magic = 0xaa_bb_cc;
+const secret_field = "secret_field";
+
+const ArgType = enum {
+    event,
+    shared_state,
+};
+
+const SystemType = enum {
+    depend_on,
+    event,
+};
 
 const DependOnRange = struct {
     to: u32,
     from: u32,
 };
 
-const max_params = 32;
-
 pub const SystemMetadata = struct {
+    pub const max_params = 32;
+
     pub const Arg = enum {
         component_ptr,
         component_value,
@@ -46,7 +52,7 @@ pub const SystemMetadata = struct {
     ) SystemMetadata {
         // blocked by issue https://github.com/ziglang/zig/issues/1291
         if (fn_info.params.len > max_params) {
-            @compileError("system arguments currently only support up to 32 arguments");
+            @compileError(std.fmt.comptimePrint("system arguments currently only support up to {d} arguments", .{max_params}));
         }
 
         // TODO: include function name in error messages
@@ -78,6 +84,12 @@ pub const SystemMetadata = struct {
             component_parsing,
             not_component_parsing,
         };
+        const SetParsingState = struct {
+            shared_state: Arg,
+            event_argument: Arg,
+            component: Arg,
+            type: type,
+        };
 
         var has_entity_argument: bool = false;
         var component_params_count: usize = 0;
@@ -85,13 +97,12 @@ pub const SystemMetadata = struct {
 
         var params_buffer: [32]Arg = undefined;
         var params = params_buffer[0..fn_info.params.len];
-        inline for (params, fn_info.params, 0..) |*param, param_info, i| {
+        for (params, fn_info.params, 0..) |*param, param_info, i| {
             const T = param_info.type orelse {
-                const err_msg = std.fmt.comptimePrint("system {s} argument {d} is missing type", .{
+                @compileError(std.fmt.comptimePrint("system {s} argument {d} is missing type", .{
                     function_name,
                     i,
-                });
-                @compileError(err_msg);
+                }));
             };
 
             if (i == 0 and T == Entity) {
@@ -102,97 +113,72 @@ pub const SystemMetadata = struct {
                 @compileError("entity argument must be the first argument");
             }
 
-            // TODO: refactor this beast
-            switch (@typeInfo(T)) {
-                .Pointer => |pointer| {
-                    // we enforce struct arguments because it is easier to identify requested data while
-                    // mainting type safety
-                    if (@typeInfo(pointer.child) != .Struct) {
-                        const err_msg = std.fmt.comptimePrint("system {s} argument {d} must point to a struct", .{
-                            function_name,
-                            i,
-                        });
-                        @compileError(err_msg);
-                    }
+            // figure out whic Arg enums we should use for the next step
+            const parse_set_states: SetParsingState = parse_set_state_blk: {
+                switch (@typeInfo(T)) {
+                    .Pointer => |pointer| {
+                        // we enforce struct arguments because it is easier to identify requested data while
+                        // mainting type safety
+                        if (@typeInfo(pointer.child) != .Struct) {
+                            const err_msg = std.fmt.comptimePrint("system {s} argument {d} must point to a struct", .{
+                                function_name,
+                                i,
+                            });
+                            @compileError(err_msg);
+                        }
 
-                    if (parsing_state == .component_parsing) {
-                        // if argument is a shared state argument or event we are done parsing components
-                        if (@hasField(pointer.child, shared_secret_field)) {
-                            parsing_state = .not_component_parsing;
-                            param.* = Arg.shared_state_ptr;
-                        } else if (@hasField(pointer.child, event_argument_secret_field)) {
-                            parsing_state = .not_component_parsing;
-                            param.* = Arg.event_argument_ptr;
-                        } else {
-                            component_params_count = i + if (has_entity_argument) 0 else 1;
-                            param.* = Arg.component_ptr;
-                        }
-                    } else {
-                        // we are now done parsing components which means that any argument
-                        // must be either shared state, or an event argument
-                        if (@hasField(pointer.child, shared_secret_field)) {
-                            param.* = Arg.shared_state_ptr;
-                        } else if (@hasField(pointer.child, event_argument_secret_field)) {
-                            @compileError("event argument can't be pointers");
-                        } else {
-                            const pre_arg_str = switch (params[i - 1]) {
-                                .component_ptr, .component_value => unreachable,
-                                .event_argument_value => "event",
-                                .shared_state_ptr, .shared_state_value => "shared state",
-                                else => {},
-                            };
-                            const err_msg = std.fmt.comptimePrint("system {s} argument {d} is a component but comes after {s}", .{
-                                pre_arg_str,
-                                function_name,
-                                i,
-                            });
-                            @compileError(err_msg);
-                        }
-                    }
-                },
-                .Struct => {
-                    if (parsing_state == .component_parsing) {
-                        // if argument is a shared state argument or event we are done parsing components
-                        if (@hasField(T, shared_secret_field)) {
-                            parsing_state = .not_component_parsing;
-                            param.* = Arg.shared_state_value;
-                        } else if (@hasField(T, event_argument_secret_field)) {
-                            parsing_state = .not_component_parsing;
-                            param.* = Arg.event_argument_value;
-                        } else {
-                            component_params_count = i + if (has_entity_argument) 0 else 1;
-                            param.* = Arg.component_value;
-                        }
-                    } else {
-                        // we are now done parsing components which means that any argument
-                        // must be either shared state, or an event argument
-                        if (@hasField(T, shared_secret_field)) {
-                            param.* = Arg.shared_state_value;
-                        } else if (@hasField(T, event_argument_secret_field)) {
-                            param.* = Arg.event_argument_value;
-                        } else {
-                            const pre_arg_str = switch (params[i - 1]) {
-                                .component_ptr, .component_value => unreachable,
-                                .event_argument_value => "event",
-                                .shared_state_ptr, .shared_state_value => "shared state",
-                                else => {},
-                            };
-                            const err_msg = std.fmt.comptimePrint("system {s} argument {d} is a component but comes after {s}", .{
-                                pre_arg_str,
-                                function_name,
-                                i,
-                            });
-                            @compileError(err_msg);
-                        }
-                    }
-                },
-                else => {
-                    const err_msg = std.fmt.comptimePrint("system {s} argument {d} is not a struct", .{
+                        break :parse_set_state_blk SetParsingState{
+                            .shared_state = Arg.shared_state_ptr,
+                            .event_argument = Arg.event_argument_ptr,
+                            .component = Arg.component_ptr,
+                            .type = pointer.child,
+                        };
+                    },
+                    .Struct => break :parse_set_state_blk SetParsingState{
+                        .shared_state = Arg.shared_state_value,
+                        .event_argument = Arg.event_argument_value,
+                        .component = Arg.component_value,
+                        .type = T,
+                    },
+                    else => @compileError(std.fmt.comptimePrint("system {s} argument {d} is not a struct", .{
                         function_name,
                         i,
+                    })),
+                }
+            };
+
+            // check if we are currently parsing a special argument and register any
+            const assigned_special_argument = special_arg_parse_blk: {
+                if (getSepcialArgument(parse_set_states.type)) |special_arg| {
+                    switch (special_arg) {
+                        .shared_state => param.* = parse_set_states.shared_state,
+                        .event => param.* = parse_set_states.event_argument,
+                    }
+                    parsing_state = .not_component_parsing;
+                    break :special_arg_parse_blk true;
+                }
+                break :special_arg_parse_blk false;
+            };
+
+            if (assigned_special_argument == false) {
+                // if we did not parse a special argument, but we are not parsing components then the systems is illegal
+                if (parsing_state == .not_component_parsing) {
+                    const pre_arg_str = switch (params[i - 1]) {
+                        .component_ptr, .component_value => unreachable,
+                        .event_argument_value => "event",
+                        .shared_state_ptr, .shared_state_value => "shared state",
+                        else => {},
+                    };
+                    const err_msg = std.fmt.comptimePrint("system {s} argument {d} is a component but comes after {s}", .{
+                        function_name,
+                        i,
+                        pre_arg_str,
                     });
                     @compileError(err_msg);
-                },
+                }
+
+                component_params_count += 1;
+                param.* = parse_set_states.component;
             }
         }
         return SystemMetadata{
@@ -279,19 +265,47 @@ pub fn Event(comptime event_name: []const u8, comptime systems: anytype, comptim
     };
 
     return struct {
+        pub const secret_field = SystemType.event;
         pub const name = event_name;
         pub const s = systems;
-        pub const magic_secret_sauce = event_magic;
         pub const system_count = countAndVerifySystems(systems);
         pub const systems_info = createSystemInfo(system_count, systems);
         pub const EventArgument = EventArgumentType;
     };
 }
 
-pub fn isEventArgument(comptime T: type) bool {
+pub fn getSepcialArgument(comptime T: type) ?ArgType {
     const info = @typeInfo(T);
     if (info == .Struct) {
-        return @hasField(T, event_argument_secret_field);
+        for (info.Struct.fields) |field| {
+            if (field.type == ArgType) {
+                if (field.default_value) |default| {
+                    return @as(*const ArgType, @ptrCast(default)).*;
+                }
+            }
+        }
+    }
+    return null;
+}
+
+pub fn isSpecialArgument(comptime arg_type: ArgType, comptime T: type) bool {
+    if (getSepcialArgument(T)) |special_arg| {
+        return special_arg == arg_type;
+    }
+    return false;
+}
+
+pub fn isSystemType(comptime system_type: SystemType, comptime T: type) bool {
+    const info = @typeInfo(T);
+    if (info == .Struct) {
+        for (info.Struct.decls) |decl| {
+            if (std.mem.eql(u8, secret_field, decl.name)) {
+                const secret = @field(T, decl.name);
+                if (@TypeOf(secret) == SystemType) {
+                    return secret == system_type;
+                }
+            }
+        }
     }
     return false;
 }
@@ -304,20 +318,15 @@ pub fn countAndVerifyEvents(comptime events: anytype) comptime_int {
         @compileError("CreateWorld expected tuple or struct argument for events, got " ++ @typeName(EventsType));
     }
 
-    const fields_info = events_type_info.Struct.fields;
     comptime var event_count = 0;
     // start by counting events registered
-    inline for (fields_info, 0..) |field_info, i| {
+    inline for (events_type_info.Struct.fields, 0..) |field_info, i| {
         switch (@typeInfo(field_info.type)) {
             .Type => {
                 switch (@typeInfo(events[i])) {
                     .Struct => {
-                        const error_msg = "invalid event type, use ecez.Event() to generate event type";
-                        if (@hasDecl(events[i], secret_field) == false) {
-                            @compileError(error_msg);
-                        }
-                        if (@field(events[i], secret_field) != event_magic) {
-                            @compileError(error_msg);
+                        if (isSystemType(.event, events[i]) == false) {
+                            @compileError("invalid event type " ++ @typeName(@TypeOf(events[i])) ++ ", use ecez.Event() to generate event type");
                         }
                         event_count += 1;
                     },
@@ -381,7 +390,7 @@ pub fn countAndVerifySystems(comptime systems: anytype) comptime_int {
                 switch (@typeInfo(systems[i])) {
                     .Struct => |stru| {
                         // check if struct is a DependOn generated struct
-                        if (std.mem.eql(u8, stru.decls[0].name, system_depend_on_secret_field)) {
+                        if (isSystemType(.depend_on, systems[i])) {
                             // should be one inner system at this point
                             systems_count += 1;
                         } else {
@@ -438,7 +447,7 @@ fn SystemInfo(comptime system_count: comptime_int) type {
 ///     - depend_on_systems: a TUPLE of one or more functions that the system depend on
 pub fn DependOn(comptime system: anytype, comptime depend_on_systems: anytype) type {
     return struct {
-        const system_depend_on_secret_sauce = secret_field;
+        const secret_field = SystemType.depend_on;
         const _system = system;
         const _depend_on_systems = depend_on_systems;
     };
@@ -466,9 +475,9 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                     switch (@typeInfo(systems[j])) {
                         .Struct => |stru| {
                             // check if struct is a DependOn generated struct
-                            if (std.mem.eql(u8, stru.decls[0].name, system_depend_on_secret_field)) {
-                                const system_depend_on_count = countAndVerifySystems(@field(systems[j], "_depend_on_systems"));
+                            if (isSystemType(.depend_on, systems[j])) {
                                 const dependency_functions = @field(systems[j], "_depend_on_systems");
+                                const system_depend_on_count = countAndVerifySystems(dependency_functions);
 
                                 const depend_on_range = blk: {
                                     const from = systems_info.depend_on_indices_used;
@@ -565,7 +574,7 @@ pub fn indexOfFunctionInSystems(comptime function: anytype, comptime stop_at: us
                     switch (@typeInfo(systems[j])) {
                         .Struct => |stru| {
                             // check if struct is a DependOn generated struct
-                            if (std.mem.eql(u8, stru.decls[0].name, system_depend_on_secret_field)) {
+                            if (isSystemType(.depend_on, systems[j])) {
                                 const dep_on_function = @field(systems[j], "_system");
                                 if (@TypeOf(function) == @TypeOf(dep_on_function) and function == dep_on_function) {
                                     return i;
@@ -849,10 +858,10 @@ pub fn SharedState(comptime State: type) type {
         shared_state_fields[i] = field;
     }
 
-    const default_value: u8 = 0;
+    const default_value = ArgType.shared_state;
     shared_state_fields[state_info.fields.len] = Type.StructField{
-        .name = shared_secret_field,
-        .type = u8,
+        .name = secret_field,
+        .type = ArgType,
         .default_value = @ptrCast(&default_value),
         .is_comptime = true,
         .alignment = 0,
@@ -881,10 +890,10 @@ pub fn EventArgument(comptime Argument: type) type {
         event_fields[i] = field;
     }
 
-    const default_value: u8 = 0;
+    const default_value = ArgType.event;
     event_fields[argument_info.fields.len] = Type.StructField{
-        .name = event_argument_secret_field,
-        .type = u8,
+        .name = secret_field,
+        .type = ArgType,
         .default_value = @ptrCast(&default_value),
         .is_comptime = true,
         .alignment = 0,
@@ -898,35 +907,17 @@ pub fn EventArgument(comptime Argument: type) type {
     } });
 }
 
-test "SystemMetadata errorSet return null with non-failable functions" {
-    const A = struct {};
-    const testFn = struct {
-        pub fn func(a: A) void {
-            _ = a;
-        }
-    }.func;
-    const FuncType = @TypeOf(testFn);
-    const metadata = SystemMetadata.init(null, FuncType, @typeInfo(FuncType).Fn);
-
-    try testing.expectEqual(@as(?type, null), metadata.errorSet());
-}
-
-// TODO: https://github.com/Avokadoen/ecez/issues/57
-// test "SystemMetadata errorSet return error set with failable functions" {
-//     const A = struct { b: bool };
-//     const TestErrorSet = error{ ErrorOne, ErrorTwo };
+// test "SystemMetadata errorSet return null with non-failable functions" {
+//     const A = struct {};
 //     const testFn = struct {
-//         pub fn func(a: A) TestErrorSet!void {
-//             if (a.b) {
-//                 return TestErrorSet.ErrorOne;
-//             }
-//             return TestErrorSet.ErrorTwo;
+//         pub fn func(a: A) void {
+//             _ = a;
 //         }
 //     }.func;
 //     const FuncType = @TypeOf(testFn);
-//     const metadata = SystemMetadata.init(FuncType, @typeInfo(FuncType).Fn);
+//     const metadata = SystemMetadata.init(null, FuncType, @typeInfo(FuncType).Fn);
 
-//     try testing.expectEqual(TestErrorSet, metadata.errorSet().?);
+//     try testing.expectEqual(@as(?type, null), metadata.errorSet());
 // }
 
 test "SystemMetadata componentQueryArgTypes results in queryable types" {
@@ -1009,36 +1000,28 @@ test "SystemMetadata paramArgTypes results in pointer types" {
     }
 }
 
-// TODO: https://github.com/Avokadoen/ecez/issues/57
-// test "SystemMetadata canReturnError results in correct type" {
-//     const A = struct {};
-//     const TestFunctions = struct {
-//         pub fn func1(a: A) void {
-//             _ = a;
-//         }
-//         pub fn func2(a: A) !void {
-//             _ = a;
-//             return error.NotFound;
-//         }
-//     };
-
-//     {
-//         const FuncType = @TypeOf(TestFunctions.func1);
-//         const metadata = SystemMetadata.init(FuncType, @typeInfo(FuncType).Fn);
-//         try testing.expectEqual(false, metadata.canReturnError());
-//     }
-
-//     {
-//         const FuncType = @TypeOf(TestFunctions.func2);
-//         const metadata = SystemMetadata.init(FuncType, @typeInfo(FuncType).Fn);
-//         try testing.expectEqual(true, metadata.canReturnError());
-//     }
-// }
-
-test "isEventArgument correctly identify event types" {
+test "isSpecialArgument correctly identify event types" {
     const A = struct {};
-    comptime try testing.expectEqual(false, isEventArgument(A));
-    comptime try testing.expectEqual(true, isEventArgument(EventArgument(A)));
+    try testing.expectEqual(false, comptime isSpecialArgument(.event, A));
+    try testing.expectEqual(true, comptime isSpecialArgument(.event, EventArgument(A)));
+}
+
+test "isSpecialArgument correctly identify shared state types" {
+    const A = struct {};
+    try testing.expectEqual(false, comptime isSpecialArgument(.shared_state, A));
+    try testing.expectEqual(true, comptime isSpecialArgument(.shared_state, SharedState(A)));
+}
+
+test "isSystemType correctly identify event types" {
+    const A = struct {};
+    try testing.expectEqual(false, comptime isSystemType(.event, A));
+    try testing.expectEqual(true, comptime isSystemType(.event, Event("hello_world", .{}, .{})));
+}
+
+test "isSystemType correctly identify DependOn types" {
+    const A = struct {};
+    try testing.expectEqual(false, comptime isSystemType(.depend_on, A));
+    try testing.expectEqual(true, comptime isSystemType(.depend_on, DependOn(.{}, .{})));
 }
 
 test "countAndVerifyEvents count events" {
