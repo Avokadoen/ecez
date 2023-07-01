@@ -9,11 +9,13 @@ const Entity = @import("entity_type.zig").Entity;
 const secret_field = "secret_field";
 
 const ArgType = enum {
+    presumed_component,
     event,
     shared_state,
 };
 
 const SystemType = enum {
+    common,
     depend_on,
     event,
 };
@@ -24,9 +26,9 @@ const DependOnRange = struct {
 };
 
 pub const SystemMetadata = struct {
-    pub const max_params = 32;
+    const max_params = 32;
 
-    pub const Arg = enum {
+    const Arg = enum {
         component_ptr,
         component_value,
         entity,
@@ -68,21 +70,82 @@ pub const SystemMetadata = struct {
 
         if (fn_info.return_type) |return_type| {
             switch (@typeInfo(return_type)) {
-                .ErrorUnion => |err| {
-                    if (@typeInfo(err.payload) != .Void) {
-                        @compileError("system " ++ function_name ++ " return type has to be void or !void, was " ++ @typeName(return_type));
-                    }
-                    // TODO: remove this error: https://github.com/Avokadoen/ecez/issues/57
-                    @compileError("systems " ++ function_name ++ "return error which is currently not supported, please see https://github.com/Avokadoen/ecez/issues/57");
-                },
                 .Void => {}, // continue
                 else => @compileError("system " ++ function_name ++ " return type has to be void or !void, was " ++ @typeName(return_type)),
             }
         }
 
+        const param_types = param_type_unroll_blk: {
+            var types: [fn_info.params.len]type = undefined;
+            for (&types, fn_info.params, 0..) |*T, param_info, index| {
+                T.* = param_info.type orelse {
+                    @compileError(std.fmt.comptimePrint("system {s} argument {d} is missing type", .{
+                        function_name,
+                        index,
+                    }));
+                };
+            }
+
+            break :param_type_unroll_blk types;
+        };
+
+        var params_buffer: [32]Arg = undefined;
+        var params = params_buffer[0..fn_info.params.len];
+
+        const parse_result = parseParams(function_name, params, &param_types);
+
+        return SystemMetadata{
+            .depend_on_indices_range = depend_on_indices_range,
+            .fn_info = fn_info,
+            .component_params_count = parse_result.component_params_count,
+            .params_buffer = params_buffer,
+            .params = params,
+            .has_entity_argument = parse_result.has_entity_argument,
+        };
+    }
+
+    /// Get the argument types as proper component types
+    /// This function will extrapolate inner types from pointers
+    pub fn componentQueryArgTypes(comptime self: SystemMetadata) [self.component_params_count]type {
+        const start_index = if (self.has_entity_argument) 1 else 0;
+        const end_index = self.component_params_count + start_index;
+
+        comptime var params: [self.component_params_count]type = undefined;
+        inline for (&params, self.fn_info.params[start_index..end_index]) |*param, arg| {
+            switch (@typeInfo(arg.type.?)) {
+                .Pointer => |p| {
+                    param.* = p.child;
+                    continue;
+                },
+                else => {},
+            }
+            param.* = arg.type.?;
+        }
+        return params;
+    }
+
+    /// Get the argument types as requested
+    /// This function will include pointer types
+    pub fn paramArgTypes(comptime self: SystemMetadata) [self.params.len]type {
+        comptime var params: [self.fn_info.params.len]type = undefined;
+        inline for (self.fn_info.params, &params) |arg, *param| {
+            param.* = arg.type.?;
+        }
+        return params;
+    }
+
+    const ParseParamResult = struct {
+        component_params_count: usize,
+        has_entity_argument: bool,
+    };
+    fn parseParams(
+        function_name: [:0]const u8,
+        comptime params: []Arg,
+        comptime param_types: []const type,
+    ) ParseParamResult {
         const ParsingState = enum {
             component_parsing,
-            not_component_parsing,
+            special_arguments,
         };
         const SetParsingState = struct {
             shared_state: Arg,
@@ -91,29 +154,22 @@ pub const SystemMetadata = struct {
             type: type,
         };
 
-        var has_entity_argument: bool = false;
-        var component_params_count: usize = 0;
-        var parsing_state = ParsingState.component_parsing;
+        var result = ParseParamResult{
+            .component_params_count = 0,
+            .has_entity_argument = false,
+        };
 
-        var params_buffer: [32]Arg = undefined;
-        var params = params_buffer[0..fn_info.params.len];
-        for (params, fn_info.params, 0..) |*param, param_info, i| {
-            const T = param_info.type orelse {
-                @compileError(std.fmt.comptimePrint("system {s} argument {d} is missing type", .{
-                    function_name,
-                    i,
-                }));
-            };
-
+        var parsing_state: ParsingState = .component_parsing;
+        for (params, param_types, 0..) |*param, T, i| {
             if (i == 0 and T == Entity) {
                 param.* = Arg.entity;
-                has_entity_argument = true;
+                result.has_entity_argument = true;
                 continue;
             } else if (T == Entity) {
                 @compileError("entity argument must be the first argument");
             }
 
-            // figure out whic Arg enums we should use for the next step
+            // figure out which Arg enums we should use for the next step
             const parse_set_states: SetParsingState = parse_set_state_blk: {
                 switch (@typeInfo(T)) {
                     .Pointer => |pointer| {
@@ -148,21 +204,27 @@ pub const SystemMetadata = struct {
             };
 
             // check if we are currently parsing a special argument and register any
-            const assigned_special_argument = special_arg_parse_blk: {
-                if (getSepcialArgument(parse_set_states.type)) |special_arg| {
-                    switch (special_arg) {
-                        .shared_state => param.* = parse_set_states.shared_state,
-                        .event => param.* = parse_set_states.event_argument,
-                    }
-                    parsing_state = .not_component_parsing;
-                    break :special_arg_parse_blk true;
+            const assigned_special_argument = special_parse_blk: {
+                switch (getSepcialArgument(parse_set_states.type)) {
+                    .shared_state => {
+                        param.* = parse_set_states.shared_state;
+                        parsing_state = .special_arguments;
+                        break :special_parse_blk true;
+                    },
+                    .event => {
+                        param.* = parse_set_states.event_argument;
+                        parsing_state = .special_arguments;
+                        break :special_parse_blk true;
+                    },
+                    .presumed_component => {
+                        break :special_parse_blk false;
+                    },
                 }
-                break :special_arg_parse_blk false;
             };
 
             if (assigned_special_argument == false) {
                 // if we did not parse a special argument, but we are not parsing components then the systems is illegal
-                if (parsing_state == .not_component_parsing) {
+                if (parsing_state == .special_arguments) {
                     const pre_arg_str = switch (params[i - 1]) {
                         .component_ptr, .component_value => unreachable,
                         .event_argument_value => "event",
@@ -177,69 +239,12 @@ pub const SystemMetadata = struct {
                     @compileError(err_msg);
                 }
 
-                component_params_count += 1;
+                result.component_params_count += 1;
                 param.* = parse_set_states.component;
             }
         }
-        return SystemMetadata{
-            .depend_on_indices_range = depend_on_indices_range,
-            .fn_info = fn_info,
-            .component_params_count = component_params_count,
-            .params_buffer = params_buffer,
-            .params = params,
-            .has_entity_argument = has_entity_argument,
-        };
-    }
 
-    /// get the function error set type if return is a error union
-    pub inline fn errorSet(comptime self: SystemMetadata) ?type {
-        if (self.fn_info.return_type) |return_type| {
-            const return_info = @typeInfo(return_type);
-            if (return_info == .ErrorUnion) {
-                return return_info.ErrorUnion.error_set;
-            }
-        }
-        return null;
-    }
-
-    /// Get the argument types as proper component types
-    /// This function will extrapolate inner types from pointers
-    pub fn componentQueryArgTypes(comptime self: SystemMetadata) [self.component_params_count]type {
-        const start_index = if (self.has_entity_argument) 1 else 0;
-        const end_index = self.component_params_count + start_index;
-
-        comptime var params: [self.component_params_count]type = undefined;
-        inline for (&params, self.fn_info.params[start_index..end_index]) |*param, arg| {
-            switch (@typeInfo(arg.type.?)) {
-                .Pointer => |p| {
-                    param.* = p.child;
-                    continue;
-                },
-                else => {},
-            }
-            param.* = arg.type.?;
-        }
-        return params;
-    }
-
-    /// Get the argument types as requested
-    /// This function will include pointer types
-    pub fn paramArgTypes(comptime self: SystemMetadata) [self.params.len]type {
-        comptime var params: [self.fn_info.params.len]type = undefined;
-        inline for (self.fn_info.params, &params) |arg, *param| {
-            param.* = arg.type.?;
-        }
-        return params;
-    }
-
-    pub fn canReturnError(comptime self: SystemMetadata) bool {
-        if (self.fn_info.return_type) |return_type| {
-            switch (@typeInfo(return_type)) {
-                .ErrorUnion => return true,
-                else => {},
-            }
-        }
-        return false;
+        return result;
     }
 };
 
@@ -274,7 +279,7 @@ pub fn Event(comptime event_name: []const u8, comptime systems: anytype, comptim
     };
 }
 
-pub fn getSepcialArgument(comptime T: type) ?ArgType {
+pub fn getSepcialArgument(comptime T: type) ArgType {
     const info = @typeInfo(T);
     if (info == .Struct) {
         for (info.Struct.fields) |field| {
@@ -285,29 +290,30 @@ pub fn getSepcialArgument(comptime T: type) ?ArgType {
             }
         }
     }
-    return null;
+    return .presumed_component;
 }
 
 pub fn isSpecialArgument(comptime arg_type: ArgType, comptime T: type) bool {
-    if (getSepcialArgument(T)) |special_arg| {
-        return special_arg == arg_type;
-    }
-    return false;
+    return getSepcialArgument(T) == arg_type;
 }
 
-pub fn isSystemType(comptime system_type: SystemType, comptime T: type) bool {
+pub fn getSystemType(comptime T: type) SystemType {
     const info = @typeInfo(T);
     if (info == .Struct) {
         for (info.Struct.decls) |decl| {
             if (std.mem.eql(u8, secret_field, decl.name)) {
                 const secret = @field(T, decl.name);
                 if (@TypeOf(secret) == SystemType) {
-                    return secret == system_type;
+                    return secret;
                 }
             }
         }
     }
-    return false;
+    return .common;
+}
+
+pub fn isSystemType(comptime system_type: SystemType, comptime T: type) bool {
+    return getSystemType(T) == system_type;
 }
 
 /// count events and verify arguments
@@ -389,24 +395,28 @@ pub fn countAndVerifySystems(comptime systems: anytype) comptime_int {
             .Type => {
                 switch (@typeInfo(systems[i])) {
                     .Struct => |stru| {
-                        // check if struct is a DependOn generated struct
-                        if (isSystemType(.depend_on, systems[i])) {
-                            // should be one inner system at this point
-                            systems_count += 1;
-                        } else {
-                            // it's not a DependOn struct, check each member of the struct to find functions
-                            inline for (stru.decls) |decl| {
-                                const DeclType = @TypeOf(@field(systems[i], decl.name));
-                                switch (@typeInfo(DeclType)) {
-                                    .Fn => systems_count += 1,
-                                    else => {
-                                        const err_msg = std.fmt.comptimePrint("CreateWorld expected type of functions, got member {s}", .{
-                                            @typeName(DeclType),
-                                        });
-                                        @compileError(err_msg);
-                                    },
+                        switch (getSystemType(systems[i])) {
+                            .depend_on => {
+                                // should be one inner system at this point
+                                systems_count += 1;
+                            },
+                            .common => {
+                                // it's not a DependOn, or Zip struct, check each member of the struct to find functions
+                                inline for (stru.decls) |decl| {
+                                    const DeclType = @TypeOf(@field(systems[i], decl.name));
+                                    switch (@typeInfo(DeclType)) {
+                                        .Fn => systems_count += 1,
+                                        else => {
+                                            const err_msg = std.fmt.comptimePrint("CreateWorld expected type of functions, got member {s}", .{
+                                                @typeName(DeclType),
+                                            });
+                                            @compileError(err_msg);
+                                        },
+                                    }
                                 }
-                            }
+                            },
+                            .event => @compileError("nested events are not allowed"), // because it does not make sense :)
+
                         }
                     },
                     else => {
@@ -474,68 +484,71 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                 .Type => {
                     switch (@typeInfo(systems[j])) {
                         .Struct => |stru| {
-                            // check if struct is a DependOn generated struct
-                            if (isSystemType(.depend_on, systems[j])) {
-                                const dependency_functions = @field(systems[j], "_depend_on_systems");
-                                const system_depend_on_count = countAndVerifySystems(dependency_functions);
+                            switch (getSystemType(systems[j])) {
+                                .depend_on => {
+                                    const dependency_functions = @field(systems[j], "_depend_on_systems");
+                                    const system_depend_on_count = countAndVerifySystems(dependency_functions);
 
-                                const depend_on_range = blk: {
-                                    const from = systems_info.depend_on_indices_used;
+                                    const depend_on_range = blk: {
+                                        const from = systems_info.depend_on_indices_used;
 
-                                    inline for (0..system_depend_on_count) |depend_on_index| {
-                                        const dependency_func = dependency_functions[depend_on_index];
+                                        inline for (0..system_depend_on_count) |depend_on_index| {
+                                            const dependency_func = dependency_functions[depend_on_index];
 
-                                        const previous_system_info_index: usize = indexOfFunctionInSystems(dependency_func, j, systems) orelse {
-                                            const err_msg = std.fmt.comptimePrint(
-                                                "System {d} did not find '{s}' in systems tuple, dependencies must be added before system that depend on them",
-                                                .{ i, @typeName(@TypeOf(dependency_func)) },
-                                            );
-                                            @compileError(err_msg);
-                                        };
-                                        systems_info.depend_on_index_pool[systems_info.depend_on_indices_used] = previous_system_info_index;
-                                        systems_info.depend_on_indices_used += 1;
+                                            const previous_system_info_index: usize = indexOfFunctionInSystems(dependency_func, j, systems) orelse {
+                                                const err_msg = std.fmt.comptimePrint(
+                                                    "System {d} did not find '{s}' in systems tuple, dependencies must be added before system that depend on them",
+                                                    .{ i, @typeName(@TypeOf(dependency_func)) },
+                                                );
+                                                @compileError(err_msg);
+                                            };
+                                            systems_info.depend_on_index_pool[systems_info.depend_on_indices_used] = previous_system_info_index;
+                                            systems_info.depend_on_indices_used += 1;
+                                        }
+                                        const to = systems_info.depend_on_indices_used;
+
+                                        break :blk DependOnRange{ .from = from, .to = to };
+                                    };
+
+                                    const dep_on_function = @field(systems[j], "_system");
+                                    const DepSystemDeclType = @TypeOf(dep_on_function);
+                                    const dep_system_decl_info = @typeInfo(DepSystemDeclType);
+                                    if (dep_system_decl_info == .Struct) {
+                                        @compileError("Struct of system is not yet supported for DependOn");
                                     }
-                                    const to = systems_info.depend_on_indices_used;
-
-                                    break :blk DependOnRange{ .from = from, .to = to };
-                                };
-
-                                const dep_on_function = @field(systems[j], "_system");
-                                const DepSystemDeclType = @TypeOf(dep_on_function);
-                                const dep_system_decl_info = @typeInfo(DepSystemDeclType);
-                                if (dep_system_decl_info == .Struct) {
-                                    @compileError("Struct of system is not yet supported for DependOn");
-                                }
-                                if (dep_system_decl_info != .Fn and dep_system_decl_info != .Struct) {
-                                    // TODO: remove if above so this is not so confusing
-                                    @compileError("DependOn must be a function or struct");
-                                }
-                                systems_info.metadata[i] = SystemMetadata.init(depend_on_range, DepSystemDeclType, dep_system_decl_info.Fn);
-                                systems_info.function_types[i] = DepSystemDeclType;
-                                systems_info.functions[i] = &dep_on_function;
-                                i += 1;
-                            } else {
-                                inline for (stru.decls) |decl| {
-                                    const function = @field(systems[j], decl.name);
-                                    const DeclType = @TypeOf(function);
-                                    const decl_info = @typeInfo(DeclType);
-                                    switch (decl_info) {
-                                        .Fn => |func| {
-                                            // const err_msg = std.fmt.comptimePrint("{d}", .{func.params.len});
-                                            // @compileError(err_msg);
-                                            systems_info.metadata[i] = SystemMetadata.init(null, DeclType, func);
-                                            systems_info.function_types[i] = DeclType;
-                                            systems_info.functions[i] = &function;
-                                            i += 1;
-                                        },
-                                        else => {
-                                            const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct and/or type with functions, got {s}", .{
-                                                @typeName(DeclType),
-                                            });
-                                            @compileError(err_msg);
-                                        },
+                                    if (dep_system_decl_info != .Fn and dep_system_decl_info != .Struct) {
+                                        // TODO: remove if above so this is not so confusing
+                                        @compileError("DependOn must be a function or struct");
                                     }
-                                }
+                                    systems_info.metadata[i] = SystemMetadata.init(depend_on_range, DepSystemDeclType, dep_system_decl_info.Fn);
+                                    systems_info.function_types[i] = DepSystemDeclType;
+                                    systems_info.functions[i] = &dep_on_function;
+                                    i += 1;
+                                },
+                                .common => {
+                                    inline for (stru.decls) |decl| {
+                                        const function = @field(systems[j], decl.name);
+                                        const DeclType = @TypeOf(function);
+                                        const decl_info = @typeInfo(DeclType);
+                                        switch (decl_info) {
+                                            .Fn => |func| {
+                                                // const err_msg = std.fmt.comptimePrint("{d}", .{func.params.len});
+                                                // @compileError(err_msg);
+                                                systems_info.metadata[i] = SystemMetadata.init(null, DeclType, func);
+                                                systems_info.function_types[i] = DeclType;
+                                                systems_info.functions[i] = &function;
+                                                i += 1;
+                                            },
+                                            else => {
+                                                const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct and/or type with functions, got {s}", .{
+                                                    @typeName(DeclType),
+                                                });
+                                                @compileError(err_msg);
+                                            },
+                                        }
+                                    }
+                                },
+                                .event => @compileError("nested events are not allowed"),
                             }
                         },
                         else => {

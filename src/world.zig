@@ -687,14 +687,8 @@ fn CreateWorld(
                             // if this is a debug build we do not want inline (to get better error messages), otherwise inline systems for performance
                             const system_call_modidifer: std.builtin.CallModifier = if (@import("builtin").mode == .Debug) .never_inline else .always_inline;
 
-                            if (comptime metadata.canReturnError()) {
-                                // TODO: remove this error: https://github.com/Avokadoen/ecez/issues/57
-                                //failableCallWrapper(system_ptr.*, arguments);
-                                @compileError("system that can fail are currently unsupported");
-                            } else {
-                                const system_ptr: FuncType = @ptrCast(func);
-                                @call(system_call_modidifer, system_ptr.*, arguments);
-                            }
+                            const system_ptr: FuncType = @ptrCast(func);
+                            @call(system_call_modidifer, system_ptr.*, arguments);
                         }
                     }
                 }
