@@ -114,9 +114,9 @@ pub fn CreateScheduler(
         /// const Scheduler = ecez.CreateScheduler(World, .{ecez.Event("onMouse", .{onMouseSystem}, .{MouseArg})})
         /// // ... world creation etc ...
         /// // trigger mouse handle, exclude any entity with the RatComponent from this event >:)
-        /// scheduler.triggerEvent(.onMouse, @as(MouseArg, mouse), .{RatComponent});
+        /// scheduler.dispatchEvent(.onMouse, @as(MouseArg, mouse), .{RatComponent});
         /// ```
-        pub fn triggerEvent(self: *Scheduler, comptime event: EventsEnum, event_extra_argument: anytype, comptime exclude_types: anytype) void {
+        pub fn dispatchEvent(self: *Scheduler, comptime event: EventsEnum, event_extra_argument: anytype, comptime exclude_types: anytype) void {
             const tracy_zone_name = comptime std.fmt.comptimePrint("World trigger {s}", .{@tagName(event)});
             const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.scheduler);
             defer zone.End();
@@ -221,7 +221,7 @@ pub fn CreateScheduler(
                     .extra_argument = event_extra_argument,
                 };
 
-                // TODO: should triggerEvent be synchronous? (move wait until the end of the dispatch function)
+                // TODO: should dispatchEvent be synchronous? (move wait until the end of the dispatch function)
                 // wait for previous dispatch to finish
                 self.execution_job_queue.wait(event_jobs_in_flight[system_index]);
 
@@ -250,8 +250,8 @@ pub fn CreateScheduler(
             }
         }
 
-        /// Wait for all jobs from a triggerEvent to finish by blocking the calling thread
-        /// should only be called from the triggerEvent thread
+        /// Wait for all jobs from a dispatchEvent to finish by blocking the calling thread
+        /// should only be called from the dispatchEvent thread
         pub fn waitEvent(self: *Scheduler, comptime event: EventsEnum) void {
             const tracy_zone_name = comptime std.fmt.comptimePrint("World wait event {s}", .{@tagName(event)});
             const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.scheduler);
@@ -1002,7 +1002,7 @@ test "event can mutate components" {
     };
     const entity = try world.createEntity(initial_state);
 
-    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.dispatchEvent(.onFoo, .{}, .{});
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -1032,7 +1032,7 @@ test "event parameter order is independent" {
     };
     const entity = try world.createEntity(initial_state);
 
-    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.dispatchEvent(.onFoo, .{}, .{});
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -1071,7 +1071,7 @@ test "event exclude types exclude entities" {
         .c = Testing.Component.C{},
     });
 
-    scheduler.triggerEvent(.onFoo, .{}, .{ Testing.Component.B, Testing.Component.C });
+    scheduler.dispatchEvent(.onFoo, .{}, .{ Testing.Component.B, Testing.Component.C });
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -1091,7 +1091,7 @@ test "event exclude types exclude entities" {
         try world.getComponent(abc_entity, Testing.Component.A),
     );
 
-    scheduler.triggerEvent(.onFoo, .{}, .{Testing.Component.B});
+    scheduler.dispatchEvent(.onFoo, .{}, .{Testing.Component.B});
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -1147,7 +1147,7 @@ test "events can be registered through struct or individual function(s)" {
     };
     const entity = try world.createEntity(initial_state);
 
-    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.dispatchEvent(.onFoo, .{}, .{});
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -1201,7 +1201,7 @@ test "events call systems" {
         break :blk try world.createEntity(initial_state);
     };
 
-    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.dispatchEvent(.onFoo, .{}, .{});
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -1217,7 +1217,7 @@ test "events call systems" {
         try world.getComponent(entity2, Testing.Component.A),
     );
 
-    scheduler.triggerEvent(.onBar, .{}, .{});
+    scheduler.dispatchEvent(.onBar, .{}, .{});
     scheduler.waitEvent(.onBar);
 
     try testing.expectEqual(
@@ -1256,7 +1256,7 @@ test "events can access shared state" {
     };
     const entity = try world.createEntity(initial_state);
 
-    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.dispatchEvent(.onFoo, .{}, .{});
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(shared_a, try world.getComponent(entity, A));
@@ -1284,7 +1284,7 @@ test "events can mutate shared state" {
     var scheduler = CreateScheduler(World, .{Event("onFoo", .{SystemType}, .{})}).init(&world);
     defer scheduler.deinit();
 
-    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.dispatchEvent(.onFoo, .{}, .{});
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(@as(u8, 2), world.shared_state[0].value);
@@ -1353,7 +1353,7 @@ test "event can have many shared state" {
     }, .{})}).init(&world);
     defer scheduler.deinit();
 
-    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.dispatchEvent(.onFoo, .{}, .{});
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(A{ .value = 6 }, try world.getComponent(entity_a, A));
@@ -1382,7 +1382,7 @@ test "events can access current entity" {
         entity.* = try world.createEntity(initial_state);
     }
 
-    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.dispatchEvent(.onFoo, .{}, .{});
     scheduler.waitEvent(.onFoo);
 
     for (entities) |entity| {
@@ -1415,7 +1415,7 @@ test "events entity access remain correct after single removeComponent" {
         entity.* = try world.createEntity(initial_state);
     }
 
-    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.dispatchEvent(.onFoo, .{}, .{});
     scheduler.waitEvent(.onFoo);
 
     for (entities[0..50]) |entity| {
@@ -1455,7 +1455,7 @@ test "Events can accepts event related data" {
     };
     const entity = try world.createEntity(initial_state);
 
-    scheduler.triggerEvent(.onFoo, MouseInput{ .x = 40, .y = 2 }, .{});
+    scheduler.dispatchEvent(.onFoo, MouseInput{ .x = 40, .y = 2 }, .{});
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -1487,8 +1487,8 @@ test "Event can mutate event extra argument" {
     // make sure test is not modified in an illegal manner
     try testing.expect(initial_state.a.value != event_a.value);
 
-    world.triggerEvent(.onFoo, &event_a, .{});
-    world.waitEvent(.onFoo);
+    scheduler.dispatchEvent(.onFoo, &event_a, .{});
+    scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(initial_state.a, event_a);
 }
@@ -1522,7 +1522,7 @@ test "event caching works" {
         break :blk try world.createEntity(initial_state);
     };
 
-    scheduler.triggerEvent(.onEvent1, .{}, .{});
+    scheduler.dispatchEvent(.onEvent1, .{}, .{});
     scheduler.waitEvent(.onEvent1);
 
     try testing.expectEqual(Testing.Component.A{ .value = 1 }, try world.getComponent(
@@ -1533,7 +1533,7 @@ test "event caching works" {
     // move entity to archetype A, B
     try world.setComponent(entity1, Testing.Component.B{ .value = 0 });
 
-    scheduler.triggerEvent(.onEvent1, .{}, .{});
+    scheduler.dispatchEvent(.onEvent1, .{}, .{});
     scheduler.waitEvent(.onEvent1);
 
     try testing.expectEqual(Testing.Component.A{ .value = 2 }, try world.getComponent(
@@ -1541,7 +1541,7 @@ test "event caching works" {
         Testing.Component.A,
     ));
 
-    scheduler.triggerEvent(.onEvent2, .{}, .{});
+    scheduler.dispatchEvent(.onEvent2, .{}, .{});
     scheduler.waitEvent(.onEvent2);
 
     try testing.expectEqual(Testing.Component.B{ .value = 1 }, try world.getComponent(
@@ -1558,7 +1558,7 @@ test "event caching works" {
         break :blk try world.createEntity(initial_state);
     };
 
-    scheduler.triggerEvent(.onEvent1, .{}, .{});
+    scheduler.dispatchEvent(.onEvent1, .{}, .{});
     scheduler.waitEvent(.onEvent1);
 
     try testing.expectEqual(
@@ -1566,7 +1566,7 @@ test "event caching works" {
         try world.getComponent(entity2, Testing.Component.A),
     );
 
-    scheduler.triggerEvent(.onEvent2, .{}, .{});
+    scheduler.dispatchEvent(.onEvent2, .{}, .{});
     scheduler.waitEvent(.onEvent2);
 
     try testing.expectEqual(
@@ -1589,7 +1589,7 @@ test "Event with no archetypes does not crash" {
     defer scheduler.deinit();
 
     for (0..100) |_| {
-        scheduler.triggerEvent(.onFoo, .{}, .{});
+        scheduler.dispatchEvent(.onFoo, .{}, .{});
         scheduler.waitEvent(.onFoo);
     }
 }
@@ -1640,10 +1640,10 @@ test "DependOn makes a events race free" {
         entity.* = try world.createEntity(inital_state);
     }
 
-    scheduler.triggerEvent(.onEvent, .{}, .{});
+    scheduler.dispatchEvent(.onEvent, .{}, .{});
     scheduler.waitEvent(.onEvent);
 
-    scheduler.triggerEvent(.onEvent, .{}, .{});
+    scheduler.dispatchEvent(.onEvent, .{}, .{});
     scheduler.waitEvent(.onEvent);
 
     for (entities) |entity| {
@@ -1694,10 +1694,10 @@ test "Event DependOn events can have multiple dependencies" {
         entity.* = try world.createEntity(inital_state);
     }
 
-    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.dispatchEvent(.onFoo, .{}, .{});
     scheduler.waitEvent(.onFoo);
 
-    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.dispatchEvent(.onFoo, .{}, .{});
     scheduler.waitEvent(.onFoo);
 
     for (entities) |entity| {
@@ -2096,13 +2096,13 @@ test "reproducer: Dispatcher does not include new components to systems previous
     _ = try world.createEntity(.{a});
     _ = try world.createEntity(.{a});
 
-    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.dispatchEvent(.onFoo, .{}, .{});
     scheduler.waitEvent(.onFoo);
 
     _ = try world.createEntity(.{a});
     _ = try world.createEntity(.{a});
 
-    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.dispatchEvent(.onFoo, .{}, .{});
     scheduler.waitEvent(.onFoo);
 
     // at this point we expect tracker to have a count of:
