@@ -161,10 +161,19 @@ Example of Query
 
     const System = struct {
         // Very bad brute force collision detection with wasted checks (it will check previously checked entities)
-        pub fn system(entity: Entity, position: Position, collider: BoxCollider, other_obj: *QueryActiveColliders) void {
+        pub fn system(
+            entity: Entity, 
+            position: Position, 
+            collider: BoxCollider, 
+            other_obj: *QueryActiveColliders,
+        ) ecez.ReturnCommand {
             while (other_colliders.next()) |other_collider| {
-                // ...
+                const is_colliding = // ....;
+                if (is_colliding) {
+                    return .@"break";
+                }              
             }
+            return .@"continue";
         }
     };
 ```
@@ -173,7 +182,7 @@ You can have multiple queries in a single system, and have systems with only que
 
 Both SharedState and EventArgument can be mutable by using a pointer
 
-#### System return values
+### System return values
 
 Systems have two valid return types: ``void`` and ``ecez.ReturnCommand``.
 
