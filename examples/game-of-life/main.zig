@@ -3,7 +3,12 @@ const ecez = @import("ecez");
 
 const ztracy = @import("ztracy");
 
-const Color = ecez.misc.Color;
+pub const Color = struct {
+    pub const red = 0x80_09_09;
+    pub const green = 0x11_80_09;
+    pub const turquoise = 0x09_5c_80;
+    pub const purple = 0x64_09_80;
+};
 
 const spawn_threshold = 0.4;
 const characters_per_cell = 3;
@@ -30,27 +35,26 @@ pub fn main() anyerror!void {
         .output_buffer = undefined,
     };
 
-    var world = try ecez.WorldBuilder().WithComponents(.{
-        GridPos,
-        Health,
-        LinePos,
-        FlushTag,
-    }).WithEvents(.{ecez.Event("loop", .{
+    const Storage = ecez.CreateStorage(.{ GridPos, Health, LinePos, FlushTag }, .{RenderTarget});
+    const Scheduler = ecez.CreateScheduler(Storage, .{ecez.Event("loop", .{
         renderCell,
         renderLine,
         ecez.DependOn(flushBuffer, .{ renderCell, renderLine }),
         ecez.DependOn(tickCell, .{flushBuffer}),
-    }, .{})}).WithSharedState(.{
-        RenderTarget,
-    }).init(allocator, .{render_target});
-    defer world.deinit();
+    }, .{})});
+
+    var storage = try Storage.init(allocator, .{render_target});
+    defer storage.deinit();
+
+    var scheduler = Scheduler.init(&storage);
+    defer scheduler.deinit();
 
     const init_seed: u64 = @intCast(std.time.timestamp());
     var rng = std.rand.DefaultPrng.init(init_seed);
 
     // create all cells
     {
-        const cell_create_zone = ztracy.ZoneNC(@src(), "Create Cells", Color.Light.purple);
+        const cell_create_zone = ztracy.ZoneNC(@src(), "Create Cells", Color.purple);
         defer cell_create_zone.End();
 
         // Workaround issue https://github.com/ziglang/zig/issues/3915 by declaring a type for entity,
@@ -59,7 +63,7 @@ pub fn main() anyerror!void {
 
         var i: usize = 0;
         while (i < cell_count) : (i += 1) {
-            _ = try world.createEntity(Cell{
+            _ = try storage.createEntity(Cell{
                 GridPos{
                     .x = @intCast(i % grid_dimensions),
                     .y = @intCast(i / grid_dimensions),
@@ -71,27 +75,27 @@ pub fn main() anyerror!void {
 
     // create new lines
     {
-        const line_create_zone = ztracy.ZoneNC(@src(), "Create New Lines", Color.Light.green);
+        const line_create_zone = ztracy.ZoneNC(@src(), "Create New Lines", Color.green);
         defer line_create_zone.End();
 
         const Line = std.meta.Tuple(&[_]type{LinePos});
         var i: u8 = 1;
         while (i <= new_lines) : (i += 1) {
-            _ = try world.createEntity(Line{LinePos{ .nth = i }});
+            _ = try storage.createEntity(Line{LinePos{ .nth = i }});
         }
     }
 
     // create flush entity
-    _ = try world.createEntity(.{FlushTag{}});
+    _ = try storage.createEntity(.{FlushTag{}});
 
     var refresh_delay = std.Thread.ResetEvent{};
     while (true) {
         ztracy.FrameMarkNamed("gameloop");
 
         // wait for previous update and render
-        world.waitEvent(.loop);
+        scheduler.waitEvent(.loop);
         // schedule a new update cycle
-        world.triggerEvent(.loop, .{}, .{});
+        scheduler.dispatchEvent(.loop, .{}, .{});
 
         refresh_delay.timedWait(std.time.ns_per_s) catch {};
     }
@@ -117,7 +121,7 @@ const LinePos = struct {
 const FlushTag = struct {};
 
 fn renderCell(pos: GridPos, health: Health, render_target: *ecez.SharedState(RenderTarget)) void {
-    const zone = ztracy.ZoneNC(@src(), "Render Cell", Color.Light.red);
+    const zone = ztracy.ZoneNC(@src(), "Render Cell", Color.red);
     defer zone.End();
 
     const cell_x: usize = @intCast(pos.x);
@@ -140,7 +144,7 @@ fn renderCell(pos: GridPos, health: Health, render_target: *ecez.SharedState(Ren
 }
 
 fn renderLine(pos: LinePos, render_target: *ecez.SharedState(RenderTarget)) void {
-    const zone = ztracy.ZoneNC(@src(), "Render newline", Color.Light.turquoise);
+    const zone = ztracy.ZoneNC(@src(), "Render newline", Color.turquoise);
     defer zone.End();
     const nth: usize = @intCast(pos.nth);
 
@@ -148,7 +152,7 @@ fn renderLine(pos: LinePos, render_target: *ecez.SharedState(RenderTarget)) void
 }
 
 fn flushBuffer(flush: FlushTag, render_target: ecez.SharedState(RenderTarget)) void {
-    const zone = ztracy.ZoneNC(@src(), "Flush buffer", Color.Light.turquoise);
+    const zone = ztracy.ZoneNC(@src(), "Flush buffer", Color.turquoise);
     defer zone.End();
 
     _ = flush;
@@ -157,7 +161,7 @@ fn flushBuffer(flush: FlushTag, render_target: ecez.SharedState(RenderTarget)) v
 }
 
 fn tickCell(pos: GridPos, health: *Health, render_target: ecez.SharedState(RenderTarget)) void {
-    const zone = ztracy.ZoneNC(@src(), "Update Cell", Color.Light.red);
+    const zone = ztracy.ZoneNC(@src(), "Update Cell", Color.red);
     defer zone.End();
 
     const cell_x: usize = @intCast(pos.x);
