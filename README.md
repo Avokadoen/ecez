@@ -257,7 +257,7 @@ zjobs is as the name suggest a job based multithreading API.
 
 ### <a name="queries"></a> Queries
 
-You can query the api instance for all components of certain type and filter out instances of said components that also have unwanted sibling components.
+You can query the storage instance for all components of certain type and filter out instances of matching components that also have unwanted components beloning to the same entity.
 
 #### Example
 
