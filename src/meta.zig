@@ -8,6 +8,14 @@ const Entity = @import("entity_type.zig").Entity;
 
 const secret_field = "secret_field";
 
+/// Special optional return type for systems that allow systems exit early if needed
+pub const ReturnCommand = enum {
+    /// indicate that the system should continue to execute as normal
+    @"continue",
+    /// indicate that the system should exit early
+    @"break",
+};
+
 pub const ArgType = enum {
     presumed_component,
     query_iter,
@@ -66,6 +74,14 @@ pub const SystemMetadata = union(SystemType) {
             .event => @compileError("ecez library bug, please file a issue if you hit this error"),
         }
     }
+
+    pub fn returnSystemCommand(comptime self: SystemMetadata) bool {
+        switch (self) {
+            .common => |common| return common.returns_system_command,
+            .depend_on => |depend_on| return depend_on.common.returns_system_command,
+            .event => @compileError("ecez library bug, please file a issue if you hit this error"),
+        }
+    }
 };
 
 pub const CommonSystem = struct {
@@ -86,6 +102,7 @@ pub const CommonSystem = struct {
     param_category_buffer: [max_params]ParamCategory,
     param_categories: []const ParamCategory,
     has_entity_argument: bool,
+    returns_system_command: bool,
 
     /// initalize metadata for a system using a supplied function type info
     pub fn init(
@@ -108,12 +125,17 @@ pub const CommonSystem = struct {
             @compileError("system " ++ function_name ++ " missing component arguments");
         }
 
-        if (fn_info.return_type) |return_type| {
-            switch (@typeInfo(return_type)) {
-                .Void => {}, // continue
-                else => @compileError("system " ++ function_name ++ " return type has to be void or !void, was " ++ @typeName(return_type)),
+        const returns_system_command = return_validation_blk: {
+            if (fn_info.return_type) |return_type| {
+                if (return_type == ReturnCommand) {
+                    break :return_validation_blk true;
+                }
+                if (return_type == void) {
+                    break :return_validation_blk false;
+                }
+                @compileError("system " ++ function_name ++ " return type has to be void or " ++ @typeName(ReturnCommand) ++ ", was " ++ @typeName(return_type));
             }
-        }
+        };
 
         const param_types = param_type_unroll_blk: {
             var types: [fn_info.params.len]type = undefined;
@@ -140,6 +162,7 @@ pub const CommonSystem = struct {
             .param_category_buffer = param_category_buffer,
             .param_categories = param_categories,
             .has_entity_argument = parse_result.has_entity_argument,
+            .returns_system_command = returns_system_command,
         };
     }
 

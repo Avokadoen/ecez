@@ -10,6 +10,8 @@ pub const CreateStorage = @import("storage.zig").CreateStorage;
 
 /// Use this function to create a system scheduler
 pub const CreateScheduler = @import("scheduler.zig").CreateScheduler;
+/// A function can return this type in order to exit system execution early
+pub const ReturnCommand = meta.ReturnCommand;
 
 /// Mark a system as depending on another system in the same event
 pub const DependOn = meta.DependOn;

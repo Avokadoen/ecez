@@ -279,7 +279,7 @@ pub fn CreateScheduler(
                     };
 
                     var tree_cursor = Storage.Container.BinaryTree.IterCursor.fromRoot();
-                    while (self_job.storage.container.tree.iterate(
+                    tree_iter_loop: while (self_job.storage.container.tree.iterate(
                         include_bitmask,
                         exclude_bitmask,
                         &tree_cursor,
@@ -336,8 +336,17 @@ pub fn CreateScheduler(
                             // if this is a debug build we do not want inline (to get better error messages), otherwise inline systems for performance
                             const system_call_modidifer: std.builtin.CallModifier = if (@import("builtin").mode == .Debug) .never_inline else .always_inline;
 
-                            const system_ptr: FuncType = @ptrCast(func);
-                            @call(system_call_modidifer, system_ptr.*, arguments);
+                            if (comptime metadata.returnSystemCommand()) {
+                                const system_ptr: FuncType = @ptrCast(func);
+                                const return_command: meta.ReturnCommand = @call(system_call_modidifer, system_ptr.*, arguments);
+
+                                if (return_command == .@"break") {
+                                    break :tree_iter_loop;
+                                }
+                            } else {
+                                const system_ptr: FuncType = @ptrCast(func);
+                                @call(system_call_modidifer, system_ptr.*, arguments);
+                            }
                         }
                     }
                 }
@@ -918,7 +927,54 @@ test "event can request single query with component" {
     );
 }
 
-test "event can request two query without components" {
+test "event exit system loop" {
+    const SystemStruct = struct {
+        pub fn eventSystem(a: *Testing.Component.A) meta.ReturnCommand {
+            if (a.value == 1) {
+                a.value = 42;
+                return meta.ReturnCommand.@"break";
+            } else {
+                a.value = 42;
+                return meta.ReturnCommand.@"continue";
+            }
+        }
+    };
+
+    var storage = try StorageStub.init(testing.allocator, .{});
+    defer storage.deinit();
+
+    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct.eventSystem}, .{})}).init(&storage);
+    defer scheduler.deinit();
+
+    const entity0 = try storage.createEntity(AEntityType{
+        .a = Testing.Component.A{ .value = 0 },
+    });
+    const entity1 = try storage.createEntity(AEntityType{
+        .a = Testing.Component.A{ .value = 1 },
+    });
+    const entity2 = try storage.createEntity(AEntityType{
+        .a = Testing.Component.A{ .value = 2 },
+    });
+
+    scheduler.dispatchEvent(.onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
+
+    try testing.expectEqual(
+        Testing.Component.A{ .value = 42 },
+        try storage.getComponent(entity0, Testing.Component.A),
+    );
+
+    try testing.expectEqual(
+        Testing.Component.A{ .value = 42 },
+        try storage.getComponent(entity1, Testing.Component.A),
+    );
+    try testing.expectEqual(
+        Testing.Component.A{ .value = 2 },
+        try storage.getComponent(entity2, Testing.Component.A),
+    );
+}
+
+test "event can request two queries without components" {
     const include = @import("query.zig").include;
 
     const QueryAMut = StorageStub.Query(.exclude_entity, .{

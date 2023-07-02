@@ -174,6 +174,23 @@ You can have multiple queries in a single system, and have systems with only que
 
 Both SharedState and EventArgument can be mutable by using a pointer
 
+#### System return values
+
+Systems have two valid return types: ``void`` and ``ecez.ReturnCommand``.
+
+``ReturnCommand`` is an enum defined as followed:
+```zig
+
+/// Special optional return type for systems that allow systems exit early if needed
+pub const ReturnCommand = enum {
+    /// indicate that the system should continue to execute as normal
+    @"continue",
+    /// indicate that the system should exit early
+    @"break",
+};
+
+```
+
 
 #### System restrictions
 
