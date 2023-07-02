@@ -20,15 +20,54 @@ const SystemType = enum {
     event,
 };
 
-const DependOnRange = struct {
-    to: u32,
-    from: u32,
+const max_params = 32;
+pub const SystemMetadata = union(SystemType) {
+    /// A simple system that will be executed for the event
+    common: CommonSystem,
+    /// A system that will be blocked until the tagged systems finish executing
+    depend_on: DependOnSystem,
+    /// Metadata for any event is a collection of the other types
+    event: void,
+
+    /// Get the argument types as proper component types
+    /// This function will extrapolate inner types from pointers
+    pub fn componentQueryArgTypes(comptime self: SystemMetadata) []const type {
+        switch (self) {
+            .common => |common| return &common.componentQueryArgTypes(),
+            .depend_on => |depend_on| return &depend_on.common.componentQueryArgTypes(),
+            .event => @compileError("ecez library bug, please file a issue if you hit this error"),
+        }
+    }
+
+    /// Get the argument types as requested
+    /// This function will include pointer types
+    pub fn paramArgTypes(comptime self: SystemMetadata) []const type {
+        switch (self) {
+            .common => |common| return &common.paramArgTypes(),
+            .depend_on => |depend_on| return &depend_on.common.paramArgTypes(),
+            .event => @compileError("ecez library bug, please file a issue if you hit this error"),
+        }
+    }
+
+    pub fn paramCategories(comptime self: SystemMetadata) []const CommonSystem.ParamCategory {
+        return switch (self) {
+            .common => |common| common.param_categories,
+            .depend_on => |depend_on| depend_on.common.param_categories,
+            .event => @compileError("ecez library bug, please file a issue if you hit this error"),
+        };
+    }
+
+    pub fn hasEntityArgument(comptime self: SystemMetadata) bool {
+        switch (self) {
+            .common => |common| return common.has_entity_argument,
+            .depend_on => |depend_on| return depend_on.common.has_entity_argument,
+            .event => @compileError("ecez library bug, please file a issue if you hit this error"),
+        }
+    }
 };
 
-pub const SystemMetadata = struct {
-    const max_params = 32;
-
-    const Arg = enum {
+pub const CommonSystem = struct {
+    pub const ParamCategory = enum {
         component_ptr,
         component_value,
         entity,
@@ -38,20 +77,17 @@ pub const SystemMetadata = struct {
         shared_state_value,
     };
 
-    depend_on_indices_range: ?DependOnRange,
-
     fn_info: FnInfo,
     component_params_count: usize,
-    params_buffer: [max_params]Arg,
-    params: []const Arg,
+    param_category_buffer: [max_params]ParamCategory,
+    param_categories: []const ParamCategory,
     has_entity_argument: bool,
 
     /// initalize metadata for a system using a supplied function type info
     pub fn init(
-        comptime depend_on_indices_range: ?DependOnRange,
         comptime function_type: type,
         comptime fn_info: FnInfo,
-    ) SystemMetadata {
+    ) CommonSystem {
         // blocked by issue https://github.com/ziglang/zig/issues/1291
         if (fn_info.params.len > max_params) {
             @compileError(std.fmt.comptimePrint("system arguments currently only support up to {d} arguments", .{max_params}));
@@ -89,24 +125,23 @@ pub const SystemMetadata = struct {
             break :param_type_unroll_blk types;
         };
 
-        var params_buffer: [32]Arg = undefined;
-        var params = params_buffer[0..fn_info.params.len];
+        var param_category_buffer: [32]ParamCategory = undefined;
+        var param_categories = param_category_buffer[0..fn_info.params.len];
 
-        const parse_result = parseParams(function_name, params, &param_types);
+        const parse_result = parseParams(function_name, param_categories, &param_types);
 
-        return SystemMetadata{
-            .depend_on_indices_range = depend_on_indices_range,
+        return CommonSystem{
             .fn_info = fn_info,
             .component_params_count = parse_result.component_params_count,
-            .params_buffer = params_buffer,
-            .params = params,
+            .param_category_buffer = param_category_buffer,
+            .param_categories = param_categories,
             .has_entity_argument = parse_result.has_entity_argument,
         };
     }
 
     /// Get the argument types as proper component types
     /// This function will extrapolate inner types from pointers
-    pub fn componentQueryArgTypes(comptime self: SystemMetadata) [self.component_params_count]type {
+    pub fn componentQueryArgTypes(comptime self: CommonSystem) [self.component_params_count]type {
         const start_index = if (self.has_entity_argument) 1 else 0;
         const end_index = self.component_params_count + start_index;
 
@@ -126,7 +161,7 @@ pub const SystemMetadata = struct {
 
     /// Get the argument types as requested
     /// This function will include pointer types
-    pub fn paramArgTypes(comptime self: SystemMetadata) [self.params.len]type {
+    pub fn paramArgTypes(comptime self: CommonSystem) [self.param_categories.len]type {
         comptime var params: [self.fn_info.params.len]type = undefined;
         inline for (self.fn_info.params, &params) |arg, *param| {
             param.* = arg.type.?;
@@ -140,7 +175,7 @@ pub const SystemMetadata = struct {
     };
     fn parseParams(
         function_name: [:0]const u8,
-        comptime params: []Arg,
+        comptime param_categories: []ParamCategory,
         comptime param_types: []const type,
     ) ParseParamResult {
         const ParsingState = enum {
@@ -148,9 +183,9 @@ pub const SystemMetadata = struct {
             special_arguments,
         };
         const SetParsingState = struct {
-            shared_state: Arg,
-            event_argument: Arg,
-            component: Arg,
+            shared_state: ParamCategory,
+            event_argument: ParamCategory,
+            component: ParamCategory,
             type: type,
         };
 
@@ -160,9 +195,9 @@ pub const SystemMetadata = struct {
         };
 
         var parsing_state: ParsingState = .component_parsing;
-        for (params, param_types, 0..) |*param, T, i| {
+        for (param_categories, param_types, 0..) |*param, T, i| {
             if (i == 0 and T == Entity) {
-                param.* = Arg.entity;
+                param.* = ParamCategory.entity;
                 result.has_entity_argument = true;
                 continue;
             } else if (T == Entity) {
@@ -184,16 +219,16 @@ pub const SystemMetadata = struct {
                         }
 
                         break :parse_set_state_blk SetParsingState{
-                            .shared_state = Arg.shared_state_ptr,
-                            .event_argument = Arg.event_argument_ptr,
-                            .component = Arg.component_ptr,
+                            .shared_state = ParamCategory.shared_state_ptr,
+                            .event_argument = ParamCategory.event_argument_ptr,
+                            .component = ParamCategory.component_ptr,
                             .type = pointer.child,
                         };
                     },
                     .Struct => break :parse_set_state_blk SetParsingState{
-                        .shared_state = Arg.shared_state_value,
-                        .event_argument = Arg.event_argument_value,
-                        .component = Arg.component_value,
+                        .shared_state = ParamCategory.shared_state_value,
+                        .event_argument = ParamCategory.event_argument_value,
+                        .component = ParamCategory.component_value,
                         .type = T,
                     },
                     else => @compileError(std.fmt.comptimePrint("system {s} argument {d} is not a struct", .{
@@ -225,7 +260,7 @@ pub const SystemMetadata = struct {
             if (assigned_special_argument == false) {
                 // if we did not parse a special argument, but we are not parsing components then the systems is illegal
                 if (parsing_state == .special_arguments) {
-                    const pre_arg_str = switch (params[i - 1]) {
+                    const pre_arg_str = switch (param_categories[i - 1]) {
                         .component_ptr, .component_value => unreachable,
                         .event_argument_value => "event",
                         .shared_state_ptr, .shared_state_value => "shared state",
@@ -245,6 +280,33 @@ pub const SystemMetadata = struct {
         }
 
         return result;
+    }
+};
+
+pub const DependOnSystem = struct {
+    pub const Range = struct {
+        to: u32,
+        from: u32,
+    };
+
+    common: CommonSystem,
+    depend_on_indices_range: Range,
+
+    /// initalize metadata for a system using a supplied function type info
+    pub fn init(
+        comptime depend_on_indices_range: Range,
+        comptime function_type: type,
+        comptime fn_info: FnInfo,
+    ) DependOnSystem {
+        return DependOnSystem{
+            .common = CommonSystem.init(function_type, fn_info),
+            .depend_on_indices_range = depend_on_indices_range,
+        };
+    }
+
+    pub fn getIndexRange(comptime self: DependOnSystem, comptime triggered_event: anytype) []const u32 {
+        const range = self.depend_on_indices_range;
+        return triggered_event.systems_info.depend_on_index_pool[range.from..range.to];
     }
 };
 
@@ -476,7 +538,7 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
         inline for (fields_info, 0..) |field_info, j| {
             switch (@typeInfo(field_info.type)) {
                 .Fn => |func| {
-                    systems_info.metadata[i] = SystemMetadata.init(null, field_info.type, func);
+                    systems_info.metadata[i] = SystemMetadata{ .common = CommonSystem.init(field_info.type, func) };
                     systems_info.function_types[i] = field_info.type;
                     systems_info.functions[i] = field_info.default_value.?;
                     i += 1;
@@ -507,7 +569,7 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                         }
                                         const to = systems_info.depend_on_indices_used;
 
-                                        break :blk DependOnRange{ .from = from, .to = to };
+                                        break :blk DependOnSystem.Range{ .from = from, .to = to };
                                     };
 
                                     const dep_on_function = @field(systems[j], "_system");
@@ -520,7 +582,9 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                         // TODO: remove if above so this is not so confusing
                                         @compileError("DependOn must be a function or struct");
                                     }
-                                    systems_info.metadata[i] = SystemMetadata.init(depend_on_range, DepSystemDeclType, dep_system_decl_info.Fn);
+                                    systems_info.metadata[i] = SystemMetadata{
+                                        .depend_on = DependOnSystem.init(depend_on_range, DepSystemDeclType, dep_system_decl_info.Fn),
+                                    };
                                     systems_info.function_types[i] = DepSystemDeclType;
                                     systems_info.functions[i] = &dep_on_function;
                                     i += 1;
@@ -534,7 +598,7 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                             .Fn => |func| {
                                                 // const err_msg = std.fmt.comptimePrint("{d}", .{func.params.len});
                                                 // @compileError(err_msg);
-                                                systems_info.metadata[i] = SystemMetadata.init(null, DeclType, func);
+                                                systems_info.metadata[i] = SystemMetadata{ .common = CommonSystem.init(DeclType, func) };
                                                 systems_info.function_types[i] = DeclType;
                                                 systems_info.functions[i] = &function;
                                                 i += 1;
@@ -920,20 +984,7 @@ pub fn EventArgument(comptime Argument: type) type {
     } });
 }
 
-// test "SystemMetadata errorSet return null with non-failable functions" {
-//     const A = struct {};
-//     const testFn = struct {
-//         pub fn func(a: A) void {
-//             _ = a;
-//         }
-//     }.func;
-//     const FuncType = @TypeOf(testFn);
-//     const metadata = SystemMetadata.init(null, FuncType, @typeInfo(FuncType).Fn);
-
-//     try testing.expectEqual(@as(?type, null), metadata.errorSet());
-// }
-
-test "SystemMetadata componentQueryArgTypes results in queryable types" {
+test "CommonSystem componentQueryArgTypes results in queryable types" {
     const A = struct {};
     const B = struct {};
     const TestSystems = struct {
@@ -954,10 +1005,10 @@ test "SystemMetadata componentQueryArgTypes results in queryable types" {
     const Func1Type = @TypeOf(TestSystems.func1);
     const Func2Type = @TypeOf(TestSystems.func2);
     const Func3Type = @TypeOf(TestSystems.func3);
-    const metadatas = comptime [3]SystemMetadata{
-        SystemMetadata.init(null, Func1Type, @typeInfo(Func1Type).Fn),
-        SystemMetadata.init(null, Func2Type, @typeInfo(Func2Type).Fn),
-        SystemMetadata.init(null, Func3Type, @typeInfo(Func3Type).Fn),
+    const metadatas = comptime [3]CommonSystem{
+        CommonSystem.init(Func1Type, @typeInfo(Func1Type).Fn),
+        CommonSystem.init(Func2Type, @typeInfo(Func2Type).Fn),
+        CommonSystem.init(Func3Type, @typeInfo(Func3Type).Fn),
     };
 
     inline for (metadatas) |metadata| {
@@ -969,7 +1020,7 @@ test "SystemMetadata componentQueryArgTypes results in queryable types" {
     }
 }
 
-test "SystemMetadata paramArgTypes results in pointer types" {
+test "CommonSystem paramArgTypes results in pointer types" {
     const A = struct {};
     const B = struct {};
     const TestSystems = struct {
@@ -990,10 +1041,10 @@ test "SystemMetadata paramArgTypes results in pointer types" {
     const Func1Type = @TypeOf(TestSystems.func1);
     const Func2Type = @TypeOf(TestSystems.func2);
     const Func3Type = @TypeOf(TestSystems.func3);
-    const metadatas = comptime [_]SystemMetadata{
-        SystemMetadata.init(null, Func1Type, @typeInfo(Func1Type).Fn),
-        SystemMetadata.init(null, Func2Type, @typeInfo(Func2Type).Fn),
-        SystemMetadata.init(null, Func3Type, @typeInfo(Func3Type).Fn),
+    const metadatas = comptime [_]CommonSystem{
+        CommonSystem.init(Func1Type, @typeInfo(Func1Type).Fn),
+        CommonSystem.init(Func2Type, @typeInfo(Func2Type).Fn),
+        CommonSystem.init(Func3Type, @typeInfo(Func3Type).Fn),
     };
 
     {
@@ -1088,9 +1139,9 @@ test "createSystemInfo generate accurate system information" {
     try testing.expectEqual(3, info.functions.len);
     try testing.expectEqual(3, info.metadata.len);
 
-    try testing.expectEqual(1, info.metadata[0].params.len);
-    try testing.expectEqual(1, info.metadata[1].params.len);
-    try testing.expectEqual(1, info.metadata[2].params.len);
+    try testing.expectEqual(1, comptime info.metadata[0].paramCategories().len);
+    try testing.expectEqual(1, comptime info.metadata[1].paramCategories().len);
+    try testing.expectEqual(1, comptime info.metadata[2].paramCategories().len);
 
     const hello_ptr: *const info.function_types[1] = @ptrCast(info.functions[1]);
     var a: A = .{ .a = 0 };

@@ -353,7 +353,7 @@ fn CreateWorld(
                     metadata,
                     include_bitmask,
                     exclude_bitmask,
-                    &component_query_types,
+                    component_query_types,
                     &field_map,
                     @TypeOf(event_extra_argument),
                 );
@@ -368,29 +368,28 @@ fn CreateWorld(
                 // wait for previous dispatch to finish
                 self.execution_job_queue.wait(event_jobs_in_flight[system_index]);
 
-                const dependency_job_indices = comptime getEventMetadataIndexRange(triggered_event, metadata);
+                const job_dependency = job_dep_blk: {
+                    switch (metadata) {
+                        .depend_on => |depend_on_metadata| {
+                            const indices = comptime depend_on_metadata.getIndexRange(triggered_event);
+                            var jobs: [indices.len]JobId = undefined;
+                            inline for (indices, 0..) |index, i| {
+                                jobs[i] = event_jobs_in_flight[index];
+                            }
 
-                if (dependency_job_indices) |indices| {
-                    var jobs: [indices.len]JobId = undefined;
-                    for (indices, 0..) |index, i| {
-                        jobs[i] = event_jobs_in_flight[index];
+                            break :job_dep_blk self.execution_job_queue.combine(&jobs) catch JobId.none;
+                        },
+                        .common => break :job_dep_blk JobId.none,
+                        .event => break :job_dep_blk JobId.none,
                     }
+                };
 
-                    const combinded_job = self.execution_job_queue.combine(&jobs) catch JobId.none;
-                    event_jobs_in_flight[system_index] = self.execution_job_queue.schedule(combinded_job, system_job) catch |err| {
-                        switch (err) {
-                            error.Uninitialized => unreachable, // schedule can fail on "Uninitialized" which does not happen since you must init world
-                            error.Stopped => return,
-                        }
-                    };
-                } else {
-                    event_jobs_in_flight[system_index] = self.execution_job_queue.schedule(JobId.none, system_job) catch |err| {
-                        switch (err) {
-                            error.Uninitialized => unreachable, // schedule can fail on "Uninitialized" which does not happen since you must init world
-                            error.Stopped => return,
-                        }
-                    };
-                }
+                event_jobs_in_flight[system_index] = self.execution_job_queue.schedule(job_dependency, system_job) catch |err| {
+                    switch (err) {
+                        error.Uninitialized => unreachable, // schedule can fail on "Uninitialized" which does not happen since you must init world
+                        error.Stopped => return,
+                    }
+                };
             }
         }
 
@@ -631,7 +630,7 @@ fn CreateWorld(
                     defer zone.End();
 
                     const param_types = comptime metadata.paramArgTypes();
-                    var arguments: std.meta.Tuple(&param_types) = undefined;
+                    var arguments: std.meta.Tuple(param_types) = undefined;
 
                     var storage_buffer: [component_query_types.len][]u8 = undefined;
                     var storage = OpaqueArchetype.StorageData{
@@ -649,10 +648,14 @@ fn CreateWorld(
 
                         const entities = self_job.world.container.archetypes.items[archetype_index].entities.keys();
                         for (0..storage.inner_len) |inner_index| {
-                            inline for (param_types, 0..) |Param, j| {
-                                switch (metadata.params[j]) {
+                            inline for (
+                                param_types,
+                                comptime metadata.paramCategories(),
+                                0..,
+                            ) |Param, param_category, j| {
+                                switch (param_category) {
                                     .component_value => {
-                                        const component_index = if (metadata.has_entity_argument) j - 1 else j;
+                                        const component_index = if (comptime metadata.hasEntityArgument()) j - 1 else j;
 
                                         // get size of the parameter type
                                         const param_size = @sizeOf(Param);
@@ -664,7 +667,7 @@ fn CreateWorld(
                                         }
                                     },
                                     .component_ptr => {
-                                        const component_index = if (metadata.has_entity_argument) j - 1 else j;
+                                        const component_index = if (comptime metadata.hasEntityArgument()) j - 1 else j;
                                         const CompQueryType = component_query_types[component_index];
 
                                         // get size of the pointer child type (Param == *CompQueryType)
@@ -693,13 +696,6 @@ fn CreateWorld(
                     }
                 }
             };
-        }
-
-        inline fn getEventMetadataIndexRange(comptime triggered_event: anytype, comptime metadata: SystemMetadata) ?[]const u32 {
-            if (metadata.depend_on_indices_range) |range| {
-                return triggered_event.systems_info.depend_on_index_pool[range.from..range.to];
-            }
-            return null;
         }
     };
 }
