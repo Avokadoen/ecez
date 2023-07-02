@@ -137,6 +137,12 @@ pub fn FromTypes(
             self.inner_cursor += 1;
             return item;
         }
+
+        pub fn reset(self: *Iterator) void {
+            self.storage_buffer.inner_len = 0;
+            self.inner_cursor = 0;
+            self.tree_cursor = BinaryTree.IterCursor.fromRoot();
+        }
     };
 }
 
@@ -339,5 +345,78 @@ test "ptr iterating works and can mutate storage data" {
                 i += 1;
             }
         }
+    }
+}
+
+test "reset moves iterator to start" {
+    var tree = try TestTree.init(testing.allocator, 12);
+    defer tree.deinit();
+
+    tree.appendChain(@as(u32, 0), Testing.Bits.A | Testing.Bits.B) catch unreachable;
+    tree.appendChain(@as(u32, 1), Testing.Bits.All) catch unreachable;
+
+    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
+    var archetypes: [2]TestOpaqueArchetype = .{
+        TestOpaqueArchetype.init(testing.allocator, Testing.Bits.A | Testing.Bits.B) catch unreachable,
+        TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All) catch unreachable,
+    };
+    defer {
+        for (&archetypes) |*archetype| {
+            archetype.deinit();
+        }
+    }
+
+    var data: [3][]const u8 = undefined;
+    for (0..100) |i| {
+        const a = A{ .value = @as(u32, @intCast(i)) };
+        const b = B{ .value = @as(u8, @intCast(i)) };
+        data[0] = std.mem.asBytes(&a);
+        data[1] = std.mem.asBytes(&b);
+        try archetypes[0].registerEntity(
+            Entity{ .id = @as(entity_type.EntityId, @intCast(i)) },
+            data[0..2],
+            sizes,
+        );
+    }
+
+    for (100..200) |i| {
+        const a = A{ .value = @as(u32, @intCast(i)) };
+        const b = B{ .value = @as(u8, @intCast(i)) };
+        data[0] = std.mem.asBytes(&a);
+        data[1] = std.mem.asBytes(&b);
+        data[2] = &[0]u8{};
+        try archetypes[1].registerEntity(
+            Entity{ .id = @as(entity_type.EntityId, @intCast(i)) },
+            data[0..3],
+            sizes,
+        );
+    }
+
+    {
+        const A_Iterator = FromTypes(
+            false,
+            &[_][]const u8{"a"},
+            &[_]type{A},
+            Testing.Bits.A,
+            Testing.Bits.None,
+            TestOpaqueArchetype,
+            TestTree,
+        );
+        var iter = A_Iterator.init(&archetypes, tree);
+
+        var i: u32 = 0;
+        while (iter.next()) |item| {
+            try testing.expectEqual(Testing.Component.A{ .value = i }, item.a);
+            i += 1;
+        }
+        try testing.expectEqual(iter.next(), null);
+
+        iter.reset();
+        i = 0;
+        while (iter.next()) |item| {
+            try testing.expectEqual(Testing.Component.A{ .value = i }, item.a);
+            i += 1;
+        }
+        try testing.expectEqual(iter.next(), null);
     }
 }
