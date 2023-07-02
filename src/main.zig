@@ -1,21 +1,34 @@
-// TODO: submit to repo
-const world = @import("world.zig");
-pub const WorldBuilder = world.WorldBuilder;
-
 const entity_type = @import("entity_type.zig");
+const meta = @import("meta.zig");
+
 pub const Entity = entity_type.Entity;
 pub const EntityId = entity_type.EntityId;
 pub const EntityRef = entity_type.EntityRef;
 
-const meta = @import("meta.zig");
+/// Use this function to create the ecs storage
+pub const CreateStorage = @import("storage.zig").CreateStorage;
+
+/// Use this function to create a system scheduler
+pub const CreateScheduler = @import("scheduler.zig").CreateScheduler;
+
+/// Mark a system as depending on another system in the same event
 pub const DependOn = meta.DependOn;
+
+/// Mark a parameter as a shared state that exist in the storage instance
 pub const SharedState = meta.SharedState;
+
+/// Mark argument as data that is supplied to sytems on event dispatch
 pub const EventArgument = meta.EventArgument;
+
+/// Mark an event by name, systems to execute and any unique event data the systems need
 pub const Event = meta.Event;
 
-pub const query = @import("query.zig");
+const query = @import("query.zig");
+/// Included types for queries must be wrapped in include in order to name resulting typed field
+pub const include = query.include;
+pub const IncludeType = query.IncludeType;
+
 pub const tracy_alloc = @import("tracy_alloc.zig");
-pub const misc = @import("misc.zig");
 
 test {
     _ = @import("archetype_container.zig");
@@ -23,6 +36,7 @@ test {
     _ = @import("iterator.zig");
     _ = @import("opaque_archetype.zig");
     _ = @import("query.zig");
-    _ = @import("world.zig");
+    _ = @import("storage.zig");
+    _ = @import("scheduler.zig");
     _ = @import("meta.zig");
 }
