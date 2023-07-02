@@ -34,73 +34,17 @@ pub const SharedState = meta.SharedState;
 pub const EventArgument = meta.EventArgument;
 pub const DependOn = meta.DependOn;
 
-/// Create a ecs instance by gradually defining application types, systems and events.
-pub fn WorldBuilder() type {
-    return WorldIntermediate(.{}, .{}, .{});
-}
+// TODO: split dispatch and world into 2 filed
+// TODO: rename world -> storage
+// TODO: rename dispatcher -> scheduler
+// TODO: rename SystemDispatcher -> CreateScheduler
 
-// temporary type state for world
-fn WorldIntermediate(comptime prev_components: anytype, comptime prev_shared_state: anytype, comptime prev_events: anytype) type {
-    return struct {
-        const Self = @This();
-
-        /// define world components
-        /// Parameters:
-        ///     - components: structures of components that will used by the worls
-        pub fn WithComponents(comptime components: anytype) type {
-            return WorldIntermediate(components, prev_shared_state, prev_events);
-        }
-
-        /// define world shared state
-        /// Parameters:
-        ///     - shared_state: structures of shared state(s) that will used by systems
-        pub fn WithSharedState(comptime shared_state: anytype) type {
-            return WorldIntermediate(prev_components, shared_state, prev_events);
-        }
-
-        /// define world events that can be triggered programmatically
-        ///     - events: a tuple of events created using the ecez.Event function
-        pub fn WithEvents(comptime events: anytype) type {
-            return WorldIntermediate(prev_components, prev_shared_state, events);
-        }
-
-        pub fn Build() type {
-            return CreateWorld(prev_components, prev_shared_state, prev_events);
-        }
-
-        /// build the world instance which can be initialized
-        pub fn init(allocator: Allocator, shared_state: anytype) error{OutOfMemory}!CreateWorld(prev_components, prev_shared_state, prev_events) {
-            return CreateWorld(prev_components, prev_shared_state, prev_events).init(allocator, shared_state);
-        }
-    };
-}
-
-fn CreateWorld(
-    comptime components: anytype,
-    comptime shared_state_types: anytype,
+/// Allow the user to attach systems to a world. The user can then trigger events on the dispatcher to execute
+/// the systems in a multithreaded environment
+pub fn SystemDispatcher(
+    comptime World: type,
     comptime events: anytype,
 ) type {
-    @setEvalBranchQuota(10_000);
-    const sorted_component_types = blk: {
-        const components_info = @typeInfo(@TypeOf(components));
-        if (components_info != .Struct) {
-            @compileError("components was not a tuple of types");
-        }
-        var types: [components_info.Struct.fields.len]type = undefined;
-        for (components_info.Struct.fields, 0..) |_, i| {
-            types[i] = components[i];
-            if (@typeInfo(types[i]) != .Struct) {
-                @compileError("expected " ++ @typeName(types[i]) ++ " component type to be a struct");
-            }
-        }
-        break :blk query.sortTypes(&types);
-    };
-
-    const ComponentMask = meta.BitMaskFromComponents(&sorted_component_types);
-    const Container = archetype_container.FromComponents(&sorted_component_types, ComponentMask);
-    const OpaqueArchetype = opaque_archetype.FromComponentMask(ComponentMask);
-    const SharedStateStorage = meta.SharedStateStorage(shared_state_types);
-
     const event_count = meta.countAndVerifyEvents(events);
     const EventJobsInFlight = blk: {
         // TODO: move to meta
@@ -127,16 +71,334 @@ fn CreateWorld(
     };
 
     return struct {
-        const World = @This();
+        const Dispatcher = @This();
 
         pub const EventsEnum = meta.GenerateEventsEnum(event_count, events);
+
+        world: *World,
+
+        execution_job_queue: JobQueue,
+        event_jobs_in_flight: EventJobsInFlight,
+
+        /// Initialized the system dispatcher. User must make sure to call deinit
+        pub fn init(world: *World) Dispatcher {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.dispatcher);
+            defer zone.End();
+
+            return Dispatcher{
+                .world = world,
+                .execution_job_queue = JobQueue.init(),
+                .event_jobs_in_flight = EventJobsInFlight{},
+            };
+        }
+
+        pub fn deinit(self: *Dispatcher) void {
+            self.execution_job_queue.deinit();
+        }
+
+        /// Trigger an event asynchronously. The caller must make sure to call waitEvent with matching enum identifier
+        /// Before relying on the result of a trigger.
+        /// Parameters:
+        ///     - event:                The event enum identifier. When registering an event on Wolrd creation a identifier is
+        ///                             submitted.
+        ///     - event_extra_argument: An event specific argument. Keep in mind that if you submit a pointer as argument data
+        ///                             then the lifetime of the argument must ourlive the execution of the event.
+        ///     - exclude_types:        A struct of component types to exclude from the event dispatch. Meaning entities with these
+        ///                             components will be ignored even though they have all components listed in the arguments of the
+        ///                             system
+        ///
+        /// Example:
+        /// ```
+        /// const World = WorldBuilder.WithEvents(.{Event("onMouse", .{onMouseSystem}, .{MouseArg})}
+        /// // ... world creation etc ...
+        /// world.triggerEvent(.onMouse, @as(MouseArg, mouse), .{RatComponent});
+        /// ```
+        pub fn triggerEvent(self: *Dispatcher, comptime event: EventsEnum, event_extra_argument: anytype, comptime exclude_types: anytype) void {
+            const tracy_zone_name = comptime std.fmt.comptimePrint("World trigger {s}", .{@tagName(event)});
+            const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.dispatcher);
+            defer zone.End();
+
+            const exclude_type_info = @typeInfo(@TypeOf(exclude_types));
+            if (exclude_type_info != .Struct) {
+                @compileError("event exclude types must be a tuple of types");
+            }
+
+            const exclude_type_arr = comptime exclude_type_extract_blk: {
+                var type_arr: [exclude_type_info.Struct.fields.len]type = undefined;
+                inline for (&type_arr, exclude_type_info.Struct.fields, 0..) |*exclude_type, field, index| {
+                    if (field.type != type) {
+                        @compileError("event include types field " ++ field.name ++ "must be a component type, was " ++ @typeName(field.type));
+                    }
+
+                    exclude_type.* = exclude_types[index];
+
+                    var type_is_component = false;
+                    for (World.sorted_component_types) |Component| {
+                        if (exclude_type.* == Component) {
+                            type_is_component = true;
+                            break;
+                        }
+                    }
+
+                    if (type_is_component == false) {
+                        @compileError("event include types field " ++ field.name ++ " is not a registered World component");
+                    }
+                }
+                break :exclude_type_extract_blk type_arr;
+            };
+            const exclude_bitmask = comptime include_bit_blk: {
+                var bitmask: World.ComponentMask.Bits = 0;
+                inline for (exclude_type_arr) |Component| {
+                    bitmask |= 1 << World.Container.componentIndex(Component);
+                }
+                break :include_bit_blk bitmask;
+            };
+
+            // initiate job executions for dispatch
+            if (self.execution_job_queue.isStarted() == false) {
+                self.execution_job_queue.start();
+            }
+
+            var event_jobs_in_flight = &self.event_jobs_in_flight[@intFromEnum(event)];
+            const triggered_event = events[@intFromEnum(event)];
+
+            // TODO: verify systems and arguments in type initialization
+            const EventExtraArgument = @TypeOf(event_extra_argument);
+            if (@sizeOf(triggered_event.EventArgument) > 0) {
+                if (comptime meta.isSpecialArgument(.event, EventExtraArgument)) {
+                    @compileError("event arguments should not be wrapped in EventArgument type when triggering an event");
+                }
+                if (EventExtraArgument != triggered_event.EventArgument) {
+                    @compileError("event " ++ @tagName(event) ++ " was declared to accept " ++ @typeName(triggered_event.EventArgument) ++ " got " ++ @typeName(EventExtraArgument));
+                }
+            }
+
+            inline for (triggered_event.systems_info.metadata, 0..) |metadata, system_index| {
+                const component_query_types = comptime metadata.componentQueryArgTypes();
+
+                comptime var field_map: [component_query_types.len]usize = undefined;
+                const sorted_components: [component_query_types.len]type = comptime sort_comps: {
+                    var index: usize = 0;
+                    var sort_components: [component_query_types.len]type = undefined;
+                    for (World.sorted_component_types) |SortedComp| {
+                        for (component_query_types, 0..) |QueryComp, query_index| {
+                            if (SortedComp == QueryComp) {
+                                sort_components[index] = QueryComp;
+                                field_map[query_index] = index;
+                                index += 1;
+                                break;
+                            }
+                        }
+                    }
+                    break :sort_comps sort_components;
+                };
+
+                const include_bitmask = include_bits_blk: {
+                    comptime var bitmask = 0;
+                    inline for (sorted_components) |SortedComp| {
+                        bitmask |= 1 << World.Container.componentIndex(SortedComp);
+                    }
+                    break :include_bits_blk bitmask;
+                };
+
+                const DispatchJob = EventDispatchJob(
+                    triggered_event.systems_info.functions[system_index],
+                    *const triggered_event.systems_info.function_types[system_index],
+                    metadata,
+                    include_bitmask,
+                    exclude_bitmask,
+                    component_query_types,
+                    &field_map,
+                    @TypeOf(event_extra_argument),
+                );
+
+                // initialized the system job
+                var system_job = DispatchJob{
+                    .world = self.world,
+                    .extra_argument = event_extra_argument,
+                };
+
+                // TODO: should triggerEvent be synchronous? (move wait until the end of the dispatch function)
+                // wait for previous dispatch to finish
+                self.execution_job_queue.wait(event_jobs_in_flight[system_index]);
+
+                const job_dependency = job_dep_blk: {
+                    switch (metadata) {
+                        .depend_on => |depend_on_metadata| {
+                            const indices = comptime depend_on_metadata.getIndexRange(triggered_event);
+                            var jobs: [indices.len]JobId = undefined;
+                            inline for (indices, 0..) |index, i| {
+                                jobs[i] = event_jobs_in_flight[index];
+                            }
+
+                            break :job_dep_blk self.execution_job_queue.combine(&jobs) catch JobId.none;
+                        },
+                        .common => break :job_dep_blk JobId.none,
+                        .event => break :job_dep_blk JobId.none,
+                    }
+                };
+
+                event_jobs_in_flight[system_index] = self.execution_job_queue.schedule(job_dependency, system_job) catch |err| {
+                    switch (err) {
+                        error.Uninitialized => unreachable, // schedule can fail on "Uninitialized" which does not happen since you must init world
+                        error.Stopped => return,
+                    }
+                };
+            }
+        }
+
+        /// Wait for all jobs from a triggerEvent to finish by blocking the calling thread
+        /// should only be called from the triggerEvent thread
+        pub fn waitEvent(self: *Dispatcher, comptime event: EventsEnum) void {
+            const tracy_zone_name = comptime std.fmt.comptimePrint("World wait event {s}", .{@tagName(event)});
+            const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.dispatcher);
+            defer zone.End();
+
+            for (self.event_jobs_in_flight[@intFromEnum(event)]) |job_in_flight| {
+                self.execution_job_queue.wait(job_in_flight);
+            }
+        }
+
+        /// Force the world to flush all current in flight jobs before continuing
+        pub fn waitIdle(self: *Dispatcher) void {
+            const zone = ztracy.ZoneNC(@src(), "World wait idle", Color.dispatcher);
+            defer zone.End();
+
+            inline for (0..events.len) |event_enum_int| {
+                self.waitEvent(@enumFromInt(event_enum_int));
+            }
+        }
+
+        fn EventDispatchJob(
+            comptime func: *const anyopaque,
+            comptime FuncType: type,
+            comptime metadata: SystemMetadata,
+            comptime include_bitmask: World.ComponentMask.Bits,
+            comptime exclude_bitmask: World.ComponentMask.Bits,
+            comptime component_query_types: []const type,
+            comptime field_map: []const usize,
+            comptime ExtraArgumentType: type,
+        ) type {
+            // in the case where the extra argument is a pointer we get the pointer child type
+            const extra_argument_child_type = blk: {
+                const extra_argument_info = @typeInfo(ExtraArgumentType);
+                if (extra_argument_info == .Pointer) {
+                    break :blk extra_argument_info.Pointer.child;
+                }
+                break :blk ExtraArgumentType;
+            };
+
+            return struct {
+                world: *World,
+                extra_argument: ExtraArgumentType,
+
+                pub fn exec(self_job: *@This()) void {
+                    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.world);
+                    defer zone.End();
+
+                    const param_types = comptime metadata.paramArgTypes();
+                    var arguments: std.meta.Tuple(param_types) = undefined;
+
+                    var storage_buffer: [component_query_types.len][]u8 = undefined;
+                    var storage = World.OpaqueArchetype.StorageData{
+                        .inner_len = undefined,
+                        .outer = &storage_buffer,
+                    };
+
+                    var tree_cursor = World.Container.BinaryTree.IterCursor.fromRoot();
+                    while (self_job.world.container.tree.iterate(
+                        include_bitmask,
+                        exclude_bitmask,
+                        &tree_cursor,
+                    )) |archetype_index| {
+                        self_job.world.container.archetypes.items[archetype_index].getStorageData(&storage, include_bitmask);
+
+                        const entities = self_job.world.container.archetypes.items[archetype_index].entities.keys();
+                        for (0..storage.inner_len) |inner_index| {
+                            inline for (
+                                param_types,
+                                comptime metadata.paramCategories(),
+                                0..,
+                            ) |Param, param_category, j| {
+                                switch (param_category) {
+                                    .component_value => {
+                                        const component_index = if (comptime metadata.hasEntityArgument()) j - 1 else j;
+
+                                        // get size of the parameter type
+                                        const param_size = @sizeOf(Param);
+                                        if (param_size > 0) {
+                                            const from = inner_index * param_size;
+                                            const to = from + param_size;
+                                            const bytes = storage.outer[field_map[component_index]][from..to];
+                                            arguments[j] = @as(*Param, @ptrCast(@alignCast(bytes))).*;
+                                        }
+                                    },
+                                    .component_ptr => {
+                                        const component_index = if (comptime metadata.hasEntityArgument()) j - 1 else j;
+                                        const CompQueryType = component_query_types[component_index];
+
+                                        // get size of the pointer child type (Param == *CompQueryType)
+                                        const param_size = @sizeOf(CompQueryType);
+                                        if (param_size > 0) {
+                                            const from = inner_index * param_size;
+                                            const to = from + param_size;
+                                            const bytes = storage.outer[field_map[component_index]][from..to];
+                                            arguments[j] = @as(*CompQueryType, @ptrCast(@alignCast(bytes)));
+                                        }
+                                    },
+                                    .entity => arguments[j] = entities[inner_index],
+                                    .query_value => arguments[j] = Param.init(self_job.world.container.archetypes.items, self_job.world.container.tree),
+                                    .query_ptr => arguments[j] = Param.init(self_job.world.container.archetypes.items, self_job.world.container.tree),
+                                    .event_argument_value => arguments[j] = @as(*meta.EventArgument(ExtraArgumentType), @ptrCast(&self_job.extra_argument)).*,
+                                    .event_argument_ptr => arguments[j] = @as(*meta.EventArgument(extra_argument_child_type), @ptrCast(self_job.extra_argument)),
+                                    .shared_state_value => arguments[j] = self_job.world.getSharedStateWithOuterType(Param),
+                                    .shared_state_ptr => arguments[j] = self_job.world.getSharedStatePtrWithSharedStateType(Param),
+                                }
+                            }
+
+                            // if this is a debug build we do not want inline (to get better error messages), otherwise inline systems for performance
+                            const system_call_modidifer: std.builtin.CallModifier = if (@import("builtin").mode == .Debug) .never_inline else .always_inline;
+
+                            const system_ptr: FuncType = @ptrCast(func);
+                            @call(system_call_modidifer, system_ptr.*, arguments);
+                        }
+                    }
+                }
+            };
+        }
+    };
+}
+
+pub fn CreateWorld(
+    comptime components: anytype,
+    comptime shared_state_types: anytype,
+) type {
+    return struct {
+        pub const sorted_component_types = blk: {
+            const components_info = @typeInfo(@TypeOf(components));
+            if (components_info != .Struct) {
+                @compileError("components was not a tuple of types");
+            }
+            var types: [components_info.Struct.fields.len]type = undefined;
+            for (components_info.Struct.fields, 0..) |_, i| {
+                types[i] = components[i];
+                if (@typeInfo(types[i]) != .Struct) {
+                    @compileError("expected " ++ @typeName(types[i]) ++ " component type to be a struct");
+                }
+            }
+            break :blk query.sortTypes(&types);
+        };
+
+        pub const ComponentMask = meta.BitMaskFromComponents(&sorted_component_types);
+        pub const Container = archetype_container.FromComponents(&sorted_component_types, ComponentMask);
+        pub const OpaqueArchetype = opaque_archetype.FromComponentMask(ComponentMask);
+        pub const SharedStateStorage = meta.SharedStateStorage(shared_state_types);
+
+        const World = @This();
 
         allocator: Allocator,
         container: Container,
         shared_state: SharedStateStorage,
-
-        execution_job_queue: JobQueue,
-        event_jobs_in_flight: EventJobsInFlight,
 
         /// intialize the world structure
         /// Parameters:
@@ -159,15 +421,10 @@ fn CreateWorld(
             const container = try Container.init(allocator);
             errdefer container.deinit();
 
-            var execution_job_queue = JobQueue.init();
-            errdefer execution_job_queue.deinit();
-
             return World{
                 .allocator = allocator,
                 .container = container,
                 .shared_state = actual_shared_state,
-                .execution_job_queue = execution_job_queue,
-                .event_jobs_in_flight = EventJobsInFlight{},
             };
         }
 
@@ -175,16 +432,14 @@ fn CreateWorld(
             const zone = ztracy.ZoneNC(@src(), "World deinit", Color.world);
             defer zone.End();
 
-            self.execution_job_queue.deinit();
             self.container.deinit();
         }
 
-        /// Clear world memory for reuse. All entities will become invalid.
+        /// Clear world memory for reuse. **All entities will become invalid**.
         pub fn clearRetainingCapacity(self: *World) void {
             const zone = ztracy.ZoneNC(@src(), "World clear", Color.world);
             defer zone.End();
 
-            self.waitIdle();
             self.container.clearRetainingCapacity();
         }
 
@@ -240,179 +495,6 @@ fn CreateWorld(
             const zone = ztracy.ZoneNC(@src(), "World getComponent", Color.world);
             defer zone.End();
             return self.container.getComponent(entity, Component);
-        }
-
-        /// Trigger an event asynchronously. The caller must make sure to call waitEvent with matching enum identifier
-        /// Before relying on the result of a trigger.
-        /// Parameters:
-        ///     - event:                The event enum identifier. When registering an event on Wolrd creation a identifier is
-        ///                             submitted.
-        ///     - event_extra_argument: An event specific argument. Keep in mind that if you submit a pointer as argument data
-        ///                             then the lifetime of the argument must ourlive the execution of the event.
-        ///     - exclude_types:        A struct of component types to exclude from the event dispatch. Meaning entities with these
-        ///                             components will be ignored even though they have all components listed in the arguments of the
-        ///                             system
-        ///
-        /// Example:
-        /// ```
-        /// const World = WorldBuilder.WithEvents(.{Event("onMouse", .{onMouseSystem}, .{MouseArg})}
-        /// // ... world creation etc ...
-        /// world.triggerEvent(.onMouse, @as(MouseArg, mouse), .{RatComponent});
-        /// ```
-        pub fn triggerEvent(self: *World, comptime event: EventsEnum, event_extra_argument: anytype, comptime exclude_types: anytype) void {
-            const tracy_zone_name = comptime std.fmt.comptimePrint("World trigger {s}", .{@tagName(event)});
-            const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.world);
-            defer zone.End();
-
-            const exclude_type_info = @typeInfo(@TypeOf(exclude_types));
-            if (exclude_type_info != .Struct) {
-                @compileError("event exclude types must be a tuple of types");
-            }
-
-            const exclude_type_arr = comptime exclude_type_extract_blk: {
-                var type_arr: [exclude_type_info.Struct.fields.len]type = undefined;
-                inline for (&type_arr, exclude_type_info.Struct.fields, 0..) |*exclude_type, field, index| {
-                    if (field.type != type) {
-                        @compileError("event include types field " ++ field.name ++ "must be a component type, was " ++ @typeName(field.type));
-                    }
-
-                    exclude_type.* = exclude_types[index];
-
-                    var type_is_component = false;
-                    for (sorted_component_types) |Component| {
-                        if (exclude_type.* == Component) {
-                            type_is_component = true;
-                            break;
-                        }
-                    }
-
-                    if (type_is_component == false) {
-                        @compileError("event include types field " ++ field.name ++ " is not a registered World component");
-                    }
-                }
-                break :exclude_type_extract_blk type_arr;
-            };
-            const exclude_bitmask = comptime include_bit_blk: {
-                var bitmask: ComponentMask.Bits = 0;
-                inline for (exclude_type_arr) |Component| {
-                    bitmask |= 1 << Container.componentIndex(Component);
-                }
-                break :include_bit_blk bitmask;
-            };
-
-            // initiate job executions for dispatch
-            if (self.execution_job_queue.isStarted() == false) {
-                self.execution_job_queue.start();
-            }
-
-            var event_jobs_in_flight = &self.event_jobs_in_flight[@intFromEnum(event)];
-            const triggered_event = events[@intFromEnum(event)];
-
-            // TODO: verify systems and arguments in type initialization
-            const EventExtraArgument = @TypeOf(event_extra_argument);
-            if (@sizeOf(triggered_event.EventArgument) > 0) {
-                if (comptime meta.isSpecialArgument(.event, EventExtraArgument)) {
-                    @compileError("event arguments should not be wrapped in EventArgument type when triggering an event");
-                }
-                if (EventExtraArgument != triggered_event.EventArgument) {
-                    @compileError("event " ++ @tagName(event) ++ " was declared to accept " ++ @typeName(triggered_event.EventArgument) ++ " got " ++ @typeName(EventExtraArgument));
-                }
-            }
-
-            inline for (triggered_event.systems_info.metadata, 0..) |metadata, system_index| {
-                const component_query_types = comptime metadata.componentQueryArgTypes();
-
-                comptime var field_map: [component_query_types.len]usize = undefined;
-                const sorted_components: [component_query_types.len]type = comptime sort_comps: {
-                    var index: usize = 0;
-                    var sort_components: [component_query_types.len]type = undefined;
-                    for (sorted_component_types) |SortedComp| {
-                        for (component_query_types, 0..) |QueryComp, query_index| {
-                            if (SortedComp == QueryComp) {
-                                sort_components[index] = QueryComp;
-                                field_map[query_index] = index;
-                                index += 1;
-                                break;
-                            }
-                        }
-                    }
-                    break :sort_comps sort_components;
-                };
-
-                const include_bitmask = include_bits_blk: {
-                    comptime var bitmask = 0;
-                    inline for (sorted_components) |SortedComp| {
-                        bitmask |= 1 << Container.componentIndex(SortedComp);
-                    }
-                    break :include_bits_blk bitmask;
-                };
-
-                const DispatchJob = EventDispatchJob(
-                    triggered_event.systems_info.functions[system_index],
-                    *const triggered_event.systems_info.function_types[system_index],
-                    metadata,
-                    include_bitmask,
-                    exclude_bitmask,
-                    component_query_types,
-                    &field_map,
-                    @TypeOf(event_extra_argument),
-                );
-
-                // initialized the system job
-                var system_job = DispatchJob{
-                    .world = self,
-                    .extra_argument = event_extra_argument,
-                };
-
-                // TODO: should triggerEvent be synchronous? (move wait until the end of the dispatch function)
-                // wait for previous dispatch to finish
-                self.execution_job_queue.wait(event_jobs_in_flight[system_index]);
-
-                const job_dependency = job_dep_blk: {
-                    switch (metadata) {
-                        .depend_on => |depend_on_metadata| {
-                            const indices = comptime depend_on_metadata.getIndexRange(triggered_event);
-                            var jobs: [indices.len]JobId = undefined;
-                            inline for (indices, 0..) |index, i| {
-                                jobs[i] = event_jobs_in_flight[index];
-                            }
-
-                            break :job_dep_blk self.execution_job_queue.combine(&jobs) catch JobId.none;
-                        },
-                        .common => break :job_dep_blk JobId.none,
-                        .event => break :job_dep_blk JobId.none,
-                    }
-                };
-
-                event_jobs_in_flight[system_index] = self.execution_job_queue.schedule(job_dependency, system_job) catch |err| {
-                    switch (err) {
-                        error.Uninitialized => unreachable, // schedule can fail on "Uninitialized" which does not happen since you must init world
-                        error.Stopped => return,
-                    }
-                };
-            }
-        }
-
-        /// Wait for all jobs from a triggerEvent to finish by blocking the calling thread
-        /// should only be called from the triggerEvent thread
-        pub fn waitEvent(self: *World, comptime event: EventsEnum) void {
-            const tracy_zone_name = comptime std.fmt.comptimePrint("World wait event {s}", .{@tagName(event)});
-            const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.world);
-            defer zone.End();
-
-            for (self.event_jobs_in_flight[@intFromEnum(event)]) |job_in_flight| {
-                self.execution_job_queue.wait(job_in_flight);
-            }
-        }
-
-        /// Force the world to flush all current in flight jobs before continuing
-        pub fn waitIdle(self: *World) void {
-            const zone = ztracy.ZoneNC(@src(), "World wait idle", Color.world);
-            defer zone.End();
-
-            inline for (0..events.len) |event_enum_int| {
-                self.waitEvent(@enumFromInt(event_enum_int));
-            }
         }
 
         /// get a shared state using the inner type
@@ -606,108 +688,10 @@ fn CreateWorld(
             }
             @compileError(@typeName(Shared) ++ " is not a shared state");
         }
-
-        fn EventDispatchJob(
-            comptime func: *const anyopaque,
-            comptime FuncType: type,
-            comptime metadata: SystemMetadata,
-            comptime include_bitmask: ComponentMask.Bits,
-            comptime exclude_bitmask: ComponentMask.Bits,
-            comptime component_query_types: []const type,
-            comptime field_map: []const usize,
-            comptime ExtraArgumentType: type,
-        ) type {
-            // in the case where the extra argument is a pointer we get the pointer child type
-            const extra_argument_child_type = blk: {
-                const extra_argument_info = @typeInfo(ExtraArgumentType);
-                if (extra_argument_info == .Pointer) {
-                    break :blk extra_argument_info.Pointer.child;
-                }
-                break :blk ExtraArgumentType;
-            };
-
-            return struct {
-                world: *World,
-                extra_argument: ExtraArgumentType,
-
-                pub fn exec(self_job: *@This()) void {
-                    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.world);
-                    defer zone.End();
-
-                    const param_types = comptime metadata.paramArgTypes();
-                    var arguments: std.meta.Tuple(param_types) = undefined;
-
-                    var storage_buffer: [component_query_types.len][]u8 = undefined;
-                    var storage = OpaqueArchetype.StorageData{
-                        .inner_len = undefined,
-                        .outer = &storage_buffer,
-                    };
-
-                    var tree_cursor = Container.BinaryTree.IterCursor.fromRoot();
-                    while (self_job.world.container.tree.iterate(
-                        include_bitmask,
-                        exclude_bitmask,
-                        &tree_cursor,
-                    )) |archetype_index| {
-                        self_job.world.container.archetypes.items[archetype_index].getStorageData(&storage, include_bitmask);
-
-                        const entities = self_job.world.container.archetypes.items[archetype_index].entities.keys();
-                        for (0..storage.inner_len) |inner_index| {
-                            inline for (
-                                param_types,
-                                comptime metadata.paramCategories(),
-                                0..,
-                            ) |Param, param_category, j| {
-                                switch (param_category) {
-                                    .component_value => {
-                                        const component_index = if (comptime metadata.hasEntityArgument()) j - 1 else j;
-
-                                        // get size of the parameter type
-                                        const param_size = @sizeOf(Param);
-                                        if (param_size > 0) {
-                                            const from = inner_index * param_size;
-                                            const to = from + param_size;
-                                            const bytes = storage.outer[field_map[component_index]][from..to];
-                                            arguments[j] = @as(*Param, @ptrCast(@alignCast(bytes))).*;
-                                        }
-                                    },
-                                    .component_ptr => {
-                                        const component_index = if (comptime metadata.hasEntityArgument()) j - 1 else j;
-                                        const CompQueryType = component_query_types[component_index];
-
-                                        // get size of the pointer child type (Param == *CompQueryType)
-                                        const param_size = @sizeOf(CompQueryType);
-                                        if (param_size > 0) {
-                                            const from = inner_index * param_size;
-                                            const to = from + param_size;
-                                            const bytes = storage.outer[field_map[component_index]][from..to];
-                                            arguments[j] = @as(*CompQueryType, @ptrCast(@alignCast(bytes)));
-                                        }
-                                    },
-                                    .entity => arguments[j] = entities[inner_index],
-                                    .event_argument_value => arguments[j] = @as(*meta.EventArgument(ExtraArgumentType), @ptrCast(&self_job.extra_argument)).*,
-                                    .event_argument_ptr => arguments[j] = @as(*meta.EventArgument(extra_argument_child_type), @ptrCast(self_job.extra_argument)),
-                                    .shared_state_value => arguments[j] = self_job.world.getSharedStateWithOuterType(Param),
-                                    .shared_state_ptr => arguments[j] = self_job.world.getSharedStatePtrWithSharedStateType(Param),
-                                }
-                            }
-
-                            // if this is a debug build we do not want inline (to get better error messages), otherwise inline systems for performance
-                            const system_call_modidifer: std.builtin.CallModifier = if (@import("builtin").mode == .Debug) .never_inline else .always_inline;
-
-                            const system_ptr: FuncType = @ptrCast(func);
-                            @call(system_call_modidifer, system_ptr.*, arguments);
-                        }
-                    }
-                }
-            };
-        }
     };
 }
 
-// world without systems
-const WorldStub = WorldBuilder().WithComponents(Testing.AllComponentsTuple);
-
+const WorldStub = CreateWorld(Testing.AllComponentsTuple, .{});
 // TODO: we cant use tuples here becuase of https://github.com/ziglang/zig/issues/12963
 //       when this is resolve, the git history can be checked on how you should initialize an entity
 const AEntityType = struct {
@@ -964,7 +948,10 @@ test "clearRetainingCapacity() allow world reuse" {
 }
 
 test "getSharedState retrieve state" {
-    var world = try WorldStub.WithSharedState(.{ Testing.Component.A, Testing.Component.B }).init(testing.allocator, .{
+    var world = try CreateWorld(
+        Testing.AllComponentsTuple,
+        .{ Testing.Component.A, Testing.Component.B },
+    ).init(testing.allocator, .{
         Testing.Component.A{ .value = 4 },
         Testing.Component.B{ .value = 2 },
     });
@@ -975,7 +962,10 @@ test "getSharedState retrieve state" {
 }
 
 test "setSharedState retrieve state" {
-    var world = try WorldStub.WithSharedState(.{ Testing.Component.A, Testing.Component.B }).init(testing.allocator, .{
+    var world = try CreateWorld(
+        Testing.AllComponentsTuple,
+        .{ Testing.Component.A, Testing.Component.B },
+    ).init(testing.allocator, .{
         Testing.Component.A{ .value = 0 },
         Testing.Component.B{ .value = 0 },
     });
@@ -997,8 +987,11 @@ test "event can mutate components" {
         }
     };
 
-    var world = try WorldStub.WithEvents(.{Event("onFoo", .{SystemStruct}, .{})}).init(testing.allocator, .{});
+    var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
+
+    var dispatcher = SystemDispatcher(WorldStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(&world);
+    defer dispatcher.deinit();
 
     const initial_state = AbEntityType{
         .a = Testing.Component.A{ .value = 1 },
@@ -1006,8 +999,8 @@ test "event can mutate components" {
     };
     const entity = try world.createEntity(initial_state);
 
-    world.triggerEvent(.onFoo, .{}, .{});
-    world.waitEvent(.onFoo);
+    dispatcher.triggerEvent(.onFoo, .{}, .{});
+    dispatcher.waitEvent(.onFoo);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 3 },
@@ -1023,8 +1016,11 @@ test "event parameter order is independent" {
         }
     };
 
-    var world = try WorldStub.WithEvents(.{Event("onFoo", .{SystemStruct}, .{})}).init(testing.allocator, .{});
+    var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
+
+    var dispatcher = SystemDispatcher(WorldStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(&world);
+    defer dispatcher.deinit();
 
     const initial_state = AbcEntityType{
         .a = Testing.Component.A{ .value = 1 },
@@ -1033,8 +1029,8 @@ test "event parameter order is independent" {
     };
     const entity = try world.createEntity(initial_state);
 
-    world.triggerEvent(.onFoo, .{}, .{});
-    world.waitEvent(.onFoo);
+    dispatcher.triggerEvent(.onFoo, .{}, .{});
+    dispatcher.waitEvent(.onFoo);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 3 },
@@ -1049,8 +1045,11 @@ test "event exclude types exclude entities" {
         }
     };
 
-    var world = try WorldStub.WithEvents(.{Event("onFoo", .{SystemStruct}, .{})}).init(testing.allocator, .{});
+    var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
+
+    var dispatcher = SystemDispatcher(WorldStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(&world);
+    defer dispatcher.deinit();
 
     const a_entity = try world.createEntity(AEntityType{
         .a = Testing.Component.A{ .value = 0 },
@@ -1069,8 +1068,8 @@ test "event exclude types exclude entities" {
         .c = Testing.Component.C{},
     });
 
-    world.triggerEvent(.onFoo, .{}, .{ Testing.Component.B, Testing.Component.C });
-    world.waitEvent(.onFoo);
+    dispatcher.triggerEvent(.onFoo, .{}, .{ Testing.Component.B, Testing.Component.C });
+    dispatcher.waitEvent(.onFoo);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 1 },
@@ -1089,8 +1088,8 @@ test "event exclude types exclude entities" {
         try world.getComponent(abc_entity, Testing.Component.A),
     );
 
-    world.triggerEvent(.onFoo, .{}, .{Testing.Component.B});
-    world.waitEvent(.onFoo);
+    dispatcher.triggerEvent(.onFoo, .{}, .{Testing.Component.B});
+    dispatcher.waitEvent(.onFoo);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 2 },
@@ -1127,14 +1126,17 @@ test "events can be registered through struct or individual function(s)" {
         }
     };
 
-    var world = try WorldStub.WithEvents(.{
+    var world = try WorldStub.init(testing.allocator, .{});
+    defer world.deinit();
+
+    var dispatcher = SystemDispatcher(WorldStub, .{
         Event("onFoo", .{
             SystemStruct1.func1,
             DependOn(SystemStruct1.func2, .{SystemStruct1.func1}),
             SystemStruct2,
         }, .{}),
-    }).init(testing.allocator, .{});
-    defer world.deinit();
+    }).init(&world);
+    defer dispatcher.deinit();
 
     const initial_state = Testing.Archetype.AB{
         .a = Testing.Component.A{ .value = 0 },
@@ -1142,8 +1144,8 @@ test "events can be registered through struct or individual function(s)" {
     };
     const entity = try world.createEntity(initial_state);
 
-    world.triggerEvent(.onFoo, .{}, .{});
-    world.waitEvent(.onFoo);
+    dispatcher.triggerEvent(.onFoo, .{}, .{});
+    dispatcher.waitEvent(.onFoo);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 2 },
@@ -1172,13 +1174,14 @@ test "events call systems" {
         }
     }.func;
 
-    const World = WorldStub.WithEvents(.{
+    var world = try WorldStub.init(testing.allocator, .{});
+    defer world.deinit();
+
+    var dispatcher = SystemDispatcher(WorldStub, .{
         Event("onFoo", .{SystemType}, .{}),
         Event("onBar", .{systemThree}, .{}),
-    });
-
-    var world = try World.init(testing.allocator, .{});
-    defer world.deinit();
+    }).init(&world);
+    defer dispatcher.deinit();
 
     const entity1 = blk: {
         const initial_state = AbEntityType{
@@ -1195,8 +1198,8 @@ test "events call systems" {
         break :blk try world.createEntity(initial_state);
     };
 
-    world.triggerEvent(.onFoo, .{}, .{});
-    world.waitEvent(.onFoo);
+    dispatcher.triggerEvent(.onFoo, .{}, .{});
+    dispatcher.waitEvent(.onFoo);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 1 },
@@ -1211,8 +1214,8 @@ test "events call systems" {
         try world.getComponent(entity2, Testing.Component.A),
     );
 
-    world.triggerEvent(.onBar, .{}, .{});
-    world.waitEvent(.onBar);
+    dispatcher.triggerEvent(.onBar, .{}, .{});
+    dispatcher.waitEvent(.onBar);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 2 },
@@ -1233,19 +1236,25 @@ test "events can access shared state" {
         }
     };
 
-    const shared_a = A{ .value = 42 };
-    var world = try WorldStub.WithEvents(.{
-        Event("onFoo", .{SystemType}, .{}),
-    }).WithSharedState(.{A}).init(testing.allocator, .{shared_a});
+    const World = CreateWorld(Testing.AllComponentsTuple, .{A});
 
+    const shared_a = A{ .value = 42 };
+    var world = try World.init(
+        testing.allocator,
+        .{shared_a},
+    );
     defer world.deinit();
+
+    var dispatcher = SystemDispatcher(World, .{Event("onFoo", .{SystemType}, .{})}).init(&world);
+    defer dispatcher.deinit();
 
     const initial_state = AEntityType{
         .a = Testing.Component.A{ .value = 0 },
     };
     const entity = try world.createEntity(initial_state);
-    world.triggerEvent(.onFoo, .{}, .{});
-    world.waitEvent(.onFoo);
+
+    dispatcher.triggerEvent(.onFoo, .{}, .{});
+    dispatcher.waitEvent(.onFoo);
 
     try testing.expectEqual(shared_a, try world.getComponent(entity, A));
 }
@@ -1260,12 +1269,8 @@ test "events can mutate shared state" {
         }
     };
 
-    var world = try WorldStub.WithEvents(.{
-        Event("onFoo", .{SystemType}, .{}),
-    }).WithSharedState(.{
-        A,
-    }).init(testing.allocator, .{A{ .value = 1 }});
-
+    const World = CreateWorld(Testing.AllComponentsTuple, .{A});
+    var world = try World.init(testing.allocator, .{A{ .value = 1 }});
     defer world.deinit();
 
     const initial_state = AEntityType{
@@ -1273,8 +1278,11 @@ test "events can mutate shared state" {
     };
     _ = try world.createEntity(initial_state);
 
-    world.triggerEvent(.onFoo, .{}, .{});
-    world.waitEvent(.onFoo);
+    var dispatcher = SystemDispatcher(World, .{Event("onFoo", .{SystemType}, .{})}).init(&world);
+    defer dispatcher.deinit();
+
+    dispatcher.triggerEvent(.onFoo, .{}, .{});
+    dispatcher.waitEvent(.onFoo);
 
     try testing.expectEqual(@as(u8, 2), world.shared_state[0].value);
 }
@@ -1314,16 +1322,9 @@ test "event can have many shared state" {
         }
     };
 
-    var world = try WorldStub.WithEvents(.{Event("onFoo", .{
-        SystemStruct.system1,
-        DependOn(SystemStruct.system2, .{SystemStruct.system1}),
-        DependOn(SystemStruct.system3, .{SystemStruct.system2}),
-        SystemStruct.system4,
-        DependOn(SystemStruct.system5, .{SystemStruct.system4}),
-        DependOn(SystemStruct.system6, .{SystemStruct.system5}),
-    }, .{})}).WithSharedState(.{
-        A, B, D,
-    }).init(testing.allocator, .{
+    const World = CreateWorld(Testing.AllComponentsTuple, .{ A, B, D });
+
+    var world = try World.init(testing.allocator, .{
         A{ .value = 1 },
         B{ .value = 2 },
         D{ .value = 3 },
@@ -1339,8 +1340,18 @@ test "event can have many shared state" {
     };
     const entity_b = try world.createEntity(initial_state_b);
 
-    world.triggerEvent(.onFoo, .{}, .{});
-    world.waitEvent(.onFoo);
+    var dispatcher = SystemDispatcher(World, .{Event("onFoo", .{
+        SystemStruct.system1,
+        DependOn(SystemStruct.system2, .{SystemStruct.system1}),
+        DependOn(SystemStruct.system3, .{SystemStruct.system2}),
+        SystemStruct.system4,
+        DependOn(SystemStruct.system5, .{SystemStruct.system4}),
+        DependOn(SystemStruct.system6, .{SystemStruct.system5}),
+    }, .{})}).init(&world);
+    defer dispatcher.deinit();
+
+    dispatcher.triggerEvent(.onFoo, .{}, .{});
+    dispatcher.waitEvent(.onFoo);
 
     try testing.expectEqual(A{ .value = 6 }, try world.getComponent(entity_a, A));
     try testing.expectEqual(B{ .value = 12 }, try world.getComponent(entity_b, B));
@@ -1354,10 +1365,11 @@ test "events can access current entity" {
         }
     };
 
-    var world = try WorldStub.WithEvents(.{
-        Event("onFoo", .{SystemType}, .{}),
-    }).init(testing.allocator, .{});
+    var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
+
+    var dispatcher = SystemDispatcher(WorldStub, .{Event("onFoo", .{SystemType}, .{})}).init(&world);
+    defer dispatcher.deinit();
 
     var entities: [100]Entity = undefined;
     for (&entities, 0..) |*entity, iter| {
@@ -1367,8 +1379,8 @@ test "events can access current entity" {
         entity.* = try world.createEntity(initial_state);
     }
 
-    world.triggerEvent(.onFoo, .{}, .{});
-    world.waitEvent(.onFoo);
+    dispatcher.triggerEvent(.onFoo, .{}, .{});
+    dispatcher.waitEvent(.onFoo);
 
     for (entities) |entity| {
         try testing.expectEqual(
@@ -1386,10 +1398,11 @@ test "events entity access remain correct after single removeComponent" {
         }
     };
 
-    var world = try WorldStub.WithEvents(.{
-        Event("onFoo", .{SystemType}, .{}),
-    }).init(testing.allocator, .{});
+    var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
+
+    var dispatcher = SystemDispatcher(WorldStub, .{Event("onFoo", .{SystemType}, .{})}).init(&world);
+    defer dispatcher.deinit();
 
     var entities: [100]Entity = undefined;
     for (&entities, 0..) |*entity, iter| {
@@ -1399,8 +1412,8 @@ test "events entity access remain correct after single removeComponent" {
         entity.* = try world.createEntity(initial_state);
     }
 
-    world.triggerEvent(.onFoo, .{}, .{});
-    world.waitEvent(.onFoo);
+    dispatcher.triggerEvent(.onFoo, .{}, .{});
+    dispatcher.waitEvent(.onFoo);
 
     for (entities[0..50]) |entity| {
         try testing.expectEqual(
@@ -1416,7 +1429,7 @@ test "events entity access remain correct after single removeComponent" {
     }
 }
 
-test "events can accepts event related data" {
+test "Events can accepts event related data" {
     const MouseInput = struct {
         x: u32,
         y: u32,
@@ -1428,19 +1441,19 @@ test "events can accepts event related data" {
         }
     };
 
-    var world = try WorldStub.WithEvents(.{
-        Event("onFoo", .{SystemType}, MouseInput),
-    }).init(testing.allocator, .{});
-
+    var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
+
+    var dispatcher = SystemDispatcher(WorldStub, .{Event("onFoo", .{SystemType}, MouseInput)}).init(&world);
+    defer dispatcher.deinit();
 
     const initial_state = AEntityType{
         .a = .{ .value = 0 },
     };
     const entity = try world.createEntity(initial_state);
 
-    world.triggerEvent(.onFoo, MouseInput{ .x = 40, .y = 2 }, .{});
-    world.waitEvent(.onFoo);
+    dispatcher.triggerEvent(.onFoo, MouseInput{ .x = 40, .y = 2 }, .{});
+    dispatcher.waitEvent(.onFoo);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 42 },
@@ -1455,10 +1468,11 @@ test "Event can mutate event extra argument" {
         }
     };
 
-    var world = try WorldStub.WithEvents(.{
-        Event("onFoo", .{SystemStruct.eventSystem}, .{Testing.Component.A}),
-    }).init(testing.allocator, .{});
+    var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
+
+    var dispatcher = SystemDispatcher(WorldStub, .{Event("onFoo", .{SystemStruct.eventSystem}, .{Testing.Component.A})}).init(&world);
+    defer dispatcher.deinit();
 
     const initial_state = AEntityType{
         .a = Testing.Component.A{ .value = 42 },
@@ -1489,11 +1503,14 @@ test "event caching works" {
         }
     };
 
-    var world = try WorldStub.WithEvents(.{
+    var world = try WorldStub.init(testing.allocator, .{});
+    defer world.deinit();
+
+    var dispatcher = SystemDispatcher(WorldStub, .{
         Event("onEvent1", .{SystemStruct.event1System}, .{}),
         Event("onEvent2", .{SystemStruct.event2System}, .{}),
-    }).init(testing.allocator, .{});
-    defer world.deinit();
+    }).init(&world);
+    defer dispatcher.deinit();
 
     const entity1 = blk: {
         const initial_state = AEntityType{
@@ -1502,8 +1519,8 @@ test "event caching works" {
         break :blk try world.createEntity(initial_state);
     };
 
-    world.triggerEvent(.onEvent1, .{}, .{});
-    world.waitEvent(.onEvent1);
+    dispatcher.triggerEvent(.onEvent1, .{}, .{});
+    dispatcher.waitEvent(.onEvent1);
 
     try testing.expectEqual(Testing.Component.A{ .value = 1 }, try world.getComponent(
         entity1,
@@ -1512,16 +1529,17 @@ test "event caching works" {
 
     // move entity to archetype A, B
     try world.setComponent(entity1, Testing.Component.B{ .value = 0 });
-    world.triggerEvent(.onEvent1, .{}, .{});
-    world.waitEvent(.onEvent1);
+
+    dispatcher.triggerEvent(.onEvent1, .{}, .{});
+    dispatcher.waitEvent(.onEvent1);
 
     try testing.expectEqual(Testing.Component.A{ .value = 2 }, try world.getComponent(
         entity1,
         Testing.Component.A,
     ));
 
-    world.triggerEvent(.onEvent2, .{}, .{});
-    world.waitEvent(.onEvent2);
+    dispatcher.triggerEvent(.onEvent2, .{}, .{});
+    dispatcher.waitEvent(.onEvent2);
 
     try testing.expectEqual(Testing.Component.B{ .value = 1 }, try world.getComponent(
         entity1,
@@ -1537,16 +1555,16 @@ test "event caching works" {
         break :blk try world.createEntity(initial_state);
     };
 
-    world.triggerEvent(.onEvent1, .{}, .{});
-    world.waitEvent(.onEvent1);
+    dispatcher.triggerEvent(.onEvent1, .{}, .{});
+    dispatcher.waitEvent(.onEvent1);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 1 },
         try world.getComponent(entity2, Testing.Component.A),
     );
 
-    world.triggerEvent(.onEvent2, .{}, .{});
-    world.waitEvent(.onEvent2);
+    dispatcher.triggerEvent(.onEvent2, .{}, .{});
+    dispatcher.waitEvent(.onEvent2);
 
     try testing.expectEqual(
         Testing.Component.B{ .value = 1 },
@@ -1561,14 +1579,15 @@ test "Event with no archetypes does not crash" {
         }
     };
 
-    var world = try WorldStub.WithEvents(.{
-        Event("onEvent1", .{SystemStruct.event1System}, .{}),
-    }).init(testing.allocator, .{});
+    var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
+    var dispatcher = SystemDispatcher(WorldStub, .{Event("onFoo", .{SystemStruct.event1System}, .{})}).init(&world);
+    defer dispatcher.deinit();
+
     for (0..100) |_| {
-        world.triggerEvent(.onEvent1, .{}, .{});
-        world.waitEvent(.onEvent1);
+        dispatcher.triggerEvent(.onFoo, .{}, .{});
+        dispatcher.waitEvent(.onFoo);
     }
 }
 
@@ -1594,17 +1613,18 @@ test "DependOn makes a events race free" {
         }
     };
 
-    const World = WorldStub.WithEvents(.{
+    var world = try WorldStub.init(testing.allocator, .{});
+    defer world.deinit();
+
+    var dispatcher = SystemDispatcher(WorldStub, .{
         Event("onEvent", .{
             SystemStruct.addStuff1,
             DependOn(SystemStruct.multiplyStuff1, .{SystemStruct.addStuff1}),
             DependOn(SystemStruct.addStuff2, .{SystemStruct.multiplyStuff1}),
             DependOn(SystemStruct.multiplyStuff2, .{SystemStruct.addStuff2}),
         }, .{}),
-    }).Build();
-
-    var world = try World.init(testing.allocator, .{});
-    defer world.deinit();
+    }).init(&world);
+    defer dispatcher.deinit();
 
     const entity_count = 10_000;
     var entities: [entity_count]Entity = undefined;
@@ -1617,11 +1637,11 @@ test "DependOn makes a events race free" {
         entity.* = try world.createEntity(inital_state);
     }
 
-    world.triggerEvent(.onEvent, .{}, .{});
-    world.waitEvent(.onEvent);
+    dispatcher.triggerEvent(.onEvent, .{}, .{});
+    dispatcher.waitEvent(.onEvent);
 
-    world.triggerEvent(.onEvent, .{}, .{});
-    world.waitEvent(.onEvent);
+    dispatcher.triggerEvent(.onEvent, .{}, .{});
+    dispatcher.waitEvent(.onEvent);
 
     for (entities) |entity| {
         // (((3  + 2) * 2) + 2) * 2 =  24
@@ -1650,14 +1670,15 @@ test "Event DependOn events can have multiple dependencies" {
         }
     };
 
-    const World = WorldStub.WithEvents(.{Event("onFoo", .{
+    var world = try WorldStub.init(testing.allocator, .{});
+    defer world.deinit();
+
+    var dispatcher = SystemDispatcher(WorldStub, .{Event("onFoo", .{
         SystemStruct.addStuff1,
         SystemStruct.addStuff2,
         DependOn(SystemStruct.multiplyStuff, .{ SystemStruct.addStuff1, SystemStruct.addStuff2 }),
-    }, .{})}).Build();
-
-    var world = try World.init(testing.allocator, .{});
-    defer world.deinit();
+    }, .{})}).init(&world);
+    defer dispatcher.deinit();
 
     const entity_count = 100;
     var entities: [entity_count]Entity = undefined;
@@ -1670,11 +1691,11 @@ test "Event DependOn events can have multiple dependencies" {
         entity.* = try world.createEntity(inital_state);
     }
 
-    world.triggerEvent(.onFoo, .{}, .{});
-    world.waitEvent(.onFoo);
+    dispatcher.triggerEvent(.onFoo, .{}, .{});
+    dispatcher.waitEvent(.onFoo);
 
-    world.triggerEvent(.onFoo, .{}, .{});
-    world.waitEvent(.onFoo);
+    dispatcher.triggerEvent(.onFoo, .{}, .{});
+    dispatcher.waitEvent(.onFoo);
 
     for (entities) |entity| {
         // (3 + 1) * (2 + 1) = 12
@@ -1687,8 +1708,7 @@ test "Event DependOn events can have multiple dependencies" {
 }
 
 test "query with single include type works" {
-    const World = WorldStub.Build();
-    var world = try World.init(std.testing.allocator, .{});
+    var world = try WorldStub.init(std.testing.allocator, .{});
     defer world.deinit();
 
     for (0..100) |index| {
@@ -1700,7 +1720,7 @@ test "query with single include type works" {
 
     {
         var index: usize = 0;
-        var a_iter = World.Query(
+        var a_iter = WorldStub.Query(
             .exclude_entity,
             .{query.include("a", Testing.Component.A)},
             .{},
@@ -1717,8 +1737,7 @@ test "query with single include type works" {
 }
 
 test "query with multiple include type works" {
-    const World = WorldStub.Build();
-    var world = try World.init(std.testing.allocator, .{});
+    var world = try WorldStub.init(std.testing.allocator, .{});
     defer world.deinit();
 
     for (0..100) |index| {
@@ -1729,7 +1748,7 @@ test "query with multiple include type works" {
     }
 
     {
-        var a_b_iter = World.Query(.exclude_entity, .{
+        var a_b_iter = WorldStub.Query(.exclude_entity, .{
             query.include("a", Testing.Component.A),
             query.include("b", Testing.Component.B),
         }, .{}).submit(world);
@@ -1750,8 +1769,7 @@ test "query with multiple include type works" {
 }
 
 test "query with single ptr include type works" {
-    const World = WorldStub.Build();
-    var world = try World.init(std.testing.allocator, .{});
+    var world = try WorldStub.init(std.testing.allocator, .{});
     defer world.deinit();
 
     for (0..100) |index| {
@@ -1763,7 +1781,7 @@ test "query with single ptr include type works" {
 
     {
         var index: usize = 0;
-        var a_iter = World.Query(
+        var a_iter = WorldStub.Query(
             .exclude_entity,
             .{query.include("a_ptr", *Testing.Component.A)},
             .{},
@@ -1777,7 +1795,7 @@ test "query with single ptr include type works" {
 
     {
         var index: usize = 1;
-        var a_iter = World.Query(
+        var a_iter = WorldStub.Query(
             .exclude_entity,
             .{query.include("a", Testing.Component.A)},
             .{},
@@ -1794,8 +1812,7 @@ test "query with single ptr include type works" {
 }
 
 test "query with single include type and single exclude works" {
-    const World = WorldStub.Build();
-    var world = try World.init(std.testing.allocator, .{});
+    var world = try WorldStub.init(std.testing.allocator, .{});
     defer world.deinit();
 
     for (0..100) |index| {
@@ -1812,7 +1829,7 @@ test "query with single include type and single exclude works" {
     }
 
     {
-        var iter = World.Query(
+        var iter = WorldStub.Query(
             .exclude_entity,
             .{query.include("a", Testing.Component.A)},
             .{Testing.Component.B},
@@ -1830,8 +1847,7 @@ test "query with single include type and single exclude works" {
 }
 
 test "query with single include type and multiple exclude works" {
-    const World = WorldStub.Build();
-    var world = try World.init(std.testing.allocator, .{});
+    var world = try WorldStub.init(std.testing.allocator, .{});
     defer world.deinit();
 
     for (0..100) |index| {
@@ -1856,7 +1872,7 @@ test "query with single include type and multiple exclude works" {
     }
 
     {
-        var iter = World.Query(
+        var iter = WorldStub.Query(
             .exclude_entity,
             .{query.include("a", Testing.Component.A)},
             .{ Testing.Component.B, Testing.Component.C },
@@ -1874,8 +1890,7 @@ test "query with single include type and multiple exclude works" {
 }
 
 test "query with entity only works" {
-    const World = WorldStub.Build();
-    var world = try World.init(std.testing.allocator, .{});
+    var world = try WorldStub.init(std.testing.allocator, .{});
     defer world.deinit();
 
     var entities: [200]Entity = undefined;
@@ -1892,7 +1907,7 @@ test "query with entity only works" {
     }
 
     {
-        var iter = World.Query(
+        var iter = WorldStub.Query(
             .include_entity,
             .{query.include("a", Testing.Component.A)},
             .{},
@@ -1907,8 +1922,7 @@ test "query with entity only works" {
 }
 
 test "query with entity and include and exclude only works" {
-    const World = WorldStub.Build();
-    var world = try World.init(std.testing.allocator, .{});
+    var world = try WorldStub.init(std.testing.allocator, .{});
     defer world.deinit();
 
     var entities: [200]Entity = undefined;
@@ -1925,7 +1939,7 @@ test "query with entity and include and exclude only works" {
     }
 
     {
-        var iter = World.Query(
+        var iter = WorldStub.Query(
             .include_entity,
             .{query.include("a", Testing.Component.A)},
             .{Testing.Component.B},
@@ -1960,7 +1974,7 @@ test "reproducer: component data is mangled by adding additional components to e
         };
     };
 
-    const RepWorld = WorldBuilder().WithComponents(.{ Editor.InstanceHandle, RenderContext.ObjectMetadata }).Build();
+    const RepWorld = CreateWorld(.{ Editor.InstanceHandle, RenderContext.ObjectMetadata }, .{});
 
     var world = try RepWorld.init(testing.allocator, .{});
     defer world.deinit();
@@ -2005,7 +2019,7 @@ test "reproducer: component data is mangled by having more than one entity" {
         };
     };
 
-    const RepWorld = WorldBuilder().WithComponents(.{ Editor.InstanceHandle, RenderContext.ObjectMetadata }).Build();
+    const RepWorld = CreateWorld(.{ Editor.InstanceHandle, RenderContext.ObjectMetadata }, .{});
 
     var world = try RepWorld.init(testing.allocator, .{});
     defer world.deinit();
@@ -2066,25 +2080,27 @@ test "reproducer: Dispatcher does not include new components to systems previous
         }
     }.system;
 
-    const RepWorld = WorldStub.WithEvents(
-        .{Event("onFoo", .{onFooSystem}, .{})},
-    ).WithSharedState(.{Tracker}).Build();
+    const RepWorld = CreateWorld(Testing.AllComponentsTuple, .{Tracker});
+    const Dispatcher = SystemDispatcher(RepWorld, .{Event("onFoo", .{onFooSystem}, .{})});
 
     var world = try RepWorld.init(testing.allocator, .{Tracker{ .count = 0 }});
     defer world.deinit();
+
+    var dispatcher = Dispatcher.init(&world);
+    defer dispatcher.deinit();
 
     var a = Testing.Component.A{ .value = 1 };
     _ = try world.createEntity(.{a});
     _ = try world.createEntity(.{a});
 
-    world.triggerEvent(.onFoo, .{}, .{});
-    world.waitEvent(.onFoo);
+    dispatcher.triggerEvent(.onFoo, .{}, .{});
+    dispatcher.waitEvent(.onFoo);
 
     _ = try world.createEntity(.{a});
     _ = try world.createEntity(.{a});
 
-    world.triggerEvent(.onFoo, .{}, .{});
-    world.waitEvent(.onFoo);
+    dispatcher.triggerEvent(.onFoo, .{}, .{});
+    dispatcher.waitEvent(.onFoo);
 
     // at this point we expect tracker to have a count of:
     // t1: 1 + 1 = 2
@@ -2094,7 +2110,7 @@ test "reproducer: Dispatcher does not include new components to systems previous
 }
 
 // this reproducer never had an issue filed, so no issue number
-test "reproducer: Removing component cause storage to become in invalid state for dispatch" {
+test "reproducer: Removing component cause storage to become in invalid state" {
     const InstanceHandle = packed struct {
         a: u16,
         b: u32,
@@ -2118,14 +2134,14 @@ test "reproducer: Removing component cause storage to become in invalid state fo
         c: [64]u8,
     };
 
-    const RepWorld = WorldBuilder().WithComponents(.{
+    const RepWorld = CreateWorld(.{
         ObjectMetadata,
         Transform,
         Position,
         Rotation,
         Scale,
         InstanceHandle,
-    }).Build();
+    }, .{});
 
     var world = try RepWorld.init(testing.allocator, .{});
     defer world.deinit();
