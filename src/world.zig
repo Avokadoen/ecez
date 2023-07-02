@@ -454,22 +454,27 @@ fn CreateWorld(
             return &self.shared_state[index];
         }
 
+        pub const EntityQuery = enum {
+            exclude_entity,
+            include_entity,
+        };
         /// Query components which can be iterated upon.
         /// Parameters:
+        ///     - entity_query: wether to include the entity variable in the iterator item
         ///     - include_types: all the components you would like to iterate over with the specified field name that should map to the
         ///                      component type. (see IncludeType)
         ///     - exclude_types: all the components that should be excluded from the query result
         ///
         /// Example:
         /// ```
-        /// var a_iter = World.Query(.{ world.include("a", A) }, .{B}).submit(world, std.testing.allocator);
+        /// var a_iter = World.Query(.exclude_entity, .{ world.include("a", A) }, .{B}).submit(world, std.testing.allocator);
         /// defer a_iter.deinit();
         ///
         /// while (a_iter.next()) |item| {
         ///    std.debug.print("{any}", .{item.a});
         /// }
         /// ```
-        pub fn Query(comptime include_entity: bool, comptime include_types: anytype, comptime exclude_types: anytype) type {
+        pub fn Query(comptime entity_query: EntityQuery, comptime include_types: anytype, comptime exclude_types: anytype) type {
             const include_type_info = @typeInfo(@TypeOf(include_types));
             if (include_type_info != .Struct) {
                 @compileError("query include types must be a tuple of types");
@@ -571,7 +576,7 @@ fn CreateWorld(
             }
 
             const IterType = iterator.FromTypes(
-                include_entity,
+                entity_query == .include_entity,
                 &query_result_names,
                 &include_outer_type_arr,
                 include_bitmask,
@@ -1696,7 +1701,7 @@ test "query with single include type works" {
     {
         var index: usize = 0;
         var a_iter = World.Query(
-            false,
+            .exclude_entity,
             .{query.include("a", Testing.Component.A)},
             .{},
         ).submit(world);
@@ -1724,7 +1729,7 @@ test "query with multiple include type works" {
     }
 
     {
-        var a_b_iter = World.Query(false, .{
+        var a_b_iter = World.Query(.exclude_entity, .{
             query.include("a", Testing.Component.A),
             query.include("b", Testing.Component.B),
         }, .{}).submit(world);
@@ -1759,7 +1764,7 @@ test "query with single ptr include type works" {
     {
         var index: usize = 0;
         var a_iter = World.Query(
-            false,
+            .exclude_entity,
             .{query.include("a_ptr", *Testing.Component.A)},
             .{},
         ).submit(world);
@@ -1773,7 +1778,7 @@ test "query with single ptr include type works" {
     {
         var index: usize = 1;
         var a_iter = World.Query(
-            false,
+            .exclude_entity,
             .{query.include("a", Testing.Component.A)},
             .{},
         ).submit(world);
@@ -1808,7 +1813,7 @@ test "query with single include type and single exclude works" {
 
     {
         var iter = World.Query(
-            false,
+            .exclude_entity,
             .{query.include("a", Testing.Component.A)},
             .{Testing.Component.B},
         ).submit(world);
@@ -1852,7 +1857,7 @@ test "query with single include type and multiple exclude works" {
 
     {
         var iter = World.Query(
-            false,
+            .exclude_entity,
             .{query.include("a", Testing.Component.A)},
             .{ Testing.Component.B, Testing.Component.C },
         ).submit(world);
@@ -1888,7 +1893,7 @@ test "query with entity only works" {
 
     {
         var iter = World.Query(
-            true,
+            .include_entity,
             .{query.include("a", Testing.Component.A)},
             .{},
         ).submit(world);
@@ -1921,7 +1926,7 @@ test "query with entity and include and exclude only works" {
 
     {
         var iter = World.Query(
-            true,
+            .include_entity,
             .{query.include("a", Testing.Component.A)},
             .{Testing.Component.B},
         ).submit(world);
