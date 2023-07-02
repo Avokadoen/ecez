@@ -320,8 +320,6 @@ pub fn CreateScheduler(
                                         }
                                     },
                                     .entity => arguments[j] = entities[inner_index],
-                                    .query_value => arguments[j] = Param.init(self_job.storage.container.archetypes.items, self_job.storage.container.tree),
-                                    .query_ptr => arguments[j] = Param.init(self_job.storage.container.archetypes.items, self_job.storage.container.tree),
                                     .event_argument_value => arguments[j] = @as(*meta.EventArgument(ExtraArgumentType), @ptrCast(&self_job.extra_argument)).*,
                                     .event_argument_ptr => arguments[j] = @as(*meta.EventArgument(extra_argument_child_type), @ptrCast(self_job.extra_argument)),
                                     .shared_state_value => arguments[j] = self_job.storage.getSharedStateWithOuterType(Param),
