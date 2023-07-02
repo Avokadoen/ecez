@@ -10,9 +10,9 @@ const secret_field = "secret_field";
 
 /// Special optional return type for systems that allow systems exit early if needed
 pub const ReturnCommand = enum {
-    /// indicate that the system should continue to execute as normal
+    /// System should continue to execute as normal
     @"continue",
-    /// indicate that the system should exit early
+    /// System should exit early
     @"break",
 };
 

@@ -183,9 +183,9 @@ Systems have two valid return types: ``void`` and ``ecez.ReturnCommand``.
 
 /// Special optional return type for systems that allow systems exit early if needed
 pub const ReturnCommand = enum {
-    /// indicate that the system should continue to execute as normal
+    /// System should continue to execute as normal
     @"continue",
-    /// indicate that the system should exit early
+    /// System should exit early
     @"break",
 };
 
@@ -257,7 +257,7 @@ zjobs is as the name suggest a job based multithreading API.
 
 ### <a name="queries"></a> Queries
 
-You can query the storage instance for all components of certain type and filter out instances of matching components that also have unwanted components beloning to the same entity.
+You can query the storage instance for components and filter out instances components are paired with unwanted components, as in beloning to the same entity.
 
 #### Example
 
