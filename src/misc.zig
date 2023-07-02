@@ -1,5 +1,5 @@
 pub const Color = struct {
-    pub const world = Light.turquoise;
+    pub const storage = Light.turquoise;
     pub const archetype = Light.red;
     pub const opaque_archetype = Light.blue;
     pub const arche_container = Light.green;
