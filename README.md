@@ -80,8 +80,7 @@ Zig's comptime feature is utilized to perform static reflection on the usage of 
 
 #### Special system arguments
 
-Systems can have arguments that has a unique semantical meaning.
-Currently there are 3 special arguments:
+Systems can have arguments that have a unique semantical meaning:
  * Entity - give the system access to the current entity
  * EventArgument - data that is relevant to an triggered event
  * SharedState - data that is global to the world instance
