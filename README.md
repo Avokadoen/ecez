@@ -86,6 +86,7 @@ Currently there are 3 special arguments:
  * Entity - give the system access to the current entity
  * EventArgument - data that is relevant to an triggered event
  * SharedState - data that is global to the world instance
+ * Queries - the same queries described [below](#queries)
 
  ##### Examples 
 
@@ -146,6 +147,25 @@ Example of Entity
     const System = struct {
         pub fn system(entity: Entity, health: Health) void {
             // ...
+        }
+    };
+```
+
+Example of Query
+```zig
+    const QueryActiveColliders = StorageStub.Query(.include_entity, .{
+        include("position", Position),
+        include("collider", BoxCollider),
+    }, .{
+        InactiveTag, // exclude type
+    }).Iter;
+
+    const System = struct {
+        // Very bad brute force collision detection with wasted checks (it will check previously checked entities)
+        pub fn system(entity: Entity, position: Position, collider: BoxCollider, other_obj: *QueryActiveColliders) void {
+            while (other_colliders.next()) |other_collider| {
+                // ...
+            }
         }
     };
 ```
@@ -216,7 +236,7 @@ sequenceDiagram
 
 zjobs is as the name suggest a job based multithreading API. 
 
-### Queries
+### <a name="queries"></a> Queries
 
 You can query the api instance for all components of certain type and filter out instances of said components that also have unwanted sibling components.
 

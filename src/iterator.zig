@@ -52,6 +52,7 @@ pub fn FromTypes(
         /// storage details
         const Iterator = @This();
 
+        comptime secret_field: meta.ArgType = .query_iter,
         entities: []Entity,
         all_archetypes: []OpaqueArchetype,
         tree: BinaryTree,

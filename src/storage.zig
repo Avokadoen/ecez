@@ -314,6 +314,8 @@ pub fn CreateStorage(
             );
 
             return struct {
+                comptime secret_field: meta.ArgType = .query,
+
                 pub const Iter = IterType;
 
                 pub fn submit(storage: Storage) Iter {

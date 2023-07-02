@@ -320,6 +320,12 @@ pub fn CreateScheduler(
                                         }
                                     },
                                     .entity => arguments[j] = entities[inner_index],
+                                    .query_value => arguments[j] = Param.init(self_job.storage.container.archetypes.items, self_job.storage.container.tree),
+                                    .query_ptr => {
+                                        const Iter = @typeInfo(Param).Pointer.child;
+                                        var iter = Iter.init(self_job.storage.container.archetypes.items, self_job.storage.container.tree);
+                                        arguments[j] = &iter;
+                                    },
                                     .event_argument_value => arguments[j] = @as(*meta.EventArgument(ExtraArgumentType), @ptrCast(&self_job.extra_argument)).*,
                                     .event_argument_ptr => arguments[j] = @as(*meta.EventArgument(extra_argument_child_type), @ptrCast(self_job.extra_argument)),
                                     .shared_state_value => arguments[j] = self_job.storage.getSharedStateWithOuterType(Param),
@@ -871,6 +877,46 @@ test "event can mutate event extra argument" {
     try testing.expectEqual(initial_state.a, event_a);
 }
 
+test "event can request queries" {
+    const include = @import("query.zig").include;
+
+    const Query_A = StorageStub.Query(.exclude_entity, .{
+        include("a", Testing.Component.A),
+    }, .{}).Iter;
+
+    const pass_value = 99;
+    const fail_value = 100;
+
+    const SystemStruct = struct {
+        pub fn eventSystem(a: *Testing.Component.A, query: *Query_A) void {
+            const item = query.next().?;
+            if (a.value == item.a.value) {
+                a.value = pass_value;
+            } else {
+                a.value = fail_value;
+            }
+        }
+    };
+
+    var storage = try StorageStub.init(testing.allocator, .{});
+    defer storage.deinit();
+
+    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct.eventSystem}, .{})}).init(&storage);
+    defer scheduler.deinit();
+
+    const initial_state = AEntityType{
+        .a = Testing.Component.A{ .value = 42 },
+    };
+    const entity = try storage.createEntity(initial_state);
+
+    scheduler.dispatchEvent(.onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
+
+    try testing.expectEqual(
+        Testing.Component.A{ .value = pass_value },
+        try storage.getComponent(entity, Testing.Component.A),
+    );
+}
 // NOTE: we don't use a cache anymore, but the test can stay for now since it might be good for
 //       detecting potential regressions
 test "event caching works" {

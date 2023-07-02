@@ -8,13 +8,15 @@ const Entity = @import("entity_type.zig").Entity;
 
 const secret_field = "secret_field";
 
-const ArgType = enum {
+pub const ArgType = enum {
     presumed_component,
+    query_iter,
+    query,
     event,
     shared_state,
 };
 
-const SystemType = enum {
+pub const SystemType = enum {
     common,
     depend_on,
     event,
@@ -71,6 +73,8 @@ pub const CommonSystem = struct {
         component_ptr,
         component_value,
         entity,
+        query_ptr,
+        query_value,
         event_argument_ptr,
         event_argument_value,
         shared_state_ptr,
@@ -186,6 +190,7 @@ pub const CommonSystem = struct {
             shared_state: ParamCategory,
             event_argument: ParamCategory,
             component: ParamCategory,
+            query_iter: ParamCategory,
             type: type,
         };
 
@@ -222,6 +227,7 @@ pub const CommonSystem = struct {
                             .shared_state = ParamCategory.shared_state_ptr,
                             .event_argument = ParamCategory.event_argument_ptr,
                             .component = ParamCategory.component_ptr,
+                            .query_iter = ParamCategory.query_ptr,
                             .type = pointer.child,
                         };
                     },
@@ -229,6 +235,7 @@ pub const CommonSystem = struct {
                         .shared_state = ParamCategory.shared_state_value,
                         .event_argument = ParamCategory.event_argument_value,
                         .component = ParamCategory.component_value,
+                        .query_iter = ParamCategory.query_value,
                         .type = T,
                     },
                     else => @compileError(std.fmt.comptimePrint("system {s} argument {d} is not a struct", .{
@@ -251,6 +258,12 @@ pub const CommonSystem = struct {
                         parsing_state = .special_arguments;
                         break :special_parse_blk true;
                     },
+                    .query_iter => {
+                        param.* = parse_set_states.query_iter;
+                        parsing_state = .special_arguments;
+                        break :special_parse_blk true;
+                    },
+                    .query => @compileError("Query is not legal, use Query.Iter instead"),
                     .presumed_component => {
                         break :special_parse_blk false;
                     },
