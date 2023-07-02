@@ -7,7 +7,7 @@ pub const Color = struct {
     pub const serializer = Light.brown;
     pub const iterator = Light.orange;
     pub const tree = Light.pink;
-    pub const dispatcher = Light.lime;
+    pub const scheduler = Light.lime;
 
     pub const Light = struct {
         pub const red = 0xeb_80_7b;

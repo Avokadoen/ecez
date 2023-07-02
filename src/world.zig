@@ -36,12 +36,14 @@ pub const DependOn = meta.DependOn;
 
 // TODO: split dispatch and world into 2 filed
 // TODO: rename world -> storage
-// TODO: rename dispatcher -> scheduler
+// TODO: rename scheduler -> scheduler
 // TODO: rename SystemDispatcher -> CreateScheduler
+// TODO: update readme
+// TODO: update compile errors in meta
 
-/// Allow the user to attach systems to a world. The user can then trigger events on the dispatcher to execute
+/// Allow the user to attach systems to a world. The user can then trigger events on the scheduler to execute
 /// the systems in a multithreaded environment
-pub fn SystemDispatcher(
+pub fn CreateScheduler(
     comptime World: type,
     comptime events: anytype,
 ) type {
@@ -71,7 +73,7 @@ pub fn SystemDispatcher(
     };
 
     return struct {
-        const Dispatcher = @This();
+        const Scheduler = @This();
 
         pub const EventsEnum = meta.GenerateEventsEnum(event_count, events);
 
@@ -80,19 +82,19 @@ pub fn SystemDispatcher(
         execution_job_queue: JobQueue,
         event_jobs_in_flight: EventJobsInFlight,
 
-        /// Initialized the system dispatcher. User must make sure to call deinit
-        pub fn init(world: *World) Dispatcher {
-            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.dispatcher);
+        /// Initialized the system scheduler. User must make sure to call deinit
+        pub fn init(world: *World) Scheduler {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.scheduler);
             defer zone.End();
 
-            return Dispatcher{
+            return Scheduler{
                 .world = world,
                 .execution_job_queue = JobQueue.init(),
                 .event_jobs_in_flight = EventJobsInFlight{},
             };
         }
 
-        pub fn deinit(self: *Dispatcher) void {
+        pub fn deinit(self: *Scheduler) void {
             self.execution_job_queue.deinit();
         }
 
@@ -109,13 +111,14 @@ pub fn SystemDispatcher(
         ///
         /// Example:
         /// ```
-        /// const World = WorldBuilder.WithEvents(.{Event("onMouse", .{onMouseSystem}, .{MouseArg})}
+        /// const Scheduler = ecez.CreateScheduler(World, .{ecez.Event("onMouse", .{onMouseSystem}, .{MouseArg})})
         /// // ... world creation etc ...
-        /// world.triggerEvent(.onMouse, @as(MouseArg, mouse), .{RatComponent});
+        /// // trigger mouse handle, exclude any entity with the RatComponent from this event >:)
+        /// scheduler.triggerEvent(.onMouse, @as(MouseArg, mouse), .{RatComponent});
         /// ```
-        pub fn triggerEvent(self: *Dispatcher, comptime event: EventsEnum, event_extra_argument: anytype, comptime exclude_types: anytype) void {
+        pub fn triggerEvent(self: *Scheduler, comptime event: EventsEnum, event_extra_argument: anytype, comptime exclude_types: anytype) void {
             const tracy_zone_name = comptime std.fmt.comptimePrint("World trigger {s}", .{@tagName(event)});
-            const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.dispatcher);
+            const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.scheduler);
             defer zone.End();
 
             const exclude_type_info = @typeInfo(@TypeOf(exclude_types));
@@ -249,9 +252,9 @@ pub fn SystemDispatcher(
 
         /// Wait for all jobs from a triggerEvent to finish by blocking the calling thread
         /// should only be called from the triggerEvent thread
-        pub fn waitEvent(self: *Dispatcher, comptime event: EventsEnum) void {
+        pub fn waitEvent(self: *Scheduler, comptime event: EventsEnum) void {
             const tracy_zone_name = comptime std.fmt.comptimePrint("World wait event {s}", .{@tagName(event)});
-            const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.dispatcher);
+            const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.scheduler);
             defer zone.End();
 
             for (self.event_jobs_in_flight[@intFromEnum(event)]) |job_in_flight| {
@@ -260,8 +263,8 @@ pub fn SystemDispatcher(
         }
 
         /// Force the world to flush all current in flight jobs before continuing
-        pub fn waitIdle(self: *Dispatcher) void {
-            const zone = ztracy.ZoneNC(@src(), "World wait idle", Color.dispatcher);
+        pub fn waitIdle(self: *Scheduler) void {
+            const zone = ztracy.ZoneNC(@src(), "World wait idle", Color.scheduler);
             defer zone.End();
 
             inline for (0..events.len) |event_enum_int| {
@@ -990,8 +993,8 @@ test "event can mutate components" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    var dispatcher = SystemDispatcher(WorldStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(&world);
-    defer dispatcher.deinit();
+    var scheduler = CreateScheduler(WorldStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(&world);
+    defer scheduler.deinit();
 
     const initial_state = AbEntityType{
         .a = Testing.Component.A{ .value = 1 },
@@ -999,8 +1002,8 @@ test "event can mutate components" {
     };
     const entity = try world.createEntity(initial_state);
 
-    dispatcher.triggerEvent(.onFoo, .{}, .{});
-    dispatcher.waitEvent(.onFoo);
+    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 3 },
@@ -1019,8 +1022,8 @@ test "event parameter order is independent" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    var dispatcher = SystemDispatcher(WorldStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(&world);
-    defer dispatcher.deinit();
+    var scheduler = CreateScheduler(WorldStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(&world);
+    defer scheduler.deinit();
 
     const initial_state = AbcEntityType{
         .a = Testing.Component.A{ .value = 1 },
@@ -1029,8 +1032,8 @@ test "event parameter order is independent" {
     };
     const entity = try world.createEntity(initial_state);
 
-    dispatcher.triggerEvent(.onFoo, .{}, .{});
-    dispatcher.waitEvent(.onFoo);
+    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 3 },
@@ -1048,8 +1051,8 @@ test "event exclude types exclude entities" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    var dispatcher = SystemDispatcher(WorldStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(&world);
-    defer dispatcher.deinit();
+    var scheduler = CreateScheduler(WorldStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(&world);
+    defer scheduler.deinit();
 
     const a_entity = try world.createEntity(AEntityType{
         .a = Testing.Component.A{ .value = 0 },
@@ -1068,8 +1071,8 @@ test "event exclude types exclude entities" {
         .c = Testing.Component.C{},
     });
 
-    dispatcher.triggerEvent(.onFoo, .{}, .{ Testing.Component.B, Testing.Component.C });
-    dispatcher.waitEvent(.onFoo);
+    scheduler.triggerEvent(.onFoo, .{}, .{ Testing.Component.B, Testing.Component.C });
+    scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 1 },
@@ -1088,8 +1091,8 @@ test "event exclude types exclude entities" {
         try world.getComponent(abc_entity, Testing.Component.A),
     );
 
-    dispatcher.triggerEvent(.onFoo, .{}, .{Testing.Component.B});
-    dispatcher.waitEvent(.onFoo);
+    scheduler.triggerEvent(.onFoo, .{}, .{Testing.Component.B});
+    scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 2 },
@@ -1129,14 +1132,14 @@ test "events can be registered through struct or individual function(s)" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    var dispatcher = SystemDispatcher(WorldStub, .{
+    var scheduler = CreateScheduler(WorldStub, .{
         Event("onFoo", .{
             SystemStruct1.func1,
             DependOn(SystemStruct1.func2, .{SystemStruct1.func1}),
             SystemStruct2,
         }, .{}),
     }).init(&world);
-    defer dispatcher.deinit();
+    defer scheduler.deinit();
 
     const initial_state = Testing.Archetype.AB{
         .a = Testing.Component.A{ .value = 0 },
@@ -1144,8 +1147,8 @@ test "events can be registered through struct or individual function(s)" {
     };
     const entity = try world.createEntity(initial_state);
 
-    dispatcher.triggerEvent(.onFoo, .{}, .{});
-    dispatcher.waitEvent(.onFoo);
+    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 2 },
@@ -1177,11 +1180,11 @@ test "events call systems" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    var dispatcher = SystemDispatcher(WorldStub, .{
+    var scheduler = CreateScheduler(WorldStub, .{
         Event("onFoo", .{SystemType}, .{}),
         Event("onBar", .{systemThree}, .{}),
     }).init(&world);
-    defer dispatcher.deinit();
+    defer scheduler.deinit();
 
     const entity1 = blk: {
         const initial_state = AbEntityType{
@@ -1198,8 +1201,8 @@ test "events call systems" {
         break :blk try world.createEntity(initial_state);
     };
 
-    dispatcher.triggerEvent(.onFoo, .{}, .{});
-    dispatcher.waitEvent(.onFoo);
+    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 1 },
@@ -1214,8 +1217,8 @@ test "events call systems" {
         try world.getComponent(entity2, Testing.Component.A),
     );
 
-    dispatcher.triggerEvent(.onBar, .{}, .{});
-    dispatcher.waitEvent(.onBar);
+    scheduler.triggerEvent(.onBar, .{}, .{});
+    scheduler.waitEvent(.onBar);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 2 },
@@ -1245,16 +1248,16 @@ test "events can access shared state" {
     );
     defer world.deinit();
 
-    var dispatcher = SystemDispatcher(World, .{Event("onFoo", .{SystemType}, .{})}).init(&world);
-    defer dispatcher.deinit();
+    var scheduler = CreateScheduler(World, .{Event("onFoo", .{SystemType}, .{})}).init(&world);
+    defer scheduler.deinit();
 
     const initial_state = AEntityType{
         .a = Testing.Component.A{ .value = 0 },
     };
     const entity = try world.createEntity(initial_state);
 
-    dispatcher.triggerEvent(.onFoo, .{}, .{});
-    dispatcher.waitEvent(.onFoo);
+    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(shared_a, try world.getComponent(entity, A));
 }
@@ -1278,11 +1281,11 @@ test "events can mutate shared state" {
     };
     _ = try world.createEntity(initial_state);
 
-    var dispatcher = SystemDispatcher(World, .{Event("onFoo", .{SystemType}, .{})}).init(&world);
-    defer dispatcher.deinit();
+    var scheduler = CreateScheduler(World, .{Event("onFoo", .{SystemType}, .{})}).init(&world);
+    defer scheduler.deinit();
 
-    dispatcher.triggerEvent(.onFoo, .{}, .{});
-    dispatcher.waitEvent(.onFoo);
+    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(@as(u8, 2), world.shared_state[0].value);
 }
@@ -1340,7 +1343,7 @@ test "event can have many shared state" {
     };
     const entity_b = try world.createEntity(initial_state_b);
 
-    var dispatcher = SystemDispatcher(World, .{Event("onFoo", .{
+    var scheduler = CreateScheduler(World, .{Event("onFoo", .{
         SystemStruct.system1,
         DependOn(SystemStruct.system2, .{SystemStruct.system1}),
         DependOn(SystemStruct.system3, .{SystemStruct.system2}),
@@ -1348,10 +1351,10 @@ test "event can have many shared state" {
         DependOn(SystemStruct.system5, .{SystemStruct.system4}),
         DependOn(SystemStruct.system6, .{SystemStruct.system5}),
     }, .{})}).init(&world);
-    defer dispatcher.deinit();
+    defer scheduler.deinit();
 
-    dispatcher.triggerEvent(.onFoo, .{}, .{});
-    dispatcher.waitEvent(.onFoo);
+    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(A{ .value = 6 }, try world.getComponent(entity_a, A));
     try testing.expectEqual(B{ .value = 12 }, try world.getComponent(entity_b, B));
@@ -1368,8 +1371,8 @@ test "events can access current entity" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    var dispatcher = SystemDispatcher(WorldStub, .{Event("onFoo", .{SystemType}, .{})}).init(&world);
-    defer dispatcher.deinit();
+    var scheduler = CreateScheduler(WorldStub, .{Event("onFoo", .{SystemType}, .{})}).init(&world);
+    defer scheduler.deinit();
 
     var entities: [100]Entity = undefined;
     for (&entities, 0..) |*entity, iter| {
@@ -1379,8 +1382,8 @@ test "events can access current entity" {
         entity.* = try world.createEntity(initial_state);
     }
 
-    dispatcher.triggerEvent(.onFoo, .{}, .{});
-    dispatcher.waitEvent(.onFoo);
+    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
 
     for (entities) |entity| {
         try testing.expectEqual(
@@ -1401,8 +1404,8 @@ test "events entity access remain correct after single removeComponent" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    var dispatcher = SystemDispatcher(WorldStub, .{Event("onFoo", .{SystemType}, .{})}).init(&world);
-    defer dispatcher.deinit();
+    var scheduler = CreateScheduler(WorldStub, .{Event("onFoo", .{SystemType}, .{})}).init(&world);
+    defer scheduler.deinit();
 
     var entities: [100]Entity = undefined;
     for (&entities, 0..) |*entity, iter| {
@@ -1412,8 +1415,8 @@ test "events entity access remain correct after single removeComponent" {
         entity.* = try world.createEntity(initial_state);
     }
 
-    dispatcher.triggerEvent(.onFoo, .{}, .{});
-    dispatcher.waitEvent(.onFoo);
+    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
 
     for (entities[0..50]) |entity| {
         try testing.expectEqual(
@@ -1444,16 +1447,16 @@ test "Events can accepts event related data" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    var dispatcher = SystemDispatcher(WorldStub, .{Event("onFoo", .{SystemType}, MouseInput)}).init(&world);
-    defer dispatcher.deinit();
+    var scheduler = CreateScheduler(WorldStub, .{Event("onFoo", .{SystemType}, MouseInput)}).init(&world);
+    defer scheduler.deinit();
 
     const initial_state = AEntityType{
         .a = .{ .value = 0 },
     };
     const entity = try world.createEntity(initial_state);
 
-    dispatcher.triggerEvent(.onFoo, MouseInput{ .x = 40, .y = 2 }, .{});
-    dispatcher.waitEvent(.onFoo);
+    scheduler.triggerEvent(.onFoo, MouseInput{ .x = 40, .y = 2 }, .{});
+    scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 42 },
@@ -1471,8 +1474,8 @@ test "Event can mutate event extra argument" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    var dispatcher = SystemDispatcher(WorldStub, .{Event("onFoo", .{SystemStruct.eventSystem}, .{Testing.Component.A})}).init(&world);
-    defer dispatcher.deinit();
+    var scheduler = CreateScheduler(WorldStub, .{Event("onFoo", .{SystemStruct.eventSystem}, .{Testing.Component.A})}).init(&world);
+    defer scheduler.deinit();
 
     const initial_state = AEntityType{
         .a = Testing.Component.A{ .value = 42 },
@@ -1506,11 +1509,11 @@ test "event caching works" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    var dispatcher = SystemDispatcher(WorldStub, .{
+    var scheduler = CreateScheduler(WorldStub, .{
         Event("onEvent1", .{SystemStruct.event1System}, .{}),
         Event("onEvent2", .{SystemStruct.event2System}, .{}),
     }).init(&world);
-    defer dispatcher.deinit();
+    defer scheduler.deinit();
 
     const entity1 = blk: {
         const initial_state = AEntityType{
@@ -1519,8 +1522,8 @@ test "event caching works" {
         break :blk try world.createEntity(initial_state);
     };
 
-    dispatcher.triggerEvent(.onEvent1, .{}, .{});
-    dispatcher.waitEvent(.onEvent1);
+    scheduler.triggerEvent(.onEvent1, .{}, .{});
+    scheduler.waitEvent(.onEvent1);
 
     try testing.expectEqual(Testing.Component.A{ .value = 1 }, try world.getComponent(
         entity1,
@@ -1530,16 +1533,16 @@ test "event caching works" {
     // move entity to archetype A, B
     try world.setComponent(entity1, Testing.Component.B{ .value = 0 });
 
-    dispatcher.triggerEvent(.onEvent1, .{}, .{});
-    dispatcher.waitEvent(.onEvent1);
+    scheduler.triggerEvent(.onEvent1, .{}, .{});
+    scheduler.waitEvent(.onEvent1);
 
     try testing.expectEqual(Testing.Component.A{ .value = 2 }, try world.getComponent(
         entity1,
         Testing.Component.A,
     ));
 
-    dispatcher.triggerEvent(.onEvent2, .{}, .{});
-    dispatcher.waitEvent(.onEvent2);
+    scheduler.triggerEvent(.onEvent2, .{}, .{});
+    scheduler.waitEvent(.onEvent2);
 
     try testing.expectEqual(Testing.Component.B{ .value = 1 }, try world.getComponent(
         entity1,
@@ -1555,16 +1558,16 @@ test "event caching works" {
         break :blk try world.createEntity(initial_state);
     };
 
-    dispatcher.triggerEvent(.onEvent1, .{}, .{});
-    dispatcher.waitEvent(.onEvent1);
+    scheduler.triggerEvent(.onEvent1, .{}, .{});
+    scheduler.waitEvent(.onEvent1);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 1 },
         try world.getComponent(entity2, Testing.Component.A),
     );
 
-    dispatcher.triggerEvent(.onEvent2, .{}, .{});
-    dispatcher.waitEvent(.onEvent2);
+    scheduler.triggerEvent(.onEvent2, .{}, .{});
+    scheduler.waitEvent(.onEvent2);
 
     try testing.expectEqual(
         Testing.Component.B{ .value = 1 },
@@ -1582,12 +1585,12 @@ test "Event with no archetypes does not crash" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    var dispatcher = SystemDispatcher(WorldStub, .{Event("onFoo", .{SystemStruct.event1System}, .{})}).init(&world);
-    defer dispatcher.deinit();
+    var scheduler = CreateScheduler(WorldStub, .{Event("onFoo", .{SystemStruct.event1System}, .{})}).init(&world);
+    defer scheduler.deinit();
 
     for (0..100) |_| {
-        dispatcher.triggerEvent(.onFoo, .{}, .{});
-        dispatcher.waitEvent(.onFoo);
+        scheduler.triggerEvent(.onFoo, .{}, .{});
+        scheduler.waitEvent(.onFoo);
     }
 }
 
@@ -1616,7 +1619,7 @@ test "DependOn makes a events race free" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    var dispatcher = SystemDispatcher(WorldStub, .{
+    var scheduler = CreateScheduler(WorldStub, .{
         Event("onEvent", .{
             SystemStruct.addStuff1,
             DependOn(SystemStruct.multiplyStuff1, .{SystemStruct.addStuff1}),
@@ -1624,7 +1627,7 @@ test "DependOn makes a events race free" {
             DependOn(SystemStruct.multiplyStuff2, .{SystemStruct.addStuff2}),
         }, .{}),
     }).init(&world);
-    defer dispatcher.deinit();
+    defer scheduler.deinit();
 
     const entity_count = 10_000;
     var entities: [entity_count]Entity = undefined;
@@ -1637,11 +1640,11 @@ test "DependOn makes a events race free" {
         entity.* = try world.createEntity(inital_state);
     }
 
-    dispatcher.triggerEvent(.onEvent, .{}, .{});
-    dispatcher.waitEvent(.onEvent);
+    scheduler.triggerEvent(.onEvent, .{}, .{});
+    scheduler.waitEvent(.onEvent);
 
-    dispatcher.triggerEvent(.onEvent, .{}, .{});
-    dispatcher.waitEvent(.onEvent);
+    scheduler.triggerEvent(.onEvent, .{}, .{});
+    scheduler.waitEvent(.onEvent);
 
     for (entities) |entity| {
         // (((3  + 2) * 2) + 2) * 2 =  24
@@ -1673,12 +1676,12 @@ test "Event DependOn events can have multiple dependencies" {
     var world = try WorldStub.init(testing.allocator, .{});
     defer world.deinit();
 
-    var dispatcher = SystemDispatcher(WorldStub, .{Event("onFoo", .{
+    var scheduler = CreateScheduler(WorldStub, .{Event("onFoo", .{
         SystemStruct.addStuff1,
         SystemStruct.addStuff2,
         DependOn(SystemStruct.multiplyStuff, .{ SystemStruct.addStuff1, SystemStruct.addStuff2 }),
     }, .{})}).init(&world);
-    defer dispatcher.deinit();
+    defer scheduler.deinit();
 
     const entity_count = 100;
     var entities: [entity_count]Entity = undefined;
@@ -1691,11 +1694,11 @@ test "Event DependOn events can have multiple dependencies" {
         entity.* = try world.createEntity(inital_state);
     }
 
-    dispatcher.triggerEvent(.onFoo, .{}, .{});
-    dispatcher.waitEvent(.onFoo);
+    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
 
-    dispatcher.triggerEvent(.onFoo, .{}, .{});
-    dispatcher.waitEvent(.onFoo);
+    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
 
     for (entities) |entity| {
         // (3 + 1) * (2 + 1) = 12
@@ -2081,26 +2084,26 @@ test "reproducer: Dispatcher does not include new components to systems previous
     }.system;
 
     const RepWorld = CreateWorld(Testing.AllComponentsTuple, .{Tracker});
-    const Dispatcher = SystemDispatcher(RepWorld, .{Event("onFoo", .{onFooSystem}, .{})});
+    const Dispatcher = CreateScheduler(RepWorld, .{Event("onFoo", .{onFooSystem}, .{})});
 
     var world = try RepWorld.init(testing.allocator, .{Tracker{ .count = 0 }});
     defer world.deinit();
 
-    var dispatcher = Dispatcher.init(&world);
-    defer dispatcher.deinit();
+    var scheduler = Dispatcher.init(&world);
+    defer scheduler.deinit();
 
     var a = Testing.Component.A{ .value = 1 };
     _ = try world.createEntity(.{a});
     _ = try world.createEntity(.{a});
 
-    dispatcher.triggerEvent(.onFoo, .{}, .{});
-    dispatcher.waitEvent(.onFoo);
+    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
 
     _ = try world.createEntity(.{a});
     _ = try world.createEntity(.{a});
 
-    dispatcher.triggerEvent(.onFoo, .{}, .{});
-    dispatcher.waitEvent(.onFoo);
+    scheduler.triggerEvent(.onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
 
     // at this point we expect tracker to have a count of:
     // t1: 1 + 1 = 2
