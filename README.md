@@ -170,6 +170,8 @@ Example of Query
     };
 ```
 
+You can have multiple queries in a single system, and have systems with only query parameters.
+
 Both SharedState and EventArgument can be mutable by using a pointer
 
 

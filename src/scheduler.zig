@@ -877,10 +877,10 @@ test "event can mutate event extra argument" {
     try testing.expectEqual(initial_state.a, event_a);
 }
 
-test "event can request queries" {
+test "event can request single query with component" {
     const include = @import("query.zig").include;
 
-    const Query_A = StorageStub.Query(.exclude_entity, .{
+    const QueryA = StorageStub.Query(.exclude_entity, .{
         include("a", Testing.Component.A),
     }, .{}).Iter;
 
@@ -888,7 +888,7 @@ test "event can request queries" {
     const fail_value = 100;
 
     const SystemStruct = struct {
-        pub fn eventSystem(a: *Testing.Component.A, query: *Query_A) void {
+        pub fn eventSystem(a: *Testing.Component.A, query: *QueryA) void {
             const item = query.next().?;
             if (a.value == item.a.value) {
                 a.value = pass_value;
@@ -917,6 +917,53 @@ test "event can request queries" {
         try storage.getComponent(entity, Testing.Component.A),
     );
 }
+
+test "event can request two query without components" {
+    const include = @import("query.zig").include;
+
+    const QueryAMut = StorageStub.Query(.exclude_entity, .{
+        include("a", *Testing.Component.A),
+    }, .{}).Iter;
+
+    const QueryAConst = StorageStub.Query(.exclude_entity, .{
+        include("a", Testing.Component.A),
+    }, .{}).Iter;
+
+    const pass_value = 99;
+    const fail_value = 100;
+
+    const SystemStruct = struct {
+        pub fn eventSystem(query_mut: *QueryAMut, query_const: *QueryAConst) void {
+            const mut_item = query_mut.next().?;
+            const const_item = query_const.next().?;
+            if (mut_item.a.value == const_item.a.value) {
+                mut_item.a.value = pass_value;
+            } else {
+                mut_item.a.value = fail_value;
+            }
+        }
+    };
+
+    var storage = try StorageStub.init(testing.allocator, .{});
+    defer storage.deinit();
+
+    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct.eventSystem}, .{})}).init(&storage);
+    defer scheduler.deinit();
+
+    const initial_state = AEntityType{
+        .a = Testing.Component.A{ .value = 42 },
+    };
+    const entity = try storage.createEntity(initial_state);
+
+    scheduler.dispatchEvent(.onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
+
+    try testing.expectEqual(
+        Testing.Component.A{ .value = pass_value },
+        try storage.getComponent(entity, Testing.Component.A),
+    );
+}
+
 // NOTE: we don't use a cache anymore, but the test can stay for now since it might be good for
 //       detecting potential regressions
 test "event caching works" {
