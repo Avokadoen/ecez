@@ -21,8 +21,7 @@ zig build test
 zig build run-game-of-life 
 
 ```
-// TODO: update readme
-// TODO: update compile errors in meta
+
 ## Features
 
 As mentioned, the current state of the API is very much Work in Progress (WIP). The framework is to some degree functional and can be played with. Current *implemented* features are:
