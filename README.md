@@ -21,7 +21,8 @@ zig build test
 zig build run-game-of-life 
 
 ```
-
+// TODO: update readme
+// TODO: update compile errors in meta
 ## Features
 
 As mentioned, the current state of the API is very much Work in Progress (WIP). The framework is to some degree functional and can be played with. Current *implemented* features are:
@@ -30,8 +31,9 @@ As mentioned, the current state of the API is very much Work in Progress (WIP). 
 Zig's comptime feature is utilized to perform static reflection on the usage of the API to validate usage and report useful messages to the user (in theory :)). 
 
 ```zig
-var world = try ecez.WorldBuilder().WithComponents(.{
-        // register your game components using WithComponents
+    // The Storage simple store entites and their components 
+    // It also expose the query API
+    const Storage = ecez.CreateStorage(.{
         Health, 
         Attributes,
         Chest,
@@ -39,24 +41,42 @@ var world = try ecez.WorldBuilder().WithComponents(.{
         Blunt,
         Sharp,
         // ...
-    }).WithEvents(.{
-        Event("update_loop", .{
-            // register your game systems using WithSystems
-            // Here AttackSystems is a struct with multiple functions which will be registered
-            AttackSystems,
-            // moveSystem is a single function that will be registered 
-            moveSystem,
-            // ...
-        }, .{}),
-        Event("on_mouse_click", .{fireWandSystem}, .{MouseArg})
-    }).init(allocator, .{});
+    }, .{});
 
-world.triggerEvent(.update_loop, .{}, .{});
+    // Scheduler can dispatch systems multithreaded
+    const Scheduler = ecez.CreateScheduler(
+        Storage,
+        .{
+            ecez.Event("update_loop", .{
+                // Here AttackSystems is a struct with multiple functions which will be registered
+                AttackSystems,
+                // moveSystem is a single function that will be registered 
+                moveSystem,
+                // ...
+            }, .{}),
+            ecez.Event("on_mouse_click", .{fireWandSystem}, .{MouseArg}),
+        },
+    )
 
-// Trigger event can take event "scoped" arguments, like here where we include a mouse event.
-// Events can also exclude components when executing systems. In this example we will not call
-// "fireWandSystem" on any entity components if the entity has a MonsterTag component.
-world.triggerEvent(.on_mouse_click, .{@as(MouseArg, mouse)}, .{ MonsterTag });
+    var storage = try Storage.init(testing.allocator, .{});
+    defer storage.deinit();
+
+    var scheduler = Scheduler.init(&storage);
+    defer scheduler.deinit();
+
+    scheduler.dispatchEvent(.update_loop, .{}, .{});
+
+    // Dispatch event can take event "scoped" arguments, like here where we include a mouse event.
+    // Events can also exclude components when executing systems. In this example we will not call
+    // "fireWandSystem" on any entity components if the entity has a MonsterTag component.
+    scheduler.dispatchEvent(.on_mouse_click, .{@as(MouseArg, mouse)}, .{ MonsterTag });
+
+    // Events/Systems execute asynchronously
+    // You can wait on specific events ...
+    scheduler.waitEvent(.update_loop);
+    scheduler.waitEvent(.on_mouse_click);
+    // .. or all events
+    scheduler.waitIdle();
 
 ```
 
@@ -75,35 +95,50 @@ Example of EventArgument
     const MouseMove = struct { x: u32, y: u32,  };
     const OnMouseMove = struct {
         // We see the argument annotated by EventArgument which hints ecez that this will be supplied on trigger
-        pub fn system(thing: *ThingThatCares, mouse: EventArgument(MouseMove)) void {
+        pub fn system(thing: *ThingThatCares, mouse: ecez.EventArgument(MouseMove)) void {
             thing.value = mouse.x + mouse.y;
         }
     };
 
-    var world = try WorldBuilder().WithComponents(...).WithEvents(.{
-        // We include the inner type of the EventArgument when we register the event
-        Event("onMouseMove", .{OnMouseMove}, MouseMove),
-    }).init(testing.allocator, .{});
-
-    // register some entities with ThingThatCares component ...
+    const Scheduler = ecez.CreateScheduler(
+        Storage,
+        .{
+            // We include the inner type of the EventArgument when we register the event
+            ecez.Event("onMouseMove", .{OnMouseMove}, MouseMove),
+        },
+    )
+    
+    // ...
 
     // As the event is triggered we supply event specific data
-    world.triggerEvent(.onMouseMove, MouseMove{ .x = 40, .y = 2 }, .{});
+    scheduler.dispatchEvent(.onMouseMove, MouseMove{ .x = 40, .y = 2 }, .{});
 ```
 
 Example of SharedState
 ```zig
     const OnKill = struct {
-        pub fn system(health: Health, kill_counter: *SharedState(KillCounter)) void {
+        pub fn system(health: Health, kill_counter: *ecez.SharedState(KillCounter)) void {
             health = 0;
             kill_counter.count += 1;
         }
     };
 
-    const World = try WorldBuilder().WithComponents(...).WithEvents(.{
-        // We include the inner type of the EventArgument when we register the event
-        Event("onKill", .{OnKill}, .{}),
-    });
+    const Storage = ecez.CreateStorage(
+        .{
+            // ... Components
+        },
+        .{
+            KillCounter,
+        }
+    )
+    const Scheduler = ecez.CreateScheduler(
+        Storage,
+        .{
+            ecez.Event("onKill", .{OnKill}, .{}),
+        }
+    );
+
+    var storage = try Storage.init(allocator, .{KillCounter{ .value = 0 }});
 ```
 
 Example of Entity
@@ -121,8 +156,8 @@ Both SharedState and EventArgument can be mutable by using a pointer
 #### System restrictions
 
 There are some restrictions to how you can define systems:
- * If the system takes the current entity argument, then the entity must be the *first* argument
- * Components must come *before* special arguments (event data and shared data, but not entity)
+ * If the system takes the current entity argument, then the **entity must be the first argument**
+ * **Components must come before special arguments** (event data and shared data, but not entity)
     * Event data and shared data must come *after* any component or entity argument
 
 ### Implicit multithreading of systems
@@ -132,28 +167,25 @@ You can use the ``DependOn`` function to communicate order of system execution.
 
 #### Example:
 ```zig
-var world = try ecez.WorldBuilder().WithComponents(.{
-        Drag,
-        Velocity,
-        Position,
-        HelloWorldMsg,
-        // ...
-    }).WithEvents(.{
-        Event("update_loop", .{
-            // here we see that 'calculateDamage', 'printHelloWorld' and 'applyDrag'
-            // can be executed in parallel
-            Systems.calculateDamage,
-            Systems.printHelloWorld,
-            // Apply drag reduce velocity over time
-            Systems.applyDrag,
-            // Move moves all entities with a Postion and Velocity component. 
-            // We need to make sure any drag has been applied 
-            // to a velocity before applying velocity to the position. 
-            // We also have to make sure that a new "hello world" is visible in the 
-            // terminal as well because why not :)                       
-            DependOn(Systems.move, .{Systems.applyDrag, Systems.printHelloWorld})      
-        }, .{})
-    }).init(allocator, .{});
+    const Scheduler = ecez.CreateScheduler(
+        Storage,
+        .{
+            ecez.Event("update_loop", .{
+                // here we see that 'calculateDamage', 'printHelloWorld' and 'applyDrag'
+                // can be executed in parallel
+                Systems.calculateDamage,
+                Systems.printHelloWorld,
+                // Apply drag reduce velocity over time
+                Systems.applyDrag,
+                // Move moves all entities with a Postion and Velocity component. 
+                // We need to make sure any drag has been applied 
+                // to a velocity before applying velocity to the position. 
+                // We also have to make sure that a new "hello world" is visible in the 
+                // terminal as well because why not :)                       
+                ecez.DependOn(Systems.move, .{Systems.applyDrag, Systems.printHelloWorld}),
+            }, .{}),
+        },
+    );
 ```
 
 
@@ -191,7 +223,7 @@ You can query the api instance for all components of certain type and filter out
 #### Example
 
 ```zig
-const World = ecez.WorldBuilder().WithComponents(.{
+const Storage = ecez.CreateStorage(.{
     Monsters,
     HappyTag,
     SadTag,
@@ -199,19 +231,19 @@ const World = ecez.WorldBuilder().WithComponents(.{
     SickTag,
     HealthyTag
     // ...
-});
+}, .{});
 
-var world = try World.init(allocator, .{});
-// .. some construction of your world entites
+var storage = try Storage.init(allocator, .{});
 
-const include = ecez.query.include;
+// .. some construction of your entites
+
+const include = ecez.include;
 
 // we want to iterate over all Monsters, HappyTag and HealthyTag components grouped by entity,
 // we filter out all monsters that might have the previously mentioned components if they also have 
 // a SadTag or SickTag attached to the same entity
-const include_entity_id = false;
-var happy_healhy_monster_iter = try World.Query(
-    include_entity_id,
+var happy_healhy_monster_iter = Storage.Query(
+    .exclude_entity,
     // notice that Monster components will be mutable through pointer semantics
     .{
         // these are our include types
@@ -221,7 +253,7 @@ var happy_healhy_monster_iter = try World.Query(
     },
     // these are our exclude types
     .{SadTag, SickTag}
-).submit(world, std.testing.allocator);
+).submit(world);
 
 while (happy_healhy_monster_iter.next()) |happy_healhy_monster| {
     // these monsters are not sick or sad so they become more happy :)
