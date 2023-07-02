@@ -31,8 +31,7 @@ As mentioned, the current state of the API is very much Work in Progress (WIP). 
 Zig's comptime feature is utilized to perform static reflection on the usage of the API to validate usage and report useful messages to the user (in theory :)). 
 
 ```zig
-    // The Storage simple store entites and their components 
-    // It also expose the query API
+    // The Storage simply store entites and their components and expose a query API
     const Storage = ecez.CreateStorage(.{
         Health, 
         Attributes,
@@ -43,7 +42,7 @@ Zig's comptime feature is utilized to perform static reflection on the usage of 
         // ...
     }, .{});
 
-    // Scheduler can dispatch systems multithreaded
+    // Scheduler can dispatch systems on multiple threads
     const Scheduler = ecez.CreateScheduler(
         Storage,
         .{
@@ -94,7 +93,8 @@ Example of EventArgument
 ```zig
     const MouseMove = struct { x: u32, y: u32,  };
     const OnMouseMove = struct {
-        // We see the argument annotated by EventArgument which hints ecez that this will be supplied on trigger
+        // We see the argument annotated by EventArgument 
+        // which hints ecez that this will be supplied on dispatch
         pub fn system(thing: *ThingThatCares, mouse: ecez.EventArgument(MouseMove)) void {
             thing.value = mouse.x + mouse.y;
         }
