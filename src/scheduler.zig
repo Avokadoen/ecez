@@ -320,7 +320,6 @@ pub fn CreateScheduler(
                                         }
                                     },
                                     .entity => arguments[j] = entities[inner_index],
-                                    .query_value => arguments[j] = Param.init(self_job.storage.container.archetypes.items, self_job.storage.container.tree),
                                     .query_ptr => {
                                         const Iter = @typeInfo(Param).Pointer.child;
                                         var iter = Iter.init(self_job.storage.container.archetypes.items, self_job.storage.container.tree);

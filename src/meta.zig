@@ -201,7 +201,7 @@ pub const CommonSystem = struct {
         has_entity_argument: bool,
     };
     fn parseParams(
-        function_name: [:0]const u8,
+        comptime function_name: [:0]const u8,
         comptime param_categories: []ParamCategory,
         comptime param_types: []const type,
     ) ParseParamResult {
@@ -209,11 +209,9 @@ pub const CommonSystem = struct {
             component_parsing,
             special_arguments,
         };
+        const ValueOrPtr = enum { value, ptr };
         const SetParsingState = struct {
-            shared_state: ParamCategory,
-            event_argument: ParamCategory,
-            component: ParamCategory,
-            query_iter: ParamCategory,
+            set: ValueOrPtr,
             type: type,
         };
 
@@ -223,7 +221,7 @@ pub const CommonSystem = struct {
         };
 
         var parsing_state: ParsingState = .component_parsing;
-        for (param_categories, param_types, 0..) |*param, T, i| {
+        inline for (param_categories, param_types, 0..) |*param, T, i| {
             if (i == 0 and T == Entity) {
                 param.* = ParamCategory.entity;
                 result.has_entity_argument = true;
@@ -236,8 +234,7 @@ pub const CommonSystem = struct {
             const parse_set_states: SetParsingState = parse_set_state_blk: {
                 switch (@typeInfo(T)) {
                     .Pointer => |pointer| {
-                        // we enforce struct arguments because it is easier to identify requested data while
-                        // mainting type safety
+                        // enforce struct arguments because it is easier to identify requested data
                         if (@typeInfo(pointer.child) != .Struct) {
                             const err_msg = std.fmt.comptimePrint("system {s} argument {d} must point to a struct", .{
                                 function_name,
@@ -247,18 +244,12 @@ pub const CommonSystem = struct {
                         }
 
                         break :parse_set_state_blk SetParsingState{
-                            .shared_state = ParamCategory.shared_state_ptr,
-                            .event_argument = ParamCategory.event_argument_ptr,
-                            .component = ParamCategory.component_ptr,
-                            .query_iter = ParamCategory.query_ptr,
+                            .set = ValueOrPtr.ptr,
                             .type = pointer.child,
                         };
                     },
                     .Struct => break :parse_set_state_blk SetParsingState{
-                        .shared_state = ParamCategory.shared_state_value,
-                        .event_argument = ParamCategory.event_argument_value,
-                        .component = ParamCategory.component_value,
-                        .query_iter = ParamCategory.query_value,
+                        .set = ValueOrPtr.value,
                         .type = T,
                     },
                     else => @compileError(std.fmt.comptimePrint("system {s} argument {d} is not a struct", .{
@@ -269,27 +260,37 @@ pub const CommonSystem = struct {
             };
 
             // check if we are currently parsing a special argument and register any
-            const assigned_special_argument = special_parse_blk: {
+            const assigned_special_argument = comptime special_parse_blk: {
                 switch (getSepcialArgument(parse_set_states.type)) {
                     .shared_state => {
-                        param.* = parse_set_states.shared_state;
+                        param.* = if (parse_set_states.set == .value)
+                            .shared_state_value
+                        else
+                            .shared_state_ptr;
+
                         parsing_state = .special_arguments;
                         break :special_parse_blk true;
                     },
                     .event => {
-                        param.* = parse_set_states.event_argument;
+                        param.* = if (parse_set_states.set == .value)
+                            .event_argument_value
+                        else
+                            .event_argument_ptr;
+
                         parsing_state = .special_arguments;
                         break :special_parse_blk true;
                     },
                     .query_iter => {
-                        param.* = parse_set_states.query_iter;
+                        if (parse_set_states.set == .value) {
+                            @compileError("Query iterator must be mutable (hint: use pointer '*')");
+                        }
+
+                        param.* = ParamCategory.query_ptr;
                         parsing_state = .special_arguments;
                         break :special_parse_blk true;
                     },
                     .query => @compileError("Query is not legal, use Query.Iter instead"),
-                    .presumed_component => {
-                        break :special_parse_blk false;
-                    },
+                    .presumed_component => break :special_parse_blk false,
                 }
             };
 
@@ -311,7 +312,10 @@ pub const CommonSystem = struct {
                 }
 
                 result.component_params_count += 1;
-                param.* = parse_set_states.component;
+                param.* = if (parse_set_states.set == .value)
+                    .component_value
+                else
+                    .component_ptr;
             }
         }
 
