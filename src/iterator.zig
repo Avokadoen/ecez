@@ -139,6 +139,29 @@ pub fn FromTypes(
             return item;
         }
 
+        pub fn skip(self: *Iterator, skip_items: u32) void {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.iterator);
+            defer zone.End();
+
+            for (0..skip_items) |_| {
+                // check if inner iteration is complete
+                while (self.inner_cursor >= self.storage_buffer.inner_len) {
+                    if (self.tree.iterate(include_bitmap, exclude_bitmap, &self.tree_cursor)) |next_archetype_index| {
+                        self.inner_cursor = 0;
+                        self.storage_buffer.outer = &self.outer_storage_buffer;
+                        self.all_archetypes[next_archetype_index].getStorageData(&self.storage_buffer, include_bitmap);
+
+                        if (include_entity == true) {
+                            self.entities = self.all_archetypes[next_archetype_index].entities.keys();
+                        }
+                    } else {
+                        return;
+                    }
+                }
+                self.inner_cursor += 1;
+            }
+        }
+
         pub fn reset(self: *Iterator) void {
             self.storage_buffer.inner_len = 0;
             self.inner_cursor = 0;
@@ -419,5 +442,77 @@ test "reset moves iterator to start" {
             i += 1;
         }
         try testing.expectEqual(iter.next(), null);
+    }
+}
+
+test "skip moves iterator to requested entry" {
+    var tree = try TestTree.init(testing.allocator, 12);
+    defer tree.deinit();
+
+    tree.appendChain(@as(u32, 0), Testing.Bits.A | Testing.Bits.B) catch unreachable;
+    tree.appendChain(@as(u32, 1), Testing.Bits.All) catch unreachable;
+
+    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
+    var archetypes: [2]TestOpaqueArchetype = .{
+        TestOpaqueArchetype.init(testing.allocator, Testing.Bits.A | Testing.Bits.B) catch unreachable,
+        TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All) catch unreachable,
+    };
+    defer {
+        for (&archetypes) |*archetype| {
+            archetype.deinit();
+        }
+    }
+
+    var data: [3][]const u8 = undefined;
+    for (0..100) |i| {
+        const a = A{ .value = @as(u32, @intCast(i)) };
+        const b = B{ .value = @as(u8, @intCast(i)) };
+        data[0] = std.mem.asBytes(&a);
+        data[1] = std.mem.asBytes(&b);
+        try archetypes[0].registerEntity(
+            Entity{ .id = @as(entity_type.EntityId, @intCast(i)) },
+            data[0..2],
+            sizes,
+        );
+    }
+
+    for (100..200) |i| {
+        const a = A{ .value = @as(u32, @intCast(i)) };
+        const b = B{ .value = @as(u8, @intCast(i)) };
+        data[0] = std.mem.asBytes(&a);
+        data[1] = std.mem.asBytes(&b);
+        data[2] = &[0]u8{};
+        try archetypes[1].registerEntity(
+            Entity{ .id = @as(entity_type.EntityId, @intCast(i)) },
+            data[0..3],
+            sizes,
+        );
+    }
+
+    {
+        const A_Iterator = FromTypes(
+            false,
+            &[_][]const u8{"a"},
+            &[_]type{A},
+            Testing.Bits.A,
+            Testing.Bits.None,
+            TestOpaqueArchetype,
+            TestTree,
+        );
+        var iter = A_Iterator.init(&archetypes, tree);
+
+        iter.skip(50);
+
+        {
+            const item_50th = iter.next().?;
+            try testing.expectEqual(Testing.Component.A{ .value = 50 }, item_50th.a);
+        }
+
+        iter.skip(100);
+        {
+            const item_151th = iter.next().?;
+            // 50 + 1 (call to next) + 100 = 151
+            try testing.expectEqual(Testing.Component.A{ .value = 151 }, item_151th.a);
+        }
     }
 }
