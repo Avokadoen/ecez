@@ -278,6 +278,7 @@ pub fn CreateScheduler(
                         .outer = &storage_buffer,
                     };
 
+                    var system_invocation_count = meta.InvocationNumber{ .number = 0 };
                     var tree_cursor = Storage.Container.BinaryTree.IterCursor.fromRoot();
                     tree_iter_loop: while (self_job.storage.container.tree.iterate(
                         include_bitmask,
@@ -288,6 +289,8 @@ pub fn CreateScheduler(
 
                         const entities = self_job.storage.container.archetypes.items[archetype_index].entities.keys();
                         for (0..storage.inner_len) |inner_index| {
+                            defer system_invocation_count.number += 1;
+
                             inline for (
                                 param_types,
                                 comptime metadata.paramCategories(),
@@ -325,6 +328,7 @@ pub fn CreateScheduler(
                                         var iter = Iter.init(self_job.storage.container.archetypes.items, self_job.storage.container.tree);
                                         arguments[j] = &iter;
                                     },
+                                    .invocation_number_value => arguments[j] = system_invocation_count,
                                     .event_argument_value => arguments[j] = @as(*meta.EventArgument(ExtraArgumentType), @ptrCast(&self_job.extra_argument)).*,
                                     .event_argument_ptr => arguments[j] = @as(*meta.EventArgument(extra_argument_child_type), @ptrCast(self_job.extra_argument)),
                                     .shared_state_value => arguments[j] = self_job.storage.getSharedStateWithOuterType(Param),
@@ -364,6 +368,7 @@ const Event = meta.Event;
 const SharedState = meta.SharedState;
 const DependOn = meta.DependOn;
 const EventArgument = meta.EventArgument;
+const InvocationNumber = meta.InvocationNumber;
 
 // TODO: we cant use tuples here because of https://github.com/ziglang/zig/issues/12963
 const AEntityType = Testing.Archetype.A;
@@ -1017,6 +1022,38 @@ test "event can request two queries without components" {
         Testing.Component.A{ .value = pass_value },
         try storage.getComponent(entity, Testing.Component.A),
     );
+}
+
+test "event can access invocation number" {
+    const SystemStruct = struct {
+        pub fn eventSystem(a: *Testing.Component.A, invocation_number: InvocationNumber) void {
+            a.value = @intCast(invocation_number.number);
+        }
+    };
+
+    var storage = try StorageStub.init(testing.allocator, .{});
+    defer storage.deinit();
+
+    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct.eventSystem}, .{Testing.Component.A})}).init(&storage);
+    defer scheduler.deinit();
+
+    var entities: [100]Entity = undefined;
+    for (&entities) |*entity| {
+        const initial_state = AEntityType{
+            .a = Testing.Component.A{ .value = 0 },
+        };
+        entity.* = try storage.createEntity(initial_state);
+    }
+
+    scheduler.dispatchEvent(.onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
+
+    for (entities, 0..) |entity, index| {
+        try testing.expectEqual(
+            Testing.Component.A{ .value = @intCast(index) },
+            try storage.getComponent(entity, Testing.Component.A),
+        );
+    }
 }
 
 // NOTE: we don't use a cache anymore, but the test can stay for now since it might be good for

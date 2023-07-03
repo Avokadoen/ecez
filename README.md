@@ -85,6 +85,7 @@ Systems can have arguments that have a unique semantical meaning:
  * EventArgument - data that is relevant to an triggered event
  * SharedState - data that is global to the world instance
  * Queries - the same queries described [below](#queries)
+ * InvocationNumber - how many times the system has been executed for the current dispatch
 
  ##### Examples 
 
@@ -176,6 +177,16 @@ Example of Query
         }
     };
 ```
+
+Example of InvocationNumber
+```zig
+    const System = struct {
+        pub fn system(count: InvocationNumber, health: Health) void {
+            // ...
+        }
+    };
+```
+
 
 You can have multiple queries in a single system, and have systems with only query parameters.
 

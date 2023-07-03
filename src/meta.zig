@@ -17,10 +17,11 @@ pub const ReturnCommand = enum {
 };
 
 pub const ArgType = enum {
-    presumed_component,
-    query_iter,
-    query,
     event,
+    invocation_number,
+    presumed_component,
+    query,
+    query_iter,
     shared_state,
 };
 
@@ -89,10 +90,10 @@ pub const CommonSystem = struct {
         component_ptr,
         component_value,
         entity,
-        query_ptr,
-        query_value,
         event_argument_ptr,
         event_argument_value,
+        invocation_number_value,
+        query_ptr,
         shared_state_ptr,
         shared_state_value,
     };
@@ -277,6 +278,16 @@ pub const CommonSystem = struct {
                         else
                             .event_argument_ptr;
 
+                        parsing_state = .special_arguments;
+                        break :special_parse_blk true;
+                    },
+                    .invocation_number => {
+                        if (parse_set_states.set == .ptr) {
+                            // TODO: should this be allowed?
+                            @compileError("invocation number can't be mutated by system");
+                        }
+
+                        param.* = ParamCategory.invocation_number_value;
                         parsing_state = .special_arguments;
                         break :special_parse_blk true;
                     },
@@ -991,6 +1002,11 @@ pub fn SharedState(comptime State: type) type {
         .is_tuple = state_info.is_tuple,
     } });
 }
+
+pub const InvocationNumber = struct {
+    comptime secret_field: ArgType = .invocation_number,
+    number: u64,
+};
 
 /// This function will mark a type as event data
 pub fn EventArgument(comptime Argument: type) type {
