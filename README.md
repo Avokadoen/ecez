@@ -181,7 +181,7 @@ Example of Query
 Example of InvocationNumber
 ```zig
     const System = struct {
-        pub fn system(count: InvocationNumber, health: Health) void {
+        pub fn system(health: HealthComponent, count: InvocationNumber) void {
             // ...
         }
     };

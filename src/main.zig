@@ -13,6 +13,9 @@ pub const CreateScheduler = @import("scheduler.zig").CreateScheduler;
 /// A function can return this type in order to exit system execution early
 pub const ReturnCommand = meta.ReturnCommand;
 
+/// Special argument that tells the system how many times the system has been invoced before in current dispatch
+pub const InvocationNumber = meta.InvocationNumber;
+
 /// Mark a system as depending on another system in the same event
 pub const DependOn = meta.DependOn;
 
