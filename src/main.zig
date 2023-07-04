@@ -14,7 +14,7 @@ pub const CreateScheduler = @import("scheduler.zig").CreateScheduler;
 pub const ReturnCommand = meta.ReturnCommand;
 
 /// Special argument that tells the system how many times the system has been invoced before in current dispatch
-pub const InvocationNumber = meta.InvocationNumber;
+pub const InvocationCount = meta.InvocationCount;
 
 /// Mark a system as depending on another system in the same event
 pub const DependOn = meta.DependOn;

@@ -368,7 +368,7 @@ const Event = meta.Event;
 const SharedState = meta.SharedState;
 const DependOn = meta.DependOn;
 const EventArgument = meta.EventArgument;
-const InvocationNumber = meta.InvocationNumber;
+const InvocationCount = meta.InvocationCount;
 
 // TODO: we cant use tuples here because of https://github.com/ziglang/zig/issues/12963
 const AEntityType = Testing.Archetype.A;
@@ -1026,7 +1026,7 @@ test "event can request two queries without components" {
 
 test "event can access invocation number" {
     const SystemStruct = struct {
-        pub fn eventSystem(a: *Testing.Component.A, invocation_number: InvocationNumber) void {
+        pub fn eventSystem(a: *Testing.Component.A, invocation_number: InvocationCount) void {
             a.value = @intCast(invocation_number.number);
         }
     };

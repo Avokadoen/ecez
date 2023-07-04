@@ -1005,7 +1005,7 @@ pub fn SharedState(comptime State: type) type {
 
 /// Special system argument that tells the system how many times the
 /// system has been invoced before in current dispatch
-pub const InvocationNumber = struct {
+pub const InvocationCount = struct {
     comptime secret_field: ArgType = .invocation_number,
     number: u64,
 };
