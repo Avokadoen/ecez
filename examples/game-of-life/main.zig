@@ -12,9 +12,23 @@ pub const Color = struct {
 
 const spawn_threshold = 0.4;
 const characters_per_cell = 3;
-const grid_dimensions = 30;
-const cell_count = grid_dimensions * grid_dimensions;
-const new_lines = grid_dimensions;
+const dimension_x = 30;
+const dimension_y = 30;
+
+const Storage = ecez.CreateStorage(.{ GridPos, Health, LinePos, FlushTag }, .{ RenderTarget, GridConfig });
+
+const CellIter = Storage.Query(
+    .exclude_entity,
+    .{ecez.include("health", Health)},
+    .{},
+).Iter;
+
+const Scheduler = ecez.CreateScheduler(Storage, .{ecez.Event("loop", .{
+    renderCell,
+    renderLine,
+    ecez.DependOn(flushBuffer, .{ renderCell, renderLine }),
+    ecez.DependOn(tickCell, .{flushBuffer}),
+}, .{})});
 
 pub fn main() anyerror!void {
     ztracy.SetThreadName("main thread");
@@ -31,19 +45,17 @@ pub fn main() anyerror!void {
     const allocator = tracy_allocator.allocator();
 
     // initialize the output buffer on the stack
+    var output_buffer: [dimension_x * dimension_y * characters_per_cell + dimension_y]u8 = undefined;
     const render_target = RenderTarget{
-        .output_buffer = undefined,
+        .output_buffer = &output_buffer,
+    };
+    const grid_config = GridConfig{
+        .dimension_x = dimension_x,
+        .dimension_y = dimension_y,
+        .cell_count = dimension_x * dimension_y,
     };
 
-    const Storage = ecez.CreateStorage(.{ GridPos, Health, LinePos, FlushTag }, .{RenderTarget});
-    const Scheduler = ecez.CreateScheduler(Storage, .{ecez.Event("loop", .{
-        renderCell,
-        renderLine,
-        ecez.DependOn(flushBuffer, .{ renderCell, renderLine }),
-        ecez.DependOn(tickCell, .{flushBuffer}),
-    }, .{})});
-
-    var storage = try Storage.init(allocator, .{render_target});
+    var storage = try Storage.init(allocator, .{ render_target, grid_config });
     defer storage.deinit();
 
     var scheduler = Scheduler.init(&storage);
@@ -57,16 +69,11 @@ pub fn main() anyerror!void {
         const cell_create_zone = ztracy.ZoneNC(@src(), "Create Cells", Color.purple);
         defer cell_create_zone.End();
 
-        // Workaround issue https://github.com/ziglang/zig/issues/3915 by declaring a type for entity,
-        // should be valid to use createEntity(.{ Component1, Component2 }) in most cases ...
-        const Cell = std.meta.Tuple(&[_]type{ GridPos, Health });
-
-        var i: usize = 0;
-        while (i < cell_count) : (i += 1) {
-            _ = try storage.createEntity(Cell{
+        for (0..grid_config.cell_count) |i| {
+            _ = try storage.createEntity(.{
                 GridPos{
-                    .x = @intCast(i % grid_dimensions),
-                    .y = @intCast(i / grid_dimensions),
+                    .x = @intCast(i % grid_config.dimension_x),
+                    .y = @intCast(i / grid_config.dimension_x),
                 },
                 Health{ .alive = rng.random().float(f32) < spawn_threshold },
             });
@@ -78,10 +85,10 @@ pub fn main() anyerror!void {
         const line_create_zone = ztracy.ZoneNC(@src(), "Create New Lines", Color.green);
         defer line_create_zone.End();
 
-        const Line = std.meta.Tuple(&[_]type{LinePos});
-        var i: u8 = 1;
-        while (i <= new_lines) : (i += 1) {
-            _ = try storage.createEntity(Line{LinePos{ .nth = i }});
+        for (0..dimension_y) |i| {
+            _ = try storage.createEntity(.{
+                LinePos{ .nth = @intCast(i) },
+            });
         }
     }
 
@@ -103,7 +110,12 @@ pub fn main() anyerror!void {
 
 // Shared state
 const RenderTarget = struct {
-    output_buffer: [cell_count * characters_per_cell + new_lines]u8,
+    output_buffer: []u8,
+};
+pub const GridConfig = struct {
+    dimension_x: usize,
+    dimension_y: usize,
+    cell_count: usize,
 };
 
 // Components
@@ -120,7 +132,12 @@ const LinePos = struct {
 };
 const FlushTag = struct {};
 
-fn renderCell(pos: GridPos, health: Health, render_target: *ecez.SharedState(RenderTarget)) void {
+fn renderCell(
+    pos: GridPos,
+    health: Health,
+    render_target: *ecez.SharedState(RenderTarget),
+    grid_config: ecez.SharedState(GridConfig),
+) void {
     const zone = ztracy.ZoneNC(@src(), "Render Cell", Color.red);
     defer zone.End();
 
@@ -128,7 +145,7 @@ fn renderCell(pos: GridPos, health: Health, render_target: *ecez.SharedState(Ren
     const cell_y: usize = @intCast(pos.y);
 
     const new_line_count = cell_y;
-    const start: usize = (cell_x + (cell_y * grid_dimensions)) * characters_per_cell + new_line_count;
+    const start: usize = (cell_x + (cell_y * grid_config.dimension_x)) * characters_per_cell + new_line_count;
 
     if (health.alive) {
         const output = "[X]";
@@ -143,47 +160,93 @@ fn renderCell(pos: GridPos, health: Health, render_target: *ecez.SharedState(Ren
     }
 }
 
-fn renderLine(pos: LinePos, render_target: *ecez.SharedState(RenderTarget)) void {
+fn renderLine(
+    pos: LinePos,
+    render_target: *ecez.SharedState(RenderTarget),
+    grid_config: ecez.SharedState(GridConfig),
+) void {
     const zone = ztracy.ZoneNC(@src(), "Render newline", Color.turquoise);
     defer zone.End();
     const nth: usize = @intCast(pos.nth);
 
-    render_target.output_buffer[nth * grid_dimensions * characters_per_cell + nth - 1] = '\n';
+    render_target.output_buffer[nth * grid_config.dimension_x * characters_per_cell + nth - 1] = '\n';
 }
 
-fn flushBuffer(flush: FlushTag, render_target: ecez.SharedState(RenderTarget)) void {
+fn flushBuffer(
+    flush: FlushTag,
+    render_target: ecez.SharedState(RenderTarget),
+) void {
     const zone = ztracy.ZoneNC(@src(), "Flush buffer", Color.turquoise);
     defer zone.End();
 
     _ = flush;
-    std.debug.print("{s}\n", .{render_target.output_buffer});
-    std.debug.print("-" ** (grid_dimensions * characters_per_cell) ++ "\n", .{});
+    std.debug.print("{s}\n\n", .{render_target.output_buffer});
 }
 
-fn tickCell(pos: GridPos, health: *Health, render_target: ecez.SharedState(RenderTarget)) void {
+fn tickCell(
+    pos: GridPos,
+    health: *Health,
+    cell_iter: *CellIter,
+    invocation_id: ecez.InvocationCount,
+    grid_config: ecez.SharedState(GridConfig),
+) void {
     const zone = ztracy.ZoneNC(@src(), "Update Cell", Color.red);
     defer zone.End();
 
-    const cell_x: usize = @intCast(pos.x);
-    const cell_y: usize = @intCast(pos.y);
+    const cell_x: i32 = @intCast(pos.x);
+    const cell_y: i32 = @intCast(pos.y);
 
-    // again here we have to cheat by reading the output buffer
-    const new_line_count = cell_y;
-    const start = (cell_x + (cell_y * grid_dimensions)) * characters_per_cell + new_line_count + 1;
+    const index = cell_x + (cell_y * @as(i32, @intCast(grid_config.dimension_x)));
+    std.debug.assert(invocation_id.number == @as(u64, @intCast(index)));
 
-    const up = -@as(i32, @intCast(grid_dimensions * characters_per_cell + 1));
+    const up = -@as(i32, @intCast(grid_config.dimension_x));
+    const left = -1;
+    const right = -left;
     const down = -up;
-    const left = -characters_per_cell;
-    const right = characters_per_cell;
 
-    var index: i32 = @intCast(start);
     var neighbour_sum: u8 = 0;
-    for ([_]i32{ left, up, right, right, down, down, left, left }) |delta| {
-        index += delta;
-        if (index > 0 and index < render_target.output_buffer.len) {
-            if (render_target.output_buffer[@intCast(index)] == 'X') {
+
+    // check left neighbours
+    if (cell_x > 0) {
+        var cursor = index - left;
+        for ([_]i32{ down, up, up }) |offset| {
+            cursor += offset;
+            if (cursor >= 0 and cursor < grid_config.cell_count) {
+                cell_iter.skip(@intCast(cursor));
+                const neighbour_health = cell_iter.next().?.health;
+                if (neighbour_health.alive) {
+                    neighbour_sum += 1;
+                }
+                cell_iter.reset();
+            }
+        }
+    }
+
+    // check right neighbours
+    if (cell_x < grid_config.dimension_x - 1) {
+        var cursor = index - right;
+        for ([_]i32{ down, up, up }) |offset| {
+            cursor += offset;
+            if (cursor >= 0 and cursor < grid_config.cell_count) {
+                cell_iter.skip(@intCast(cursor));
+                const neighbour_health = cell_iter.next().?.health;
+                if (neighbour_health.alive) {
+                    neighbour_sum += 1;
+                }
+                cell_iter.reset();
+            }
+        }
+    }
+
+    // check up & down neighbours
+    for ([_]i32{ index + up, index + down }) |cursor| {
+        if (cursor >= 0 and cursor < grid_config.cell_count) {
+            cell_iter.skip(@intCast(cursor));
+            const neighbour_health = cell_iter.next().?.health;
+            if (neighbour_health.alive) {
                 neighbour_sum += 1;
             }
+            cell_iter.reset();
         }
     }
 
@@ -196,4 +259,55 @@ fn tickCell(pos: GridPos, health: *Health, render_target: ecez.SharedState(Rende
             break :blk false;
         }
     };
+}
+
+test "systems produce expected grid state" {
+    var output_buffer: [3 * 3]u8 = undefined;
+    // initialize the output buffer on the stack
+    const render_target = RenderTarget{
+        .output_buffer = &output_buffer,
+    };
+    const grid_config = GridConfig{
+        .dimension_x = 3,
+        .dimension_y = 3,
+        .cell_count = 3 * 3,
+    };
+
+    var storage = try Storage.init(std.testing.allocator, .{ render_target, grid_config });
+    defer storage.deinit();
+
+    var scheduler = Scheduler.init(&storage);
+    defer scheduler.deinit();
+
+    var cell_entities: [3 * 3]ecez.Entity = undefined;
+    for ([_]bool{
+        true,  false, true,
+        false, false, false,
+        true,  false, true,
+    }, &cell_entities, 0..) |alive, *entity, i| {
+        entity.* = try storage.createEntity(.{
+            GridPos{
+                .x = @intCast(i % grid_config.dimension_x),
+                .y = @intCast(i / grid_config.dimension_x),
+            },
+            Health{ .alive = alive },
+        });
+    }
+
+    for (0..grid_config.dimension_y) |i| {
+        _ = try storage.createEntity(.{
+            LinePos{ .nth = @intCast(i) },
+        });
+    }
+
+    scheduler.dispatchEvent(.loop, .{}, .{});
+    scheduler.waitEvent(.loop);
+
+    for ([_]bool{
+        false, true,  false,
+        false, false, false,
+        false, true,  false,
+    }, &cell_entities) |alive, entity| {
+        try std.testing.expectEqual(alive, (try storage.getComponent(entity, Health)).alive);
+    }
 }
