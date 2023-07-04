@@ -76,6 +76,14 @@ pub const SystemMetadata = union(SystemType) {
         }
     }
 
+    pub fn hasInvocationCount(comptime self: SystemMetadata) bool {
+        switch (self) {
+            .common => |common| return common.has_invocation_count_argument,
+            .depend_on => |depend_on| return depend_on.common.has_invocation_count_argument,
+            .event => @compileError("ecez library bug, please file a issue if you hit this error"),
+        }
+    }
+
     pub fn returnSystemCommand(comptime self: SystemMetadata) bool {
         switch (self) {
             .common => |common| return common.returns_system_command,
@@ -103,6 +111,7 @@ pub const CommonSystem = struct {
     param_category_buffer: [max_params]ParamCategory,
     param_categories: []const ParamCategory,
     has_entity_argument: bool,
+    has_invocation_count_argument: bool,
     returns_system_command: bool,
 
     /// initalize metadata for a system using a supplied function type info
@@ -163,6 +172,7 @@ pub const CommonSystem = struct {
             .param_category_buffer = param_category_buffer,
             .param_categories = param_categories,
             .has_entity_argument = parse_result.has_entity_argument,
+            .has_invocation_count_argument = parse_result.has_invocation_count_argument,
             .returns_system_command = returns_system_command,
         };
     }
@@ -200,6 +210,7 @@ pub const CommonSystem = struct {
     const ParseParamResult = struct {
         component_params_count: usize,
         has_entity_argument: bool,
+        has_invocation_count_argument: bool,
     };
     fn parseParams(
         comptime function_name: [:0]const u8,
@@ -219,6 +230,7 @@ pub const CommonSystem = struct {
         var result = ParseParamResult{
             .component_params_count = 0,
             .has_entity_argument = false,
+            .has_invocation_count_argument = false,
         };
 
         var parsing_state: ParsingState = .component_parsing;
@@ -288,6 +300,7 @@ pub const CommonSystem = struct {
                         }
 
                         param.* = ParamCategory.invocation_number_value;
+                        result.has_invocation_count_argument = true;
                         parsing_state = .special_arguments;
                         break :special_parse_blk true;
                     },

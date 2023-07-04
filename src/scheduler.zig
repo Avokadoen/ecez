@@ -278,7 +278,7 @@ pub fn CreateScheduler(
                         .outer = &storage_buffer,
                     };
 
-                    var system_invocation_count = meta.InvocationNumber{ .number = 0 };
+                    var system_invocation_count = comptime if (metadata.hasInvocationCount()) meta.InvocationCount{ .number = 0 } else {};
                     var tree_cursor = Storage.Container.BinaryTree.IterCursor.fromRoot();
                     tree_iter_loop: while (self_job.storage.container.tree.iterate(
                         include_bitmask,
@@ -289,7 +289,9 @@ pub fn CreateScheduler(
 
                         const entities = self_job.storage.container.archetypes.items[archetype_index].entities.keys();
                         for (0..storage.inner_len) |inner_index| {
-                            defer system_invocation_count.number += 1;
+                            defer {
+                                if (comptime metadata.hasInvocationCount()) system_invocation_count.number += 1;
+                            }
 
                             inline for (
                                 param_types,
