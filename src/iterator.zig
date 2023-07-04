@@ -63,7 +63,8 @@ pub fn FromTypes(
 
         inner_cursor: usize = 0,
 
-        /// Initialize an ``iterator``
+        /// **This is called by ecez automically**
+        ///  Initialize an ``iterator``,
         pub fn init(all_archetypes: []OpaqueArchetype, tree: BinaryTree) Iterator {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.iterator);
             defer zone.End();
