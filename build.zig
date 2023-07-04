@@ -116,6 +116,7 @@ pub fn build(b: *std.Build) void {
         });
         example_tests.addModule("ecez", ecez_module);
 
+        example_tests.addModule("ztracy", ztracy_package.module);
         ztracy.link(example_tests, .{ .enable_ztracy = enable_tracy });
         test_step.dependOn(&example_tests.step);
     }
