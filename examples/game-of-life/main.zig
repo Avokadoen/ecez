@@ -70,12 +70,16 @@ pub fn main() anyerror!void {
         defer cell_create_zone.End();
 
         for (0..grid_config.cell_count) |i| {
+            const alive = rng.random().float(f32) < spawn_threshold;
             _ = try storage.createEntity(.{
                 GridPos{
                     .x = @intCast(i % grid_config.dimension_x),
                     .y = @intCast(i / grid_config.dimension_x),
                 },
-                Health{ .alive = rng.random().float(f32) < spawn_threshold },
+                Health{
+                    .alive = [_]bool{ alive, alive },
+                    .active_cell_index = 0,
+                },
             });
         }
     }
@@ -85,7 +89,7 @@ pub fn main() anyerror!void {
         const line_create_zone = ztracy.ZoneNC(@src(), "Create New Lines", Color.green);
         defer line_create_zone.End();
 
-        for (0..dimension_y) |i| {
+        for (1..dimension_y + 1) |i| {
             _ = try storage.createEntity(.{
                 LinePos{ .nth = @intCast(i) },
             });
@@ -124,7 +128,10 @@ const GridPos = packed struct {
     y: u8,
 };
 const Health = struct {
-    alive: bool,
+    // We must store two health values per cell so that only previous cell state affect
+    // neighbouring cells
+    alive: [2]bool,
+    active_cell_index: u2,
 };
 // new line line component
 const LinePos = struct {
@@ -147,7 +154,8 @@ fn renderCell(
     const new_line_count = cell_y;
     const start: usize = (cell_x + (cell_y * grid_config.dimension_x)) * characters_per_cell + new_line_count;
 
-    if (health.alive) {
+    const alive = health.alive[health.active_cell_index];
+    if (alive) {
         const output = "[X]";
         inline for (output, 0..) |o, i| {
             render_target.output_buffer[start + i] = o;
@@ -196,63 +204,73 @@ fn tickCell(
     const cell_x: i32 = @intCast(pos.x);
     const cell_y: i32 = @intCast(pos.y);
 
-    const index = cell_x + (cell_y * @as(i32, @intCast(grid_config.dimension_x)));
-    std.debug.assert(invocation_id.number == @as(u64, @intCast(index)));
+    const current_index = cell_x + (cell_y * @as(i32, @intCast(grid_config.dimension_x)));
+    std.debug.assert(invocation_id.number == @as(u64, @intCast(current_index)));
 
     const up = -@as(i32, @intCast(grid_config.dimension_x));
     const left = -1;
     const right = -left;
     const down = -up;
 
+    const neighbour_index: usize = @intCast((health.active_cell_index + 1) % 2);
+    const write_index: usize = @intCast(health.active_cell_index);
+    defer health.active_cell_index = @intCast(neighbour_index);
+
     var neighbour_sum: u8 = 0;
 
     // check left neighbours
     if (cell_x > 0) {
-        var cursor = index - left;
+        var cursor = current_index + left;
         for ([_]i32{ down, up, up }) |offset| {
             cursor += offset;
             if (cursor >= 0 and cursor < grid_config.cell_count) {
                 cell_iter.skip(@intCast(cursor));
+                defer cell_iter.reset();
+
                 const neighbour_health = cell_iter.next().?.health;
-                if (neighbour_health.alive) {
+                const alive = neighbour_health.alive[neighbour_index];
+                if (alive) {
                     neighbour_sum += 1;
                 }
-                cell_iter.reset();
             }
         }
     }
 
     // check right neighbours
     if (cell_x < grid_config.dimension_x - 1) {
-        var cursor = index - right;
+        var cursor = current_index + right;
         for ([_]i32{ down, up, up }) |offset| {
             cursor += offset;
             if (cursor >= 0 and cursor < grid_config.cell_count) {
                 cell_iter.skip(@intCast(cursor));
+                defer cell_iter.reset();
+
                 const neighbour_health = cell_iter.next().?.health;
-                if (neighbour_health.alive) {
+                const alive = neighbour_health.alive[neighbour_index];
+                if (alive) {
                     neighbour_sum += 1;
                 }
-                cell_iter.reset();
             }
         }
     }
 
     // check up & down neighbours
-    for ([_]i32{ index + up, index + down }) |cursor| {
+    for ([_]i32{ current_index + up, current_index + down }) |cursor| {
         if (cursor >= 0 and cursor < grid_config.cell_count) {
             cell_iter.skip(@intCast(cursor));
+            defer cell_iter.reset();
+
             const neighbour_health = cell_iter.next().?.health;
-            if (neighbour_health.alive) {
+            const alive = neighbour_health.alive[neighbour_index];
+            if (alive) {
                 neighbour_sum += 1;
             }
-            cell_iter.reset();
         }
     }
 
-    health.alive = blk: {
+    health.alive[write_index] = blk: {
         if (neighbour_sum == 2) {
-            break :blk health.alive;
+            break :blk health.alive[neighbour_index];
         } else if (neighbour_sum == 3) {
             break :blk true;
         } else {
@@ -261,8 +279,8 @@ fn tickCell(
     };
 }
 
-test "systems produce expected grid state" {
-    var output_buffer: [3 * 3]u8 = undefined;
+test "systems produce expected 3x3 grid state" {
+    var output_buffer: [3 * 3 * characters_per_cell + 3]u8 = undefined;
     // initialize the output buffer on the stack
     const render_target = RenderTarget{
         .output_buffer = &output_buffer,
@@ -279,35 +297,82 @@ test "systems produce expected grid state" {
     var scheduler = Scheduler.init(&storage);
     defer scheduler.deinit();
 
-    var cell_entities: [3 * 3]ecez.Entity = undefined;
-    for ([_]bool{
-        true,  false, true,
-        false, false, false,
-        true,  false, true,
-    }, &cell_entities, 0..) |alive, *entity, i| {
-        entity.* = try storage.createEntity(.{
-            GridPos{
-                .x = @intCast(i % grid_config.dimension_x),
-                .y = @intCast(i / grid_config.dimension_x),
-            },
-            Health{ .alive = alive },
-        });
-    }
-
-    for (0..grid_config.dimension_y) |i| {
+    for (1..grid_config.dimension_y + 1) |i| {
         _ = try storage.createEntity(.{
             LinePos{ .nth = @intCast(i) },
         });
     }
 
-    scheduler.dispatchEvent(.loop, .{}, .{});
-    scheduler.waitEvent(.loop);
+    var cell_entities: [3 * 3]ecez.Entity = undefined;
 
-    for ([_]bool{
-        false, true,  false,
-        false, false, false,
-        false, true,  false,
-    }, &cell_entities) |alive, entity| {
-        try std.testing.expectEqual(alive, (try storage.getComponent(entity, Health)).alive);
+    { // Still life: Block
+        for ([_]bool{
+            true,  true,  false,
+            true,  true,  false,
+            false, false, false,
+        }, &cell_entities, 0..) |alive, *entity, i| {
+            entity.* = try storage.createEntity(.{
+                GridPos{
+                    .x = @intCast(i % grid_config.dimension_x),
+                    .y = @intCast(i / grid_config.dimension_x),
+                },
+                Health{
+                    .alive = [_]bool{ alive, alive },
+                    .active_cell_index = 0,
+                },
+            });
+        }
+
+        scheduler.dispatchEvent(.loop, .{}, .{});
+        scheduler.waitEvent(.loop);
+
+        for ([_]bool{
+            true,  true,  false,
+            true,  true,  false,
+            false, false, false,
+        }, &cell_entities) |alive, entity| {
+            const health = try storage.getComponent(entity, Health);
+            try std.testing.expectEqual(alive, health.alive[0]);
+        }
+    }
+
+    { // Oscillator: blinker
+        const state_1 = [_]bool{
+            false, false, false,
+            true,  true,  true,
+            false, false, false,
+        };
+
+        const state_2 = [_]bool{
+            false, true, false,
+            false, true, false,
+            false, true, false,
+        };
+
+        for (&state_1, &cell_entities) |alive, entity| {
+            storage.setComponent(
+                entity,
+                Health{
+                    .alive = [_]bool{ alive, alive },
+                    .active_cell_index = 0,
+                },
+            ) catch unreachable;
+        }
+
+        scheduler.dispatchEvent(.loop, .{}, .{});
+        scheduler.waitEvent(.loop);
+
+        for (&state_2, &cell_entities) |alive, entity| {
+            const health = try storage.getComponent(entity, Health);
+            try std.testing.expectEqual(alive, health.alive[0]);
+        }
+
+        scheduler.dispatchEvent(.loop, .{}, .{});
+        scheduler.waitEvent(.loop);
+
+        for (&state_1, &cell_entities) |alive, entity| {
+            const health = try storage.getComponent(entity, Health);
+            try std.testing.expectEqual(alive, health.alive[1]);
+        }
     }
 }

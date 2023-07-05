@@ -118,7 +118,9 @@ pub fn build(b: *std.Build) void {
 
         example_tests.addModule("ztracy", ztracy_package.module);
         ztracy.link(example_tests, .{ .enable_ztracy = enable_tracy });
-        test_step.dependOn(&example_tests.step);
+
+        const example_test_run = b.addRunArtifact(example_tests);
+        test_step.dependOn(&example_test_run.step);
     }
 }
 
