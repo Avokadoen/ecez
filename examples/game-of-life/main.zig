@@ -99,16 +99,13 @@ pub fn main() anyerror!void {
     // create flush entity
     _ = try storage.createEntity(.{FlushTag{}});
 
-    var refresh_delay = std.Thread.ResetEvent{};
     while (true) {
-        ztracy.FrameMarkNamed("gameloop");
-
         // wait for previous update and render
         scheduler.waitEvent(.loop);
         // schedule a new update cycle
         scheduler.dispatchEvent(.loop, .{}, .{});
 
-        refresh_delay.timedWait(std.time.ns_per_s) catch {};
+        ztracy.FrameMark();
     }
 }
 
