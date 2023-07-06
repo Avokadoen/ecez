@@ -140,26 +140,26 @@ pub fn FromTypes(
             return item;
         }
 
-        pub fn skip(self: *Iterator, skip_items: u32) void {
+        pub fn skip(self: *Iterator, skip_items: usize) void {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.iterator);
             defer zone.End();
 
-            for (0..skip_items) |_| {
-                // check if inner iteration is complete
-                while (self.inner_cursor >= self.storage_buffer.inner_len) {
-                    if (self.tree.iterate(include_bitmap, exclude_bitmap, &self.tree_cursor)) |next_archetype_index| {
-                        self.inner_cursor = 0;
-                        self.storage_buffer.outer = &self.outer_storage_buffer;
-                        self.all_archetypes[next_archetype_index].getStorageData(&self.storage_buffer, include_bitmap);
+            self.inner_cursor += skip_items;
 
-                        if (include_entity == true) {
-                            self.entities = self.all_archetypes[next_archetype_index].entities.keys();
-                        }
-                    } else {
-                        return;
+            // check if inner iteration is complete
+            while (self.inner_cursor >= self.storage_buffer.inner_len) {
+                const rem = self.inner_cursor - self.storage_buffer.inner_len;
+                if (self.tree.iterate(include_bitmap, exclude_bitmap, &self.tree_cursor)) |next_archetype_index| {
+                    self.inner_cursor = rem;
+                    self.storage_buffer.outer = &self.outer_storage_buffer;
+                    self.all_archetypes[next_archetype_index].getStorageData(&self.storage_buffer, include_bitmap);
+
+                    if (include_entity == true) {
+                        self.entities = self.all_archetypes[next_archetype_index].entities.keys();
                     }
+                } else {
+                    return;
                 }
-                self.inner_cursor += 1;
             }
         }
 
