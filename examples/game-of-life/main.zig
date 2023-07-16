@@ -26,6 +26,15 @@ const CellIter = Storage.Query(
 const Scheduler = ecez.CreateScheduler(Storage, .{ecez.Event("loop", .{
     renderCell,
     renderLine,
+    busyWork,
+    busyWork,
+    busyWork,
+    busyWork,
+    busyWork,
+    busyWork,
+    busyWork,
+    busyWork,
+    busyWork,
     ecez.DependOn(flushBuffer, .{ renderCell, renderLine }),
     ecez.DependOn(tickCell, .{flushBuffer}),
 }, .{})});
@@ -100,12 +109,13 @@ pub fn main() anyerror!void {
     _ = try storage.createEntity(.{FlushTag{}});
 
     while (true) {
+        defer ztracy.FrameMark();
+
         // schedule a new update cycle
         scheduler.dispatchEvent(.loop, .{}, .{});
 
         // wait for previous update and render
         scheduler.waitEvent(.loop);
-        ztracy.FrameMark();
     }
 }
 
@@ -177,11 +187,24 @@ fn renderLine(
     render_target.output_buffer[nth * grid_config.dimension_x * characters_per_cell + nth - 1] = '\n';
 }
 
+fn busyWork(
+    pos: GridPos,
+) void {
+    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.turquoise);
+    defer zone.End();
+
+    for (0..10_000) |index| {
+        if (index == pos.x and index == pos.y) {
+            break;
+        }
+    }
+}
+
 fn flushBuffer(
     flush: FlushTag,
     render_target: ecez.SharedState(RenderTarget),
 ) void {
-    const zone = ztracy.ZoneNC(@src(), "Flush buffer", Color.turquoise);
+    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.turquoise);
     defer zone.End();
 
     _ = flush;
@@ -195,7 +218,7 @@ fn tickCell(
     invocation_id: ecez.InvocationCount,
     grid_config: ecez.SharedState(GridConfig),
 ) void {
-    const zone = ztracy.ZoneNC(@src(), "Update Cell", Color.red);
+    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.turquoise);
     defer zone.End();
 
     const cell_x: i32 = @intCast(pos.x);
