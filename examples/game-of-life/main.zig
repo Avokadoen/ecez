@@ -100,11 +100,11 @@ pub fn main() anyerror!void {
     _ = try storage.createEntity(.{FlushTag{}});
 
     while (true) {
-        // wait for previous update and render
-        scheduler.waitEvent(.loop);
         // schedule a new update cycle
         scheduler.dispatchEvent(.loop, .{}, .{});
 
+        // wait for previous update and render
+        scheduler.waitEvent(.loop);
         ztracy.FrameMark();
     }
 }
