@@ -185,7 +185,7 @@ fn flushBuffer(
     defer zone.End();
 
     _ = flush;
-    std.debug.print("{s}\n\n", .{render_target.output_buffer});
+    std.log.info("\n{s}\n\n", .{render_target.output_buffer});
 }
 
 fn tickCell(
