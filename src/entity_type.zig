@@ -1,4 +1,4 @@
-pub const EntityId = u32;
+pub const EntityId = u64;
 pub const Entity = packed struct {
     id: EntityId,
 };
