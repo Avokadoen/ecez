@@ -2,9 +2,9 @@ const std = @import("std");
 
 const ztracy = @import("ztracy");
 
-const zjobs = @import("zjobs");
-const JobQueue = zjobs.JobQueue(.{});
-const JobId = zjobs.JobId;
+const traced_zjobs = @import("traced_job_queue.zig");
+const JobQueue = traced_zjobs.TracedJobQueue(.{});
+const JobId = traced_zjobs.JobId;
 
 const meta = @import("meta.zig");
 const SystemMetadata = meta.SystemMetadata;

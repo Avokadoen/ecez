@@ -8,6 +8,7 @@ pub const Color = struct {
     pub const iterator = Light.orange;
     pub const tree = Light.pink;
     pub const scheduler = Light.lime;
+    pub const job_queue = Dark.pink;
 
     pub const Light = struct {
         pub const red = 0xeb_80_7b;
@@ -20,5 +21,9 @@ pub const Color = struct {
         pub const brown = 0x9e_76_48;
         pub const pink = 0xf2_5d_f5;
         pub const lime = 0xb9_ff_78;
+    };
+
+    pub const Dark = struct {
+        pub const pink = 0x94_15_30;
     };
 };
