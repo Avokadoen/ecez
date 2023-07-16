@@ -10,44 +10,27 @@ const query = @import("query.zig");
 
 /// Initialize an iterator given an sorted slice of types
 pub fn FromTypes(
-    comptime include_entity: bool,
-    comptime names: []const []const u8,
-    comptime sorted_outer_types: []const type,
+    comptime ItemType: type,
     comptime include_bitmap: anytype,
     comptime exclude_bitmap: anytype,
     comptime OpaqueArchetype: type,
     comptime BinaryTree: type,
 ) type {
-    const entity_count = if (include_entity) 1 else 0;
+    comptime var item_component_count = 0;
+    comptime var include_entity = false;
+    {
+        const item_fields = @typeInfo(ItemType).Struct.fields;
+        for (item_fields) |field| {
+            if (field.type == Entity) {
+                include_entity = true;
+                continue;
+            }
 
-    const all_type_count = sorted_outer_types.len + entity_count;
-
-    const all_types = type_blk: {
-        var types: [all_type_count]type = undefined;
-
-        types[0] = Entity;
-
-        inline for (types[entity_count..], sorted_outer_types) |*@"type", Component| {
-            @"type".* = Component;
+            item_component_count += 1;
         }
-        break :type_blk types;
-    };
-
-    const all_names = name_blk: {
-        var _names: [all_type_count][]const u8 = undefined;
-
-        _names[0] = "entity";
-
-        inline for (_names[entity_count..], names) |*_name, name| {
-            _name.* = name;
-        }
-
-        break :name_blk _names;
-    };
+    }
 
     return struct {
-        pub const Item = meta.ComponentStruct(&all_names, &all_types);
-
         /// This iterator allow users to iterate results of queries without having to care about internal
         /// storage details
         const Iterator = @This();
@@ -59,7 +42,7 @@ pub fn FromTypes(
         tree_cursor: BinaryTree.IterCursor,
 
         storage_buffer: OpaqueArchetype.StorageData,
-        outer_storage_buffer: [sorted_outer_types.len][]u8,
+        outer_storage_buffer: [item_component_count][]u8,
 
         inner_cursor: usize = 0,
 
@@ -82,7 +65,7 @@ pub fn FromTypes(
             };
         }
 
-        pub fn next(self: *Iterator) ?Item {
+        pub fn next(self: *Iterator) ?ItemType {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.iterator);
             defer zone.End();
 
@@ -101,14 +84,23 @@ pub fn FromTypes(
                 }
             }
 
-            var item: Item = undefined;
-            const item_fields = std.meta.fields(Item);
+            var item: ItemType = undefined;
+            comptime var has_passed_entity: bool = false;
 
-            if (include_entity) {
-                item.entity = self.entities[self.inner_cursor];
-            }
+            const item_fields = std.meta.fields(ItemType);
+            inline for (item_fields, 0..) |field, type_index| {
+                if (include_entity and field.type == Entity) {
+                    if (has_passed_entity) {
+                        @compileError("query result item can only have one or no entity");
+                    }
 
-            inline for (item_fields[entity_count..], 0..) |field, type_index| {
+                    @field(item, field.name) = self.entities[self.inner_cursor];
+                    has_passed_entity = true;
+                    continue;
+                }
+
+                const storage_index = if (has_passed_entity) type_index - 1 else type_index;
+
                 const field_type_info = @typeInfo(field.type);
                 switch (field_type_info) {
                     .Pointer => |pointer| {
@@ -117,7 +109,7 @@ pub fn FromTypes(
                         } else {
                             const from = self.inner_cursor * @sizeOf(pointer.child);
                             const to = from + @sizeOf(pointer.child);
-                            const bytes = self.storage_buffer.outer[type_index][from..to];
+                            const bytes = self.storage_buffer.outer[storage_index][from..to];
 
                             @field(item, field.name) = @ptrCast(@alignCast(bytes));
                         }
@@ -128,7 +120,7 @@ pub fn FromTypes(
                         } else {
                             const from = self.inner_cursor * @sizeOf(field.type);
                             const to = from + @sizeOf(field.type);
-                            const bytes = self.storage_buffer.outer[type_index][from..to];
+                            const bytes = self.storage_buffer.outer[storage_index][from..to];
 
                             @field(item, field.name) = @as(*field.type, @ptrCast(@alignCast(bytes))).*;
                         }
@@ -230,9 +222,7 @@ test "value iterating works" {
 
     {
         const A_Iterator = FromTypes(
-            false,
-            &[_][]const u8{"a"},
-            &[_]type{A},
+            struct { a: A },
             Testing.Bits.A,
             Testing.Bits.None,
             TestOpaqueArchetype,
@@ -250,9 +240,7 @@ test "value iterating works" {
 
     {
         const B_Iterator = FromTypes(
-            false,
-            &[_][]const u8{"b"},
-            &[_]type{B},
+            struct { b: B },
             Testing.Bits.B,
             Testing.Bits.None,
             TestOpaqueArchetype,
@@ -270,9 +258,7 @@ test "value iterating works" {
 
     {
         const A_B_Iterator = FromTypes(
-            false,
-            &[_][]const u8{ "a", "b" },
-            &[_]type{ A, B },
+            struct { a: A, b: B },
             Testing.Bits.A | Testing.Bits.B,
             Testing.Bits.None,
             TestOpaqueArchetype,
@@ -291,9 +277,7 @@ test "value iterating works" {
 
     {
         const A_B_C_Iterator = FromTypes(
-            false,
-            &[_][]const u8{ "a", "b", "c" },
-            &[_]type{ A, B, C },
+            struct { a: A, b: B, c: C },
             Testing.Bits.All,
             Testing.Bits.None,
             TestOpaqueArchetype,
@@ -337,9 +321,7 @@ test "ptr iterating works and can mutate storage data" {
     {
         {
             const A_Iterator = FromTypes(
-                false,
-                &[_][]const u8{"a_ptr"},
-                &[_]type{*A},
+                struct { a_ptr: *A },
                 Testing.Bits.A,
                 Testing.Bits.None,
                 TestOpaqueArchetype,
@@ -355,9 +337,7 @@ test "ptr iterating works and can mutate storage data" {
 
         {
             const A_Iterator = FromTypes(
-                false,
-                &[_][]const u8{"a"},
-                &[_]type{A},
+                struct { a: A },
                 Testing.Bits.A,
                 Testing.Bits.None,
                 TestOpaqueArchetype,
@@ -419,9 +399,7 @@ test "reset moves iterator to start" {
 
     {
         const A_Iterator = FromTypes(
-            false,
-            &[_][]const u8{"a"},
-            &[_]type{A},
+            struct { a: A },
             Testing.Bits.A,
             Testing.Bits.None,
             TestOpaqueArchetype,
@@ -492,9 +470,7 @@ test "skip moves iterator to requested entry" {
 
     {
         const A_Iterator = FromTypes(
-            false,
-            &[_][]const u8{"a"},
-            &[_]type{A},
+            struct { a: A },
             Testing.Bits.A,
             Testing.Bits.None,
             TestOpaqueArchetype,

@@ -28,11 +28,6 @@ pub const EventArgument = meta.EventArgument;
 /// Mark an event by name, systems to execute and any unique event data the systems need
 pub const Event = meta.Event;
 
-const query = @import("query.zig");
-/// Included types for queries must be wrapped in include in order to name resulting typed field
-pub const include = query.include;
-pub const IncludeType = query.IncludeType;
-
 pub const tracy_alloc = @import("tracy_alloc.zig");
 
 test {

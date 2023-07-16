@@ -182,30 +182,27 @@ pub fn CreateStorage(
             return &self.shared_state[index];
         }
 
-        pub const EntityQuery = enum {
-            exclude_entity,
-            include_entity,
-        };
         /// Query components which can be iterated upon.
         /// Parameters:
-        ///     - entity_query: wether to include the entity variable in the iterator item
-        ///     - include_types: all the components you would like to iterate over with the specified field name that should map to the
-        ///                      component type. (see IncludeType)
-        ///     - exclude_types: all the components that should be excluded from the query result
+        ///     - result_item:   All the components you would like to iterate over in a single struct
+        ///                      each component in the struct will belong to the same entity
+        ///                      A field does not have to be a component if it is of type Entity
+        ///     - exclude_types: All the components that should be excluded from the query result
         ///
         /// Example:
         /// ```
-        /// var a_iter = Storage.Query(.exclude_entity, .{ storage.include("a", A) }, .{B}).submit(storage, std.testing.allocator);
+        /// var a_iter = Storage.Query(struct{ a: A, entity: Entity }, .{B}).submit(storage, std.testing.allocator);
         /// defer a_iter.deinit();
         ///
         /// while (a_iter.next()) |item| {
+        ///    std.debug.print("{any}", .{item.entity});
         ///    std.debug.print("{any}", .{item.a});
         /// }
         /// ```
-        pub fn Query(comptime entity_query: EntityQuery, comptime include_types: anytype, comptime exclude_types: anytype) type {
-            const include_type_info = @typeInfo(@TypeOf(include_types));
+        pub fn Query(comptime result_item: type, comptime exclude_types: anytype) type {
+            const include_type_info = @typeInfo(result_item);
             if (include_type_info != .Struct) {
-                @compileError("query include types must be a tuple of types");
+                @compileError("query result_item must be a struct of components");
             }
 
             const exclude_type_info = @typeInfo(@TypeOf(exclude_types));
@@ -213,49 +210,40 @@ pub fn CreateStorage(
                 @compileError("query exclude types must be a tuple of types");
             }
 
-            comptime var query_result_names: [include_type_info.Struct.fields.len][]const u8 = undefined;
             comptime var include_inner_type_arr: [include_type_info.Struct.fields.len]type = undefined;
-            comptime var include_outer_type_arr: [include_type_info.Struct.fields.len]type = undefined;
             inline for (
-                &query_result_names,
                 &include_inner_type_arr,
-                &include_outer_type_arr,
-                include_types,
+                include_type_info.Struct.fields,
                 0..,
-            ) |*query_result_name, *inner_type, *outer_type, include_type, index| {
-                if (@TypeOf(include_type) != query.IncludeType) {
-                    const compile_error = std.fmt.comptimePrint(
-                        "expected include type number {d} to be of type IncludeType, actual type was {any}",
-                        .{ index, @TypeOf(include_type) },
-                    );
-                    @compileError(compile_error);
-                }
-
-                query_result_name.* = include_type.name;
-                outer_type.* = include_type.type;
+            ) |*inner_type, result_field, index| {
+                _ = index;
                 inner_type.* = blk: {
-                    const field_info = @typeInfo(include_type.type);
+                    const field_info = @typeInfo(result_field.type);
                     if (field_info != .Pointer) {
-                        break :blk include_type.type;
+                        break :blk result_field.type;
                     }
 
                     break :blk field_info.Pointer.child;
                 };
 
-                var type_is_component = false;
-                for (sorted_component_types) |Component| {
-                    if (inner_type.* == Component) {
-                        type_is_component = true;
-                        break;
+                verify_field_type_blk: {
+                    if (inner_type.* == Entity) {
+                        break :verify_field_type_blk;
+                    }
+
+                    var type_is_component: bool = false;
+                    for (sorted_component_types) |Component| {
+                        if (inner_type.* == Component) {
+                            type_is_component = true;
+                            break;
+                        }
+                    }
+
+                    if (type_is_component == false) {
+                        @compileError("query include types field " ++ result_field.name ++ " is not a registered Storage component");
                     }
                 }
-
-                if (type_is_component == false) {
-                    @compileError("query include types field " ++ include_type.name ++ " is not a registered Storage component");
-                }
             }
-            query_result_names = query.sortBasedOnTypes(&include_inner_type_arr, []const u8, &query_result_names);
-            include_outer_type_arr = query.sortBasedOnTypes(&include_inner_type_arr, type, &include_outer_type_arr);
             include_inner_type_arr = query.sortTypes(&include_inner_type_arr);
 
             var exclude_type_arr: [exclude_type_info.Struct.fields.len]type = undefined;
@@ -282,7 +270,9 @@ pub fn CreateStorage(
             const include_bitmask = comptime include_bit_blk: {
                 var bitmask: ComponentMask.Bits = 0;
                 inline for (include_inner_type_arr) |Component| {
-                    bitmask |= 1 << Container.componentIndex(Component);
+                    if (Component != Entity) {
+                        bitmask |= 1 << Container.componentIndex(Component);
+                    }
                 }
                 break :include_bit_blk bitmask;
             };
@@ -304,9 +294,7 @@ pub fn CreateStorage(
             }
 
             const IterType = iterator.FromTypes(
-                entity_query == .include_entity,
-                &query_result_names,
-                &include_outer_type_arr,
+                result_item,
                 include_bitmask,
                 exclude_bitmask,
                 OpaqueArchetype,
@@ -628,8 +616,7 @@ test "query with single include type works" {
     {
         var index: usize = 0;
         var a_iter = StorageStub.Query(
-            .exclude_entity,
-            .{query.include("a", Testing.Component.A)},
+            struct { a: Testing.Component.A },
             .{},
         ).submit(storage);
 
@@ -655,10 +642,13 @@ test "query with multiple include type works" {
     }
 
     {
-        var a_b_iter = StorageStub.Query(.exclude_entity, .{
-            query.include("a", Testing.Component.A),
-            query.include("b", Testing.Component.B),
-        }, .{}).submit(storage);
+        var a_b_iter = StorageStub.Query(
+            struct {
+                a: Testing.Component.A,
+                b: Testing.Component.B,
+            },
+            .{},
+        ).submit(storage);
 
         var index: usize = 0;
         while (a_b_iter.next()) |item| {
@@ -689,8 +679,7 @@ test "query with single ptr include type works" {
     {
         var index: usize = 0;
         var a_iter = StorageStub.Query(
-            .exclude_entity,
-            .{query.include("a_ptr", *Testing.Component.A)},
+            struct { a_ptr: *Testing.Component.A },
             .{},
         ).submit(storage);
 
@@ -703,8 +692,7 @@ test "query with single ptr include type works" {
     {
         var index: usize = 1;
         var a_iter = StorageStub.Query(
-            .exclude_entity,
-            .{query.include("a", Testing.Component.A)},
+            struct { a: Testing.Component.A },
             .{},
         ).submit(storage);
 
@@ -737,8 +725,7 @@ test "query with single include type and single exclude works" {
 
     {
         var iter = StorageStub.Query(
-            .exclude_entity,
-            .{query.include("a", Testing.Component.A)},
+            struct { a: Testing.Component.A },
             .{Testing.Component.B},
         ).submit(storage);
 
@@ -780,8 +767,7 @@ test "query with single include type and multiple exclude works" {
 
     {
         var iter = StorageStub.Query(
-            .exclude_entity,
-            .{query.include("a", Testing.Component.A)},
+            struct { a: Testing.Component.A },
             .{ Testing.Component.B, Testing.Component.C },
         ).submit(storage);
 
@@ -815,8 +801,10 @@ test "query with entity only works" {
 
     {
         var iter = StorageStub.Query(
-            .include_entity,
-            .{query.include("a", Testing.Component.A)},
+            struct {
+                entity: Entity,
+                a: Testing.Component.A,
+            },
             .{},
         ).submit(storage);
 
@@ -847,8 +835,10 @@ test "query with entity and include and exclude only works" {
 
     {
         var iter = StorageStub.Query(
-            .include_entity,
-            .{query.include("a", Testing.Component.A)},
+            struct {
+                entity: Entity,
+                a: Testing.Component.A,
+            },
             .{Testing.Component.B},
         ).submit(storage);
 

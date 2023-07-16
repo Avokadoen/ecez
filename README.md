@@ -152,15 +152,19 @@ Example of Entity
 
 Example of Query
 ```zig
-    const QueryActiveColliders = StorageStub.Query(.include_entity, .{
-        include("position", Position),
-        include("collider", BoxCollider),
-    }, .{
-        InactiveTag, // exclude type
-    }).Iter;
+    const QueryActiveColliders = StorageStub.Query(
+        struct{
+            entity: Entity,
+            position: Position,
+            collider: Collider,
+        },
+        // exclude type
+        .{ InactiveTag },
+    ).Iter;
 
     const System = struct {
         // Very bad brute force collision detection with wasted checks (it will check previously checked entities)
+        // Hint: other_obj.skip + InvocationCount could be used here to improve the checks ;)
         pub fn system(
             entity: Entity, 
             position: Position, 
@@ -275,7 +279,7 @@ zjobs is as the name suggest a job based multithreading API.
 
 ### <a name="queries"></a> Queries
 
-You can query the storage instance for components and filter out instances components are paired with unwanted components, as in beloning to the same entity.
+You can query the storage instance for components and filter out instances of components that are paired with unwanted components.
 
 #### Example
 
@@ -300,15 +304,16 @@ const include = ecez.include;
 // we filter out all monsters that might have the previously mentioned components if they also have 
 // a SadTag or SickTag attached to the same entity
 var happy_healhy_monster_iter = Storage.Query(
-    .exclude_entity,
     // notice that Monster components will be mutable through pointer semantics
-    .{
+    // we query our result by submitting the type we want the resulting items to be
+    struct{
         // these are our include types
-        include("monster", *Monster), 
-        include("happy", HappyTag), 
-        include("healthy", HealthyTag),
+        entity: Entity,
+        monster: *Monster,
+        happy_tag: HappyTag,
+        healthy: HealthyTag,
     },
-    // these are our exclude types
+    // excluded types are submitted in a tuple of types
     .{SadTag, SickTag}
 ).submit(world);
 
@@ -317,10 +322,13 @@ while (happy_healhy_monster_iter.next()) |happy_healhy_monster| {
     happy_healhy_monster.monster.mood_rating += 1;
 }
 
-
-if (happy_healhy_monster_iter.at(5)) |fifth_happy_monster| {
-    // the 5th monster becomes extra happy! 
-    happy_healhy_monster.monster.mood_rating += 1;
+happy_healhy_monster_iter.reset();
+happy_healhy_monster_iter.skip(5);
+if (happy_healhy_monster_iter.next()) |fifth_happy_monster| {
+    if (happy_healhy_monster.entity == entity_we_are_looking_for) {
+        // the 5th monster becomes extra happy! 
+        happy_healhy_monster.monster.mood_rating += 1;
+    }
 }
 
 ```

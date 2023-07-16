@@ -893,11 +893,10 @@ test "event can mutate event extra argument" {
 }
 
 test "event can request single query with component" {
-    const include = @import("query.zig").include;
-
-    const QueryA = StorageStub.Query(.exclude_entity, .{
-        include("a", Testing.Component.A),
-    }, .{}).Iter;
+    const QueryA = StorageStub.Query(
+        struct { a: Testing.Component.A },
+        .{},
+    ).Iter;
 
     const pass_value = 99;
     const fail_value = 100;
@@ -981,15 +980,15 @@ test "event exit system loop" {
 }
 
 test "event can request two queries without components" {
-    const include = @import("query.zig").include;
+    const QueryAMut = StorageStub.Query(
+        struct { a: *Testing.Component.A },
+        .{},
+    ).Iter;
 
-    const QueryAMut = StorageStub.Query(.exclude_entity, .{
-        include("a", *Testing.Component.A),
-    }, .{}).Iter;
-
-    const QueryAConst = StorageStub.Query(.exclude_entity, .{
-        include("a", Testing.Component.A),
-    }, .{}).Iter;
+    const QueryAConst = StorageStub.Query(
+        struct { a: Testing.Component.A },
+        .{},
+    ).Iter;
 
     const pass_value = 99;
     const fail_value = 100;

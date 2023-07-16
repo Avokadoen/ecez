@@ -18,8 +18,7 @@ const dimension_y = 30;
 const Storage = ecez.CreateStorage(.{ GridPos, Health, LinePos, FlushTag }, .{ RenderTarget, GridConfig });
 
 const CellIter = Storage.Query(
-    .exclude_entity,
-    .{ecez.include("health", Health)},
+    struct { health: Health },
     .{},
 ).Iter;
 
