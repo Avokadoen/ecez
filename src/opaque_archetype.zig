@@ -348,6 +348,9 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             storage: *StorageData,
             filter_bitmask: ComponentMask.Bits,
         ) void {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
+            defer zone.End();
+
             std.debug.assert(filter_bitmask & self.component_bitmask == filter_bitmask);
 
             const component_count = @popCount(filter_bitmask);
