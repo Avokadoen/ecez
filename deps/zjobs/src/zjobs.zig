@@ -4,7 +4,7 @@ const assert = std.debug.assert;
 
 const panic = std.debug.panic;
 
-const print = std.debug.print;
+const print = std.log.info;
 
 const RingQueue = @import("ring_queue.zig").RingQueue;
 
@@ -68,6 +68,13 @@ pub const JobId = enum(u32) {
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+pub const QueueConfig = struct {
+    max_jobs: u16 = 256,
+    max_job_size: u16 = 64,
+    max_threads: u8 = 4,
+    idle_sleep_ns: u32 = 50,
+};
+
 /// Returns a struct that executes jobs on a pool of threads, which may be
 /// configured as follows:
 /// * `max_jobs` - the maximum number of jobs that can be waiting in the queue.
@@ -84,16 +91,7 @@ pub const JobId = enum(u32) {
 /// * `JobQueue` is not designed to support single threaded environments, and
 ///   has not been tested for correctness in case background threads cannot be
 ///   spawned.
-pub fn JobQueue(
-    comptime config: struct {
-        // zig fmt: off
-        max_jobs      : u16 = 256,
-        max_job_size  : u16 =  64,
-        max_threads   : u8  =   8,
-        idle_sleep_ns : u32 =  10,
-        // zig fmt: on
-    },
-) type {
+pub fn JobQueue(comptime config: QueueConfig) type {
     compileAssert(
         config.max_jobs >= min_jobs,
         "config.max_jobs ({}) must be at least min_jobs ({})",
@@ -123,12 +121,14 @@ pub fn JobQueue(
         const Main = *const fn (*Data) void;
 
         // zig fmt: off
-        data     : Data align(cache_line_size) = undefined,
-        exec     : Main align(cache_line_size) = undefined,
-        name     : []const u8                  = undefined,
-        id       : JobId                       = JobId.none,
-        prereq   : JobId                       = JobId.none,
-        cycle    : Atomic(u16)                 = .{ .value = 0 },
+        data           : Data align(cache_line_size) = undefined,
+        exec           : Main align(cache_line_size) = undefined,
+        name           : []const u8                  = undefined,
+        id             : JobId                       = JobId.none,
+        prereq         : JobId                       = JobId.none,
+        cycle          : Atomic(u16)                 = .{ .value = 0 },
+        idle_mutex     : std.Thread.Mutex            = .{},
+        idle_condition : std.Thread.Condition        = .{},
         // zig fmg: on
 
         fn storeJob(
@@ -144,21 +144,26 @@ pub fn JobQueue(
             const new_cycle: u16 = old_cycle +% 1;
             assert(isLiveCycle(new_cycle));
 
-            const acquired : bool = null == self.cycle.compareAndSwap(
-                old_cycle,
-                new_cycle,
-                .Monotonic,
-                .Monotonic,
-            );
-            assert(acquired);
+            {
+                self.idle_mutex.lock();
+                defer self.idle_mutex.unlock();
+
+                const acquired: bool = null == self.cycle.compareAndSwap(
+                    old_cycle,
+                    new_cycle,
+                    .Monotonic,
+                    .Monotonic,
+                );
+                assert(acquired);
+            }
 
             @memset(&self.data, 0);
             std.mem.copy(u8, &self.data, std.mem.asBytes(job));
 
             const exec: *const fn (*Job) void = &@field(Job, "exec");
-            const id = jobId(@truncate(index), new_cycle);
+            const id = jobId(@as(u16, @truncate(index)), new_cycle);
 
-            self.exec = @ptrCast(exec);
+            self.exec = @as(Main, @ptrCast(exec));
             self.name = @typeName(Job);
             self.id = id;
             self.prereq = if (prereq != id) prereq else JobId.none;
@@ -177,13 +182,19 @@ pub fn JobQueue(
 
             self.exec(&self.data);
 
-            const released : bool = null == self.cycle.compareAndSwap(
-                old_cycle,
-                new_cycle,
-                .Monotonic,
-                .Monotonic,
-            );
-            assert(released);
+            {
+                self.idle_mutex.lock();
+                defer self.idle_mutex.unlock();
+                const released: bool = null == self.cycle.compareAndSwap(
+                    old_cycle,
+                    new_cycle,
+                    .Monotonic,
+                    .Monotonic,
+                );
+                assert(released);
+
+                self.idle_condition.broadcast();
+            }
         }
 
         fn jobId(index: u16, cycle: u16) JobId {
@@ -217,8 +228,9 @@ pub fn JobQueue(
 
         const Self = @This();
         const Instant = std.time.Instant;
-        const Mutex = std.Thread.Mutex;
         const Thread = std.Thread;
+        const Mutex = Thread.Mutex;
+        const ResetEvent = Thread.ResetEvent;
 
         const Slots = [max_jobs]Slot;
         const Threads = [max_threads]Thread;
@@ -230,18 +242,19 @@ pub fn JobQueue(
 
         // zig fmt: off
         // slots first because they are cache-aligned
-        _slots       : Slots     = [_]Slot{.{}} ** max_jobs,
-        _threads     : Threads   = [_]Thread{undefined} ** max_threads,
-        _mutex       : Mutex     = .{},
-        _live_queue  : LiveQueue = .{},
-        _free_queue  : FreeQueue = .{},
-        _num_threads : u64       = 0,
-        _main_thread : Atomic(u64)  = .{ .value = 0 },
-        _lock_thread : Atomic(u64)  = .{ .value = 0 },
-        _initialized : Atomic(bool) = .{ .value = false },
-        _started     : Atomic(bool) = .{ .value = false },
-        _running     : Atomic(bool) = .{ .value = false },
-        _stopping    : Atomic(bool) = .{ .value = false },
+        _slots          : Slots        = [_]Slot{.{}} ** max_jobs,
+        _threads        : Threads      = [_]Thread{undefined} ** max_threads,
+        _mutex          : Mutex        = .{},
+        _live_queue     : LiveQueue    = .{},
+        _free_queue     : FreeQueue    = .{},
+        _idle_event     : ResetEvent   = .{},
+        _num_threads    : u64          = 0,
+        _main_thread    : Atomic(u64)  = .{ .value = 0 },
+        _lock_thread    : Atomic(u64)  = .{ .value = 0 },
+        _initialized    : Atomic(bool) = .{ .value = false },
+        _started        : Atomic(bool) = .{ .value = false },
+        _running        : Atomic(bool) = .{ .value = false },
+        _stopping       : Atomic(bool) = .{ .value = false },
         // zig fmt: on
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -327,6 +340,8 @@ pub fn JobQueue(
             // prevent scheduling more jobs
             const was_stopping = self._stopping.swap(true, .Monotonic);
             assert(was_stopping == false);
+
+            self._idle_event.set();
         }
 
         /// Waits for all threads to finish, then executes any remaining jobs
@@ -500,9 +515,21 @@ pub fn JobQueue(
 
         /// Waits until the specified `prereq` is completed.
         pub fn wait(self: *Self, prereq: JobId) void {
-            while (self.isPending(prereq)) {
-                // print("waiting for prereq {}...\n", .{prereq});
-                threadIdle();
+            if (prereq == JobId.none) return;
+
+            const _id = prereq.fields();
+            assert(isLiveCycle(_id.cycle));
+
+            const slot: *Slot = &self._slots[_id.index];
+
+            {
+                slot.idle_mutex.lock();
+                defer slot.idle_mutex.unlock();
+                const slot_cycle = slot.cycle.load(.Monotonic);
+
+                if (slot_cycle == _id.cycle) {
+                    slot.idle_condition.wait(&slot.idle_mutex);
+                }
             }
         }
 
@@ -533,7 +560,13 @@ pub fn JobQueue(
                 self.executeJob(old_id, .locked, .enqueue_free_index);
             }
 
+            const was_empty = self._live_queue.isEmpty();
+
             self._live_queue.enqueueAssumeNotFull(new_id);
+
+            if (was_empty) {
+                self._idle_event.set();
+            }
         }
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -546,17 +579,14 @@ pub fn JobQueue(
             assert(self.isUnlockedThread());
 
             while (self.isRunning()) {
+                if (self._live_queue.isEmpty() and self.isStopping() == false) {
+                    self._idle_event.wait();
+                }
+
                 self.executeJobs(.unlocked, .dequeue_jobid_if_running);
-                threadIdle();
             }
 
             // print("thread[{}] DONE\n", .{n});
-        }
-
-        fn threadIdle() void {
-            if (idle_sleep_ns > 0) {
-                std.time.sleep(idle_sleep_ns);
-            }
         }
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1041,8 +1071,15 @@ test "JobQueue throughput" {
     const main_thread = std.Thread.getCurrentId();
     print("main_thread: {}\n", .{main_thread});
 
-    const job_count = 64;
     const job_workload_size = cache_line_size * 1024 * 1024;
+    const job_count = blk: {
+        const total_memory = std.process.totalSystemMemory() catch break :blk min_jobs;
+        const upper_bound = @as(usize, @intFromFloat(@as(f64, @floatFromInt(total_memory)) * 0.667));
+        var count: usize = min_jobs * 4;
+        while (job_workload_size * count > upper_bound and count > min_jobs) : (count -= min_jobs) {}
+        break :blk count;
+    };
+
     const JobWorkload = struct {
         const Unit = u64;
         const unit_size = @sizeOf(Unit);
@@ -1096,7 +1133,11 @@ test "JobQueue throughput" {
         }
     };
 
-    var job_stats: [job_count]JobStat = [_]JobStat{.{ .main = main_thread }} ** job_count;
+    var job_stats = try allocator.alloc(JobStat, job_count);
+    defer allocator.free(job_stats);
+    for (job_stats) |*job_stat| {
+        job_stat.* = .{ .main = main_thread };
+    }
 
     const FillJob = struct {
         stat: *JobStat,
@@ -1108,7 +1149,7 @@ test "JobQueue throughput" {
 
             assert(@intFromPtr(self.workload) % 64 == 0);
             const thread: u64 = self.stat.thread;
-            for (self.workload.units, 0..) |*unit, index| {
+            for (&self.workload.units, 0..) |*unit, index| {
                 unit.* = thread +% index;
             }
         }
@@ -1184,7 +1225,7 @@ test "combine jobs respect prereq" {
         // Generate more prereqs than fit in a single CombinePrereqsJob
         const prereq_count = Jobs.CombinePrereqsJob.max_prereqs + 2;
         var chain_data: [prereq_count]PrereqJob = undefined;
-        for (chain_data) |*step| {
+        for (&chain_data) |*step| {
             step.* = PrereqJob{ .counter = counter };
         }
 
