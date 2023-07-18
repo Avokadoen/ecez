@@ -33,6 +33,7 @@ pub const tracy_alloc = @import("tracy_alloc.zig");
 test {
     _ = @import("archetype_container.zig");
     _ = @import("binary_tree.zig");
+    _ = @import("ezby.zig");
     _ = @import("iterator.zig");
     _ = @import("opaque_archetype.zig");
     _ = @import("query.zig");
