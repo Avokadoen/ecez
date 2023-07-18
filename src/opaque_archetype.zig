@@ -31,7 +31,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
         void_component: [0]u8 = [0]u8{},
 
         pub fn init(allocator: Allocator, component_bitmask: ComponentMask.Bits) error{OutOfMemory}!OpaqueArchetype {
-            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype init", Color.opaque_archetype);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
             const type_count = @popCount(component_bitmask);
@@ -51,7 +51,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
         }
 
         pub fn deinit(self: *OpaqueArchetype) void {
-            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype deinit", Color.opaque_archetype);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
             self.entities.deinit();
@@ -62,8 +62,9 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
         }
 
         pub fn clearRetainingCapacity(self: *OpaqueArchetype) void {
-            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype clear", Color.opaque_archetype);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
+
             self.entities.clearRetainingCapacity();
 
             for (self.component_storage) |*component_buffer| {
@@ -83,7 +84,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             comptime bitmask: ComponentMask.Bits,
             comptime Component: type,
         ) ecez_error.ArchetypeError!*Component {
-            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype getComponent", Color.opaque_archetype);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
             if (self.hasComponents(bitmask) == false) {
@@ -113,7 +114,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             component: anytype,
             comptime bitmask: ComponentMask.Bits,
         ) ArchetypeError!void {
-            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype setComponent", Color.opaque_archetype);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
             const Component = @TypeOf(component);
@@ -140,7 +141,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             entity: Entity,
             all_component_sizes: [max_component_count]u32,
         ) error{OutOfMemory}!void {
-            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype prepareNewEntity", Color.opaque_archetype);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
             const value = self.entities.count();
@@ -166,7 +167,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             data: []const []const u8,
             all_component_sizes: [max_component_count]u32,
         ) error{OutOfMemory}!void {
-            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype registerEntity", Color.opaque_archetype);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
             std.debug.assert(data.len == @popCount(self.component_bitmask));
@@ -197,7 +198,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             all_component_sizes: [max_component_count]u32,
             out_buffers: [][]u8,
         ) error{EntityMissing}!void {
-            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype fetchEntityComponentView", Color.opaque_archetype);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
             std.debug.assert(out_buffers.len == self.getComponentCount());
@@ -233,7 +234,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             entity: Entity,
             all_component_sizes: [max_component_count]u32,
         ) error{EntityMissing}!void {
-            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype swapRemoveEntity", Color.opaque_archetype);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
             // remove entity from entity map
@@ -291,7 +292,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             entity: Entity,
             all_component_sizes: [max_component_count]u32,
         ) error{EntityMissing}!void {
-            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype removeEntity", Color.opaque_archetype);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
             // remove entity from entity map
