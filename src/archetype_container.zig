@@ -476,6 +476,15 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
             }
             @compileError("component type " ++ @typeName(Component) ++ " is not a registered component type");
         }
+
+        pub fn getSortedComponentHashes() [sorted_components.len]u64 {
+            comptime var hashes: [sorted_components.len]u64 = undefined;
+            inline for (&hashes, sorted_components) |*hash, Component| {
+                hash.* = comptime ecez_query.hashType(Component);
+            }
+
+            return hashes;
+        }
     };
 }
 
@@ -565,4 +574,13 @@ test "ArcheContainer hasComponent works" {
     try testing.expectEqual(true, container.hasComponent(entity, Testing.Component.A));
     try testing.expectEqual(false, container.hasComponent(entity, Testing.Component.B));
     try testing.expectEqual(true, container.hasComponent(entity, Testing.Component.C));
+}
+
+test "ArcheContainer getSortedComponentHashes works" {
+    const expected_hashes = [_]u64{
+        ecez_query.hashType(Testing.Component.A),
+        ecez_query.hashType(Testing.Component.B),
+        ecez_query.hashType(Testing.Component.C),
+    };
+    try testing.expectEqualSlices(u64, &expected_hashes, &TestContainer.getSortedComponentHashes());
 }
