@@ -22,6 +22,8 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
 
         allocator: Allocator,
 
+        /// store the mapping from Entity -> index
+        /// the storage has a strict requirement that values increment (0, 1, 2 ...)
         entities: EntityMap,
 
         component_bitmask: ComponentMask.Bits,
@@ -726,5 +728,29 @@ test "getStorageData retrieves components view" {
             const b = @as(*const Testing.Component.B, @ptrCast(@alignCast(bytes))).*;
             try testing.expectEqual(Testing.Component.B{ .value = @as(u8, @intCast(i)) }, b);
         }
+    }
+}
+
+test "entity map values are increment of previous" {
+    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
+    var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All);
+    defer archetype.deinit();
+
+    {
+        var buffer: [3][]u8 = undefined;
+        for (0..100) |i| {
+            const mock_entity = Entity{ .id = @as(u32, @intCast(i)) };
+            var a = A{ .value = @as(u32, @intCast(i)) };
+            buffer[0] = std.mem.asBytes(&a);
+            var b = B{ .value = @as(u8, @intCast(i)) };
+            buffer[1] = std.mem.asBytes(&b);
+            buffer[2] = &[0]u8{};
+
+            try archetype.registerEntity(mock_entity, &buffer, sizes);
+        }
+    }
+
+    for (archetype.entities.values(), 0..) |value, index| {
+        try testing.expectEqual(index, value);
     }
 }
