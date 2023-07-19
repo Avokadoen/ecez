@@ -89,7 +89,7 @@ pub fn serialize(
         try written_bytes.ensureUnusedCapacity(comp_chunk_size);
 
         const comp_chunk = Chunk.Comp{
-            .number_of_components = @intCast(component_hashes.len),
+            .number_of_component_types = @intCast(component_hashes.len),
         };
         written_bytes.appendSliceAssumeCapacity(mem.asBytes(&comp_chunk));
         written_bytes.appendSliceAssumeCapacity(mem.sliceAsBytes(&component_hashes));
@@ -125,7 +125,7 @@ pub fn serialize(
         try written_bytes.ensureUnusedCapacity(arch_chunk_size);
         {
             const arch_chunk = Chunk.Arch{
-                .number_of_components = @as(u32, @intCast(type_count)),
+                .number_of_component_types = @as(u32, @intCast(type_count)),
                 .number_of_entities = @as(u64, @intCast(entity_count)),
             };
             written_bytes.appendSliceAssumeCapacity(mem.asBytes(&arch_chunk));
@@ -165,7 +165,7 @@ pub const Chunk = struct {
 
     pub const Comp = packed struct {
         identifier: u32 = mem.bytesToValue(u32, "COMP"), // TODO: only serialize, do not include as runtime data
-        number_of_components: u32,
+        number_of_component_types: u32,
 
         /// Run-time type information
         pub const Rtti = u64;
@@ -175,9 +175,8 @@ pub const Chunk = struct {
 
     pub const Arch = packed struct {
         identifier: u32 = mem.bytesToValue(u32, "ARCH"), // TODO: only serialize, do not include as runtime data
-        // TODO: rename to component_types
         /// how many component byte lists that are after this chunk
-        number_of_components: u32,
+        number_of_component_types: u32,
         number_of_entities: u64,
 
         /// Run-time type information index
@@ -218,20 +217,70 @@ fn parseCompChunk(
         *const Chunk.Comp,
         @ptrCast(@alignCast(bytes.ptr)),
     );
+
     hash_list.* = @as(
         Chunk.Comp.HashList,
         @ptrCast(@alignCast(bytes[@sizeOf(Chunk.Comp)..].ptr)),
     );
+    const hash_list_size = chunk.*.number_of_component_types * @sizeOf(u64);
 
-    const list_size = chunk.*.number_of_components * @sizeOf(Chunk.Comp.Rtti);
     size_list.* = @as(
         Chunk.Comp.SizeList,
-        @ptrCast(@alignCast(bytes[@sizeOf(Chunk.Comp) + list_size ..].ptr)),
+        @ptrCast(@alignCast(bytes[@sizeOf(Chunk.Comp) + hash_list_size ..].ptr)),
+    );
+    const size_list_size = chunk.*.number_of_component_types * @sizeOf(u32);
+
+    const next_byte = @sizeOf(Chunk.Comp) + hash_list_size + size_list_size;
+    return bytes[next_byte..];
+}
+
+fn parseArchChunk(
+    comp_size_list: []const u32,
+    bytes: []const u8,
+    chunk: **const Chunk.Arch,
+    rtti_indices_list: *Chunk.Arch.RttiIndices,
+    entity_list: *Chunk.Arch.EntityList,
+    component_bytes: *[*]const u8,
+) []const u8 {
+    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.serializer);
+    defer zone.End();
+
+    std.debug.assert(bytes.len >= @sizeOf(Chunk.Arch));
+    std.debug.assert(mem.eql(u8, bytes[0..4], "ARCH"));
+
+    // TODO: remove this (hitting false incorrect alignment error)
+    @setRuntimeSafety(false);
+    chunk.* = @as(
+        *const Chunk.Arch,
+        @ptrCast(@alignCast(bytes.ptr)),
     );
 
-    // TODO: verify that components we used to initialize world with are in one of these chunks
-    const next_byte = @sizeOf(Chunk.Comp) + list_size * 2;
-    return bytes[next_byte..];
+    rtti_indices_list.* = @as(
+        Chunk.Arch.RttiIndices,
+        @ptrCast(@alignCast(bytes[@sizeOf(Chunk.Arch)..].ptr)),
+    );
+    const rtti_list_size = chunk.*.number_of_component_types * @sizeOf(u32);
+
+    const entity_list_offset = @sizeOf(Chunk.Arch) + rtti_list_size;
+    entity_list.* = @as(
+        Chunk.Arch.EntityList,
+        @ptrCast(@alignCast(bytes[entity_list_offset..].ptr)),
+    );
+    const entity_list_size = chunk.*.number_of_entities * @sizeOf(Entity);
+
+    const component_bytes_offset = entity_list_offset + entity_list_size;
+    component_bytes.* = bytes[component_bytes_offset..].ptr;
+
+    const remaining_bytes_offset = blk: {
+        var component_byte_size: u64 = 0;
+        for (rtti_indices_list.*[0..chunk.*.number_of_component_types]) |rtti_index| {
+            const comp_size = comp_size_list[rtti_index];
+            component_byte_size += pow2Align(usize, comp_size * chunk.*.number_of_entities, alignment);
+        }
+        break :blk component_bytes_offset + component_byte_size;
+    };
+
+    return bytes[remaining_bytes_offset..];
 }
 
 fn pow2Align(comptime T: type, num: T, @"align": T) T {
@@ -294,7 +343,7 @@ test "serializing then using parseCompChunk produce expected COMP chunk" {
     // we initialize world with 3 component types
     try testing.expectEqual(
         @as(u32, 3),
-        comp.number_of_components,
+        comp.number_of_component_types,
     );
 
     // check hashes
@@ -323,5 +372,87 @@ test "serializing then using parseCompChunk produce expected COMP chunk" {
     try testing.expectEqual(
         @as(u64, @sizeOf(Testing.Component.C)),
         size_list[2],
+    );
+}
+
+test "serializing then using parseArchChunk produce expected ARCH chunk" {
+    var storage = try StorageStub.init(testing.allocator, .{});
+    defer storage.deinit();
+
+    var a = Testing.Component.A{};
+    var b = Testing.Component.B{};
+
+    var entities: [10]Entity = undefined;
+    for (&entities) |*entity| {
+        entity.* = try storage.createEntity(.{ a, b });
+    }
+
+    const bytes = try serialize(StorageStub, testing.allocator, storage, .{});
+    defer testing.allocator.free(bytes);
+
+    // parse ezby header to get to eref bytes
+    var ezby: *Chunk.Ezby = undefined;
+    const eref_bytes = try parseEzbyChunk(bytes, &ezby);
+
+    var comp: *Chunk.Comp = undefined;
+    var hash_list: Chunk.Comp.HashList = undefined;
+    var size_list: Chunk.Comp.SizeList = undefined;
+    const void_arch_bytes = parseCompChunk(eref_bytes, &comp, &hash_list, &size_list);
+
+    const a_b_arch_bytes = blk: {
+        var arch: *Chunk.Arch = undefined;
+        var rtti_list: Chunk.Arch.RttiIndices = undefined;
+        var entity_map_list: Chunk.Arch.EntityList = undefined;
+        var component_bytes: [*]const u8 = undefined;
+        const a_b_bytes = parseArchChunk(
+            size_list[0..comp.number_of_component_types],
+            void_arch_bytes,
+            &arch,
+            &rtti_list,
+            &entity_map_list,
+            &component_bytes,
+        );
+
+        // the first arch is always the "void" archetype
+        try testing.expectEqual(Chunk.Arch{
+            .number_of_component_types = 0,
+            .number_of_entities = 0,
+        }, arch.*);
+
+        break :blk a_b_bytes;
+    };
+
+    var arch: *Chunk.Arch = undefined;
+    var rtti_indices_list: Chunk.Arch.RttiIndices = undefined;
+    var entity_list: Chunk.Arch.EntityList = undefined;
+    var component_bytes: [*]const u8 = undefined;
+    _ = parseArchChunk(
+        size_list[0..comp.number_of_component_types],
+        a_b_arch_bytes,
+        &arch,
+        &rtti_indices_list,
+        &entity_list,
+        &component_bytes,
+    );
+
+    // check if we have counted 2 types
+    try testing.expectEqual(Chunk.Arch{
+        .number_of_component_types = 2,
+        .number_of_entities = entities.len,
+    }, arch.*);
+
+    // TODO: this depend on hashing algo, and which type is hashed to a lower value ...
+    //       find a more robust way of checking this
+    const expected_rtti_indices_list = [2]u32{ 0, 1 };
+    try testing.expectEqualSlices(
+        u32,
+        &expected_rtti_indices_list,
+        rtti_indices_list[0..arch.number_of_component_types],
+    );
+
+    try testing.expectEqualSlices(
+        Entity,
+        &entities,
+        entity_list[0..arch.number_of_entities],
     );
 }
