@@ -88,6 +88,7 @@ pub fn FromConfig(comptime max_depth: u32, comptime BitMask: type) type {
             self.node_list.items[current_index].data_index = data_index;
         }
 
+        /// Find the index registered at destination
         pub fn getNodeDataIndex(self: BinaryTree, destination: BitMask.Bits) ?u32 {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, tree_color);
             defer zone.End();
