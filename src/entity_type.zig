@@ -18,4 +18,4 @@ pub const MapContext = struct {
         return e1.id == e2.id;
     }
 };
-pub const Map = @import("std").ArrayHashMap(Entity, usize, MapContext, false);
+pub const Map = @import("std").ArrayHashMap(Entity, u32, MapContext, false);
