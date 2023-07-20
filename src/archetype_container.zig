@@ -468,6 +468,28 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
             return new_archetype_created;
         }
 
+        // Retrieve an archetype with the matching bitmask, this function will create an archetype if it does not exist
+        pub fn setAndGetArchetypeIndexWithBitmap(self: *ArcheContainer, bitmap: BitMask.Bits) error{OutOfMemory}!usize {
+            // if archetype alread exist
+            if (self.tree.getNodeDataIndex(bitmap)) |index| {
+                return index;
+            }
+
+            var new_archetype = try OpaqueArchetype.init(
+                self.allocator,
+                bitmap,
+            );
+            errdefer new_archetype.deinit();
+
+            const opaque_archetype_index = @as(u32, @intCast(self.archetypes.items.len));
+            try self.archetypes.append(new_archetype);
+            errdefer _ = self.archetypes.pop();
+
+            try self.tree.appendChain(opaque_archetype_index, bitmap);
+
+            return opaque_archetype_index;
+        }
+
         pub inline fn componentIndex(comptime Component: type) comptime_int {
             inline for (sorted_components, 0..) |SortComponent, i| {
                 if (Component == SortComponent) {
