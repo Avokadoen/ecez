@@ -307,12 +307,20 @@ pub fn CreateStorage(
                 pub const Iter = IterType;
 
                 pub fn submit(storage: Storage) Iter {
-                    const zone = ztracy.ZoneNC(@src(), "Query submit", Color.storage);
+                    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
                     defer zone.End();
 
                     return Iter.init(storage.container.archetypes.items, storage.container.tree);
                 }
             };
+        }
+
+        /// Used by ezby to insert loaded bytes directly into an archetype
+        pub inline fn setAndGetArchetypeIndexWithBitmap(self: *Storage, bitmap: ComponentMask.Bits) error{OutOfMemory}!usize {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
+            defer zone.End();
+
+            return self.container.setAndGetArchetypeIndexWithBitmap(bitmap);
         }
 
         fn indexOfSharedType(comptime Shared: type) comptime_int {

@@ -22,6 +22,8 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
 
         allocator: Allocator,
 
+        /// store the mapping from Entity -> index
+        /// the storage has a strict requirement that values increment (0, 1, 2 ...)
         entities: EntityMap,
 
         component_bitmask: ComponentMask.Bits,
@@ -29,7 +31,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
         void_component: [0]u8 = [0]u8{},
 
         pub fn init(allocator: Allocator, component_bitmask: ComponentMask.Bits) error{OutOfMemory}!OpaqueArchetype {
-            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype init", Color.opaque_archetype);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
             const type_count = @popCount(component_bitmask);
@@ -49,7 +51,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
         }
 
         pub fn deinit(self: *OpaqueArchetype) void {
-            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype deinit", Color.opaque_archetype);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
             self.entities.deinit();
@@ -60,8 +62,9 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
         }
 
         pub fn clearRetainingCapacity(self: *OpaqueArchetype) void {
-            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype clear", Color.opaque_archetype);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
+
             self.entities.clearRetainingCapacity();
 
             for (self.component_storage) |*component_buffer| {
@@ -81,7 +84,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             comptime bitmask: ComponentMask.Bits,
             comptime Component: type,
         ) ecez_error.ArchetypeError!*Component {
-            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype getComponent", Color.opaque_archetype);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
             if (self.hasComponents(bitmask) == false) {
@@ -111,7 +114,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             component: anytype,
             comptime bitmask: ComponentMask.Bits,
         ) ArchetypeError!void {
-            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype setComponent", Color.opaque_archetype);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
             const Component = @TypeOf(component);
@@ -138,7 +141,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             entity: Entity,
             all_component_sizes: [max_component_count]u32,
         ) error{OutOfMemory}!void {
-            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype prepareNewEntity", Color.opaque_archetype);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
             const value = self.entities.count();
@@ -164,13 +167,13 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             data: []const []const u8,
             all_component_sizes: [max_component_count]u32,
         ) error{OutOfMemory}!void {
-            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype registerEntity", Color.opaque_archetype);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
             std.debug.assert(data.len == @popCount(self.component_bitmask));
 
             const value = self.entities.count();
-            try self.entities.put(entity, value);
+            try self.entities.put(entity, @intCast(value));
             errdefer _ = self.entities.swapRemove(entity);
 
             // TODO: proper error defer here if some later append fails
@@ -195,7 +198,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             all_component_sizes: [max_component_count]u32,
             out_buffers: [][]u8,
         ) error{EntityMissing}!void {
-            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype fetchEntityComponentView", Color.opaque_archetype);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
             std.debug.assert(out_buffers.len == self.getComponentCount());
@@ -231,7 +234,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             entity: Entity,
             all_component_sizes: [max_component_count]u32,
         ) error{EntityMissing}!void {
-            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype swapRemoveEntity", Color.opaque_archetype);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
             // remove entity from entity map
@@ -289,7 +292,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             entity: Entity,
             all_component_sizes: [max_component_count]u32,
         ) error{EntityMissing}!void {
-            const zone = ztracy.ZoneNC(@src(), "OpaqueArchetype removeEntity", Color.opaque_archetype);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
             // remove entity from entity map
@@ -375,8 +378,36 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             storage.inner_len = self.entities.count();
         }
 
+        pub inline fn getEntityCount(self: OpaqueArchetype) u64 {
+            return self.entities.count();
+        }
+
         pub inline fn getComponentCount(self: OpaqueArchetype) ComponentMask.Bits {
             return @popCount(self.component_bitmask);
+        }
+
+        pub inline fn getEntities(self: OpaqueArchetype) []const Entity {
+            return self.entities.keys();
+        }
+
+        pub inline fn getComponentTypeIndices(self: OpaqueArchetype) []const u32 {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
+            defer zone.End();
+
+            var list: [max_component_count]u32 = undefined;
+            var bitmask = self.component_bitmask;
+            var current_offset: ComponentMask.Shift = 0;
+            const iter_count = self.getComponentCount();
+            for (0..iter_count) |index| {
+                const bit_offset = @ctz(bitmask);
+                bitmask >>= bit_offset;
+                bitmask &= ~@as(ComponentMask.Bits, 1);
+
+                current_offset += bit_offset;
+                list[index] = current_offset;
+            }
+
+            return list[0..iter_count];
         }
 
         /// Given a single bit we can easily calculate how many bits are before the bit in the bitmask to extrapolate the index
@@ -727,4 +758,39 @@ test "getStorageData retrieves components view" {
             try testing.expectEqual(Testing.Component.B{ .value = @as(u8, @intCast(i)) }, b);
         }
     }
+}
+
+test "entity map values are increment of previous" {
+    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
+    var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All);
+    defer archetype.deinit();
+
+    {
+        var buffer: [3][]u8 = undefined;
+        for (0..100) |i| {
+            const mock_entity = Entity{ .id = @as(u32, @intCast(i)) };
+            var a = A{ .value = @as(u32, @intCast(i)) };
+            buffer[0] = std.mem.asBytes(&a);
+            var b = B{ .value = @as(u8, @intCast(i)) };
+            buffer[1] = std.mem.asBytes(&b);
+            buffer[2] = &[0]u8{};
+
+            try archetype.registerEntity(mock_entity, &buffer, sizes);
+        }
+    }
+
+    for (archetype.entities.values(), 0..) |value, index| {
+        try testing.expectEqual(index, value);
+    }
+}
+
+test "getComponentTypeIndices produce correct indices" {
+    var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.A | Testing.Bits.C);
+    defer archetype.deinit();
+
+    try testing.expectEqualSlices(
+        u32,
+        @as([]const u32, &[_]u32{ 0, 2 }),
+        archetype.getComponentTypeIndices(),
+    );
 }
