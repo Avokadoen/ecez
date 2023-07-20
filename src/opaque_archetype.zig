@@ -173,7 +173,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             std.debug.assert(data.len == @popCount(self.component_bitmask));
 
             const value = self.entities.count();
-            try self.entities.put(entity, value);
+            try self.entities.put(entity, @intCast(value));
             errdefer _ = self.entities.swapRemove(entity);
 
             // TODO: proper error defer here if some later append fails
@@ -400,7 +400,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             const iter_count = self.getComponentCount();
             for (0..iter_count) |index| {
                 const bit_offset = @ctz(bitmask);
-                bitmask <<= bit_offset;
+                bitmask >>= bit_offset;
                 bitmask &= ~@as(ComponentMask.Bits, 1);
 
                 current_offset += bit_offset;
