@@ -30,6 +30,9 @@ pub const Event = meta.Event;
 
 pub const tracy_alloc = @import("tracy_alloc.zig");
 
+// Ezby can be used to serialize and deserialize storages
+pub const ezby = @import("ezby.zig");
+
 test {
     _ = @import("archetype_container.zig");
     _ = @import("binary_tree.zig");

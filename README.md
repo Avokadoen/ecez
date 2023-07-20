@@ -333,13 +333,39 @@ if (happy_healhy_monster_iter.next()) |fifth_happy_monster| {
 
 ```
 
+### Serialization through the ezby format
+
+ecez uses a custom byte format to convert storages into a slice of bytes.
+
+There is a loose spec: [ezby spec](byte_format.md)
+
+#### Example
+
+```zig
+const ecez = @import("ecez);
+const ezby = ecez.ezby;
+
+// ... create storage and some entities with components ...
+
+// serialize the storage into a slice of bytes
+const bytes = try ezby.serialize(StorageStub, testing.allocator, storage, .{});
+defer testing.allocator.free(bytes);
+
+// nuke the storage for fun
+storage.clearRetainingCapacity();
+
+// restore the storage state with the slice of bytes which is ezby encoded
+try ezby.deserialize(StorageStub, &storage, bytes);
+```
+
+
 ### Tracy integration using [ztracy](https://github.com/michal-z/zig-gamedev/tree/main/libs/ztracy)
 ![ztracy](media/ztracy.png)
 
 The codebase has integration with tracy to allow both the library itself, but also applications to profile using a [tracy client](https://github.com/wolfpld/tracy). There is also a wrapper allocator called [TracyAllocator](https://github.com/Avokadoen/ecez/blob/main/src/tracy_alloc.zig) which allows tracy to report on memory usage if the application opts in to it. The extra work done by tracy is of course NOPs in builds without tracy!
 
 
-### Example
+### Demo/Examples
 
 Currently the project has one simple example in the [example folder](https://github.com/Avokadoen/ecez/tree/main/examples) which is an implementation of [conway's game of life](https://github.com/Avokadoen/ecez/blob/main/examples/game-of-life/main.zig) which also integrate tracy
 
