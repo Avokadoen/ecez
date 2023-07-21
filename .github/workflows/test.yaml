@@ -20,6 +20,7 @@ permissions:
 jobs:
   unit_test:
     name: Zig unit tests
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
 
     steps:
