@@ -66,7 +66,7 @@ pub fn main() anyerror!void {
     var storage = try Storage.init(allocator, .{ render_target, grid_config });
     defer storage.deinit();
 
-    var scheduler = Scheduler.init(&storage);
+    var scheduler = Scheduler.init();
     defer scheduler.deinit();
 
     const init_seed: u64 = @intCast(std.time.timestamp());
@@ -111,7 +111,7 @@ pub fn main() anyerror!void {
         defer ztracy.FrameMark();
 
         // schedule a new update cycle
-        scheduler.dispatchEvent(.loop, .{}, .{});
+        scheduler.dispatchEvent(&storage, .loop, .{}, .{});
 
         // wait for previous update and render
         scheduler.waitEvent(.loop);
@@ -313,7 +313,7 @@ test "systems produce expected 3x3 grid state" {
     var storage = try Storage.init(std.testing.allocator, .{ render_target, grid_config });
     defer storage.deinit();
 
-    var scheduler = Scheduler.init(&storage);
+    var scheduler = Scheduler.init();
     defer scheduler.deinit();
 
     for (1..grid_config.dimension_y + 1) |i| {
@@ -342,7 +342,7 @@ test "systems produce expected 3x3 grid state" {
             });
         }
 
-        scheduler.dispatchEvent(.loop, .{}, .{});
+        scheduler.dispatchEvent(&storage, .loop, .{}, .{});
         scheduler.waitEvent(.loop);
 
         for ([_]bool{
@@ -378,7 +378,7 @@ test "systems produce expected 3x3 grid state" {
             ) catch unreachable;
         }
 
-        scheduler.dispatchEvent(.loop, .{}, .{});
+        scheduler.dispatchEvent(&storage, .loop, .{}, .{});
         scheduler.waitEvent(.loop);
 
         for (&state_2, &cell_entities) |alive, entity| {
@@ -386,7 +386,7 @@ test "systems produce expected 3x3 grid state" {
             try std.testing.expectEqual(alive, health.alive[0]);
         }
 
-        scheduler.dispatchEvent(.loop, .{}, .{});
+        scheduler.dispatchEvent(&storage, .loop, .{}, .{});
         scheduler.waitEvent(.loop);
 
         for (&state_1, &cell_entities) |alive, entity| {

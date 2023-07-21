@@ -59,15 +59,15 @@ Zig's comptime feature is utilized to perform static reflection on the usage of 
     var storage = try Storage.init(testing.allocator, .{});
     defer storage.deinit();
 
-    var scheduler = Scheduler.init(&storage);
+    var scheduler = Scheduler.init();
     defer scheduler.deinit();
 
-    scheduler.dispatchEvent(.update_loop, .{}, .{});
+    scheduler.dispatchEvent(&storage, .update_loop, .{}, .{});
 
     // Dispatch event can take event "scoped" arguments, like here where we include a mouse event.
     // Events can also exclude components when executing systems. In this example we will not call
     // "fireWandSystem" on any entity components if the entity has a MonsterTag component.
-    scheduler.dispatchEvent(.on_mouse_click, .{@as(MouseArg, mouse)}, .{ MonsterTag });
+    scheduler.dispatchEvent(&storage, .on_mouse_click, .{@as(MouseArg, mouse)}, .{ MonsterTag });
 
     // Events/Systems execute asynchronously
     // You can wait on specific events ...
@@ -111,7 +111,7 @@ Example of EventArgument
     // ...
 
     // As the event is triggered we supply event specific data
-    scheduler.dispatchEvent(.onMouseMove, MouseMove{ .x = 40, .y = 2 }, .{});
+    scheduler.dispatchEvent(&storage, .onMouseMove, MouseMove{ .x = 40, .y = 2 }, .{});
 ```
 
 Example of SharedState
