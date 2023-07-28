@@ -1124,7 +1124,7 @@ test "reproducer: Removing component cause storage to become in invalid state" {
     try testing.expectEqual(scale, try storage.getComponent(entity, Scale));
 }
 
-test "query type order is independent" {
+test "reproducer: MineSweeper index out of bound caused by incorrect mapping of query to internal storage" {
     const transform = struct {
         const Position = struct {
             a: u8 = 0.0,
