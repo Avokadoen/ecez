@@ -335,10 +335,9 @@ pub fn CreateStorage(
 
                 pub const Iter = IterType;
 
-                pub fn submit(storage: Storage) Iter {
+                pub fn submit(storage: *Storage) Iter {
                     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
                     defer zone.End();
-
                     return Iter.init(storage.container.archetypes.items, storage.container.tree);
                 }
             };
@@ -655,7 +654,7 @@ test "query with single include type works" {
         var a_iter = StorageStub.Query(
             struct { a: Testing.Component.A },
             .{},
-        ).submit(storage);
+        ).submit(&storage);
 
         while (a_iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
@@ -685,7 +684,7 @@ test "query with multiple include type works" {
                 b: Testing.Component.B,
             },
             .{},
-        ).submit(storage);
+        ).submit(&storage);
 
         var index: usize = 0;
         while (a_b_iter.next()) |item| {
@@ -718,7 +717,7 @@ test "query with single ptr include type works" {
         var a_iter = StorageStub.Query(
             struct { a_ptr: *Testing.Component.A },
             .{},
-        ).submit(storage);
+        ).submit(&storage);
 
         while (a_iter.next()) |item| {
             item.a_ptr.value += 1;
@@ -731,7 +730,7 @@ test "query with single ptr include type works" {
         var a_iter = StorageStub.Query(
             struct { a: Testing.Component.A },
             .{},
-        ).submit(storage);
+        ).submit(&storage);
 
         while (a_iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
@@ -764,7 +763,7 @@ test "query with single include type and single exclude works" {
         var iter = StorageStub.Query(
             struct { a: Testing.Component.A },
             .{Testing.Component.B},
-        ).submit(storage);
+        ).submit(&storage);
 
         var index: usize = 100;
         while (iter.next()) |item| {
@@ -806,7 +805,7 @@ test "query with single include type and multiple exclude works" {
         var iter = StorageStub.Query(
             struct { a: Testing.Component.A },
             .{ Testing.Component.B, Testing.Component.C },
-        ).submit(storage);
+        ).submit(&storage);
 
         var index: usize = 200;
         while (iter.next()) |item| {
@@ -843,7 +842,7 @@ test "query with entity only works" {
                 a: Testing.Component.A,
             },
             .{},
-        ).submit(storage);
+        ).submit(&storage);
 
         var index: usize = 0;
         while (iter.next()) |item| {
@@ -877,7 +876,7 @@ test "query with entity and include and exclude only works" {
                 a: Testing.Component.A,
             },
             .{Testing.Component.B},
-        ).submit(storage);
+        ).submit(&storage);
 
         var index: usize = 0;
         while (iter.next()) |item| {
@@ -902,7 +901,7 @@ test "query fields are order independent" {
         var iter = StorageStub.Query(
             AbEntityType,
             .{},
-        ).submit(storage);
+        ).submit(&storage);
 
         const ab_item = iter.next();
         try testing.expectEqual(ab_item, ab_item);
@@ -917,7 +916,7 @@ test "query fields are order independent" {
         var iter = StorageStub.Query(
             BaEntityType,
             .{},
-        ).submit(storage);
+        ).submit(&storage);
 
         const ab_item = iter.next();
         try testing.expectEqual(ab_item, ab_item);
@@ -1184,7 +1183,7 @@ test "query type order is independent" {
     };
     _ = try storage.createEntity(Node{});
 
-    var iter = Query.submit(storage);
+    var iter = Query.submit(&storage);
 
     try testing.expect(iter.next() != null);
 }
