@@ -316,12 +316,6 @@ test "systems produce expected 3x3 grid state" {
     var scheduler = Scheduler.init();
     defer scheduler.deinit();
 
-    for (1..grid_config.dimension_y + 1) |i| {
-        _ = try storage.createEntity(.{
-            LinePos{ .nth = @intCast(i) },
-        });
-    }
-
     var cell_entities: [3 * 3]ecez.Entity = undefined;
 
     { // Still life: Block
@@ -368,7 +362,7 @@ test "systems produce expected 3x3 grid state" {
             false, true, false,
         };
 
-        for (&state_1, &cell_entities) |alive, entity| {
+        for (&cell_entities, state_1) |entity, alive| {
             storage.setComponent(
                 entity,
                 Health{
@@ -381,7 +375,7 @@ test "systems produce expected 3x3 grid state" {
         scheduler.dispatchEvent(&storage, .loop, .{}, .{});
         scheduler.waitEvent(.loop);
 
-        for (&state_2, &cell_entities) |alive, entity| {
+        for (&cell_entities, state_2) |entity, alive| {
             const health = try storage.getComponent(entity, Health);
             try std.testing.expectEqual(alive, health.alive[0]);
         }
@@ -389,7 +383,7 @@ test "systems produce expected 3x3 grid state" {
         scheduler.dispatchEvent(&storage, .loop, .{}, .{});
         scheduler.waitEvent(.loop);
 
-        for (&state_1, &cell_entities) |alive, entity| {
+        for (&cell_entities, state_1) |entity, alive| {
             const health = try storage.getComponent(entity, Health);
             try std.testing.expectEqual(alive, health.alive[1]);
         }
