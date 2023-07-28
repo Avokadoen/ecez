@@ -184,7 +184,7 @@ pub fn CreateStorage(
 
         /// Query components which can be iterated upon.
         /// Parameters:
-        ///     - result_item:   All the components you would like to iterate over in a single struct
+        ///     - ResultItem:   All the components you would like to iterate over in a single struct
         ///                      each component in the struct will belong to the same entity
         ///                      A field does not have to be a component if it is of type Entity
         ///     - exclude_types: All the components that should be excluded from the query result
@@ -199,8 +199,8 @@ pub fn CreateStorage(
         ///    std.debug.print("{any}", .{item.a});
         /// }
         /// ```
-        pub fn Query(comptime result_item: type, comptime exclude_types: anytype) type {
-            const include_type_info = @typeInfo(result_item);
+        pub fn Query(comptime ResultItem: type, comptime exclude_types: anytype) type {
+            const include_type_info = @typeInfo(ResultItem);
             if (include_type_info != .Struct) {
                 @compileError("query result_item must be a struct of components");
             }
@@ -210,13 +210,31 @@ pub fn CreateStorage(
                 @compileError("query exclude types must be a tuple of types");
             }
 
-            comptime var include_inner_type_arr: [include_type_info.Struct.fields.len]type = undefined;
+            comptime var item_component_count = 0;
+            comptime var query_has_entity = false;
+
+            const include_fields = include_type_info.Struct.fields;
+            {
+                for (include_fields) |field| {
+                    if (field.type == Entity) {
+                        if (item_component_count != 0) {
+                            @compileError("entity must be the first field in a query to be valid");
+                        }
+
+                        query_has_entity = true;
+                        continue;
+                    }
+
+                    item_component_count += 1;
+                }
+            }
+
+            const after_entity_index = if (query_has_entity) 1 else 0;
+            comptime var include_inner_type_arr: [include_type_info.Struct.fields.len - after_entity_index]type = undefined;
             inline for (
                 &include_inner_type_arr,
-                include_type_info.Struct.fields,
-                0..,
-            ) |*inner_type, result_field, index| {
-                _ = index;
+                include_type_info.Struct.fields[after_entity_index..],
+            ) |*inner_type, result_field| {
                 inner_type.* = blk: {
                     const field_info = @typeInfo(result_field.type);
                     if (field_info != .Pointer) {
@@ -244,7 +262,6 @@ pub fn CreateStorage(
                     }
                 }
             }
-            include_inner_type_arr = query.sortTypes(&include_inner_type_arr);
 
             var exclude_type_arr: [exclude_type_info.Struct.fields.len]type = undefined;
             inline for (&exclude_type_arr, exclude_type_info.Struct.fields, 0..) |*exclude_type, field, index| {
@@ -270,9 +287,7 @@ pub fn CreateStorage(
             const include_bitmask = comptime include_bit_blk: {
                 var bitmask: ComponentMask.Bits = 0;
                 inline for (include_inner_type_arr) |Component| {
-                    if (Component != Entity) {
-                        bitmask |= 1 << Container.componentIndex(Component);
-                    }
+                    bitmask |= 1 << Container.componentIndex(Component);
                 }
                 break :include_bit_blk bitmask;
             };
@@ -293,8 +308,22 @@ pub fn CreateStorage(
                 }
             }
 
+            const sorted_include_inner_type_arr = query.sortTypes(&include_inner_type_arr);
+
+            comptime var field_map: [item_component_count]comptime_int = undefined;
+            assign_map: inline for (&field_map, include_inner_type_arr) |*map_entry, org_type| {
+                inline for (sorted_include_inner_type_arr, 0..) |sorted_type, new_index| {
+                    if (sorted_type == org_type) {
+                        map_entry.* = new_index;
+                        continue :assign_map;
+                    }
+                }
+            }
+
             const IterType = iterator.FromTypes(
-                result_item,
+                ResultItem,
+                &field_map,
+                query_has_entity,
                 include_bitmask,
                 exclude_bitmask,
                 OpaqueArchetype,
@@ -861,6 +890,41 @@ test "query with entity and include and exclude only works" {
     }
 }
 
+test "query fields are order independent" {
+    var storage = try StorageStub.init(std.testing.allocator, .{});
+    defer storage.deinit();
+
+    const entity_state = AbEntityType{};
+    const entity = try storage.createEntity(entity_state);
+    _ = entity;
+
+    {
+        var iter = StorageStub.Query(
+            AbEntityType,
+            .{},
+        ).submit(storage);
+
+        const ab_item = iter.next();
+        try testing.expectEqual(ab_item, ab_item);
+        try testing.expectEqual(@as(?AbEntityType, null), iter.next());
+    }
+
+    {
+        const BaEntityType = struct {
+            b: Testing.Component.B = .{},
+            a: Testing.Component.A = .{},
+        };
+        var iter = StorageStub.Query(
+            BaEntityType,
+            .{},
+        ).submit(storage);
+
+        const ab_item = iter.next();
+        try testing.expectEqual(ab_item, ab_item);
+        try testing.expectEqual(@as(?BaEntityType, null), iter.next());
+    }
+}
+
 // this reproducer never had an issue filed, so no issue number
 test "reproducer: component data is mangled by adding additional components to entity" {
     // until issue https://github.com/Avokadoen/ecez/issues/91 is resolved we must make sure to match type names
@@ -1059,4 +1123,68 @@ test "reproducer: Removing component cause storage to become in invalid state" {
     try testing.expectEqual(transform, try storage.getComponent(entity, Transform));
     try testing.expectEqual(rotation, try storage.getComponent(entity, Rotation));
     try testing.expectEqual(scale, try storage.getComponent(entity, Scale));
+}
+
+test "query type order is independent" {
+    const transform = struct {
+        const Position = struct {
+            a: u8 = 0.0,
+        };
+
+        const Rotation = struct {
+            a: u16 = 0.0,
+        };
+
+        const Scale = struct {
+            a: u32 = 0,
+        };
+
+        const WorldTransform = struct {
+            a: u64 = 0,
+        };
+    };
+
+    const Parent = struct {
+        a: u128 = 0,
+    };
+    const Children = struct {
+        a: u256 = 0,
+    };
+
+    const Storage = CreateStorage(.{
+        transform.Position,
+        transform.Rotation,
+        transform.Scale,
+        transform.WorldTransform,
+        Parent,
+        Children,
+    }, .{});
+
+    const QueryItem = struct {
+        children: Children,
+        position: transform.Position,
+        rotation: transform.Rotation,
+        scale: transform.Scale,
+        world_transform: *transform.WorldTransform,
+    };
+    const Query = Storage.Query(
+        QueryItem,
+        // exclude type
+        .{Parent},
+    );
+    var storage = try Storage.init(testing.allocator, .{});
+    defer storage.deinit();
+
+    const Node = struct {
+        p: transform.Position = .{},
+        r: transform.Rotation = .{},
+        s: transform.Scale = .{},
+        w: transform.WorldTransform = .{},
+        c: Children = .{},
+    };
+    _ = try storage.createEntity(Node{});
+
+    var iter = Query.submit(storage);
+
+    try testing.expect(iter.next() != null);
 }

@@ -154,7 +154,8 @@ Example of Query
 ```zig
     const QueryActiveColliders = StorageStub.Query(
         struct{
-            entity: Entity,
+            // !entity must be the first field if it exist!
+            entity: Entity, 
             position: Position,
             collider: Collider,
         },
