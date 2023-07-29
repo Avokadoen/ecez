@@ -58,9 +58,18 @@ pub fn CreateStorage(
             const shared_state_map = meta.typeMap(shared_state_types, @TypeOf(shared_state));
             inline for (shared_state_map, 0..) |index, i| {
                 const shared_info = @typeInfo(@TypeOf(shared_state[index]));
-                // copy all data except the added magic field
-                inline for (shared_info.Struct.fields) |field| {
-                    @field(actual_shared_state[i], field.name) = @field(shared_state[index], field.name);
+
+                switch (shared_info) {
+                    .Struct => |struct_info| {
+                        // copy all data except the added magic field
+                        inline for (struct_info.fields) |field| {
+                            @field(actual_shared_state[i], field.name) = @field(shared_state[index], field.name);
+                        }
+                    },
+                    .Pointer => |_| {
+                        actual_shared_state[i].ptr = shared_state[index];
+                    },
+                    else => unreachable,
                 }
             }
 
@@ -617,6 +626,25 @@ test "getSharedState retrieve state" {
 
     try testing.expectEqual(@as(u32, 4), storage.getSharedStateInnerType(Testing.Component.A).value);
     try testing.expectEqual(@as(u8, 2), storage.getSharedStateInnerType(Testing.Component.B).value);
+}
+
+test "shared state can be pointer type" {
+    var a = Testing.Component.A{ .value = 0 };
+
+    var storage = try CreateStorage(
+        Testing.AllComponentsTuple,
+        .{*Testing.Component.A},
+    ).init(testing.allocator, .{
+        &a,
+    });
+    defer storage.deinit();
+
+    {
+        var a_ptr = storage.getSharedStateInnerType(*Testing.Component.A).ptr;
+        a_ptr.value = 69;
+    }
+
+    try testing.expectEqual(@as(u32, 69), a.value);
 }
 
 test "setSharedState retrieve state" {

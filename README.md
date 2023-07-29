@@ -141,6 +141,37 @@ Example of SharedState
     var storage = try Storage.init(allocator, .{KillCounter{ .value = 0 }});
 ```
 
+shared state can also be pointers:
+
+```zig
+    const OnKill = struct {
+        pub fn system(health: Health, kill_counter: ecez.SharedState(*KillCounter)) void {
+            health = 0;
+            // notice special variable to access pointer
+            kill_counter.ptr.count += 1;
+        }
+    };
+
+    const Storage = ecez.CreateStorage(
+        .{
+            // ... Components
+        },
+        .{
+            *KillCounter,
+        }
+    )
+    const Scheduler = ecez.CreateScheduler(
+        Storage,
+        .{
+            ecez.Event("onKill", .{OnKill}, .{}),
+        }
+    );
+
+    var counter = KillCounter{ .value = 0 };
+    var storage = try Storage.init(allocator, .{&counter});
+
+    // ..
+```
 Example of Entity
 ```zig
     const System = struct {

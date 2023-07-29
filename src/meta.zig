@@ -986,34 +986,52 @@ pub fn SharedStateStorage(comptime shared_state: anytype) type {
 
 /// This function will generate a type that is sufficient to mark a parameter as a shared state type
 pub fn SharedState(comptime State: type) type {
-    const state_info = blk: {
-        const info = @typeInfo(State);
-        if (info != .Struct) {
-            @compileError("shared state must be of type struct");
-        }
-        break :blk info.Struct;
-    };
+    const info = @typeInfo(State);
 
-    var shared_state_fields: [state_info.fields.len + 1]Type.StructField = undefined;
-    inline for (state_info.fields, 0..) |field, i| {
-        shared_state_fields[i] = field;
-    }
-
-    const default_value = ArgType.shared_state;
-    shared_state_fields[state_info.fields.len] = Type.StructField{
+    const shared_state_tag_field_default_value = ArgType.shared_state;
+    const shared_state_tag_field = Type.StructField{
         .name = secret_field,
         .type = ArgType,
-        .default_value = @ptrCast(&default_value),
+        .default_value = @ptrCast(&shared_state_tag_field_default_value),
         .is_comptime = true,
         .alignment = 0,
     };
 
-    return @Type(Type{ .Struct = .{
-        .layout = state_info.layout,
-        .fields = &shared_state_fields,
-        .decls = &[0]Type.Declaration{},
-        .is_tuple = state_info.is_tuple,
-    } });
+    switch (info) {
+        .Struct => |state_info| {
+            var shared_state_fields: [state_info.fields.len + 1]Type.StructField = undefined;
+            inline for (state_info.fields, 0..) |field, i| {
+                shared_state_fields[i] = field;
+            }
+
+            shared_state_fields[state_info.fields.len] = shared_state_tag_field;
+
+            return @Type(Type{ .Struct = .{
+                .layout = state_info.layout,
+                .fields = &shared_state_fields,
+                .decls = &[0]Type.Declaration{},
+                .is_tuple = state_info.is_tuple,
+            } });
+        },
+        .Pointer => |state_info| {
+            _ = state_info;
+            const shared_state_fields = [2]Type.StructField{ Type.StructField{
+                .name = "ptr",
+                .type = State,
+                .default_value = null,
+                .is_comptime = false,
+                .alignment = @alignOf(State),
+            }, shared_state_tag_field };
+
+            return @Type(Type{ .Struct = .{
+                .layout = .Auto,
+                .fields = &shared_state_fields,
+                .decls = &[0]Type.Declaration{},
+                .is_tuple = false,
+            } });
+        },
+        else => @compileError("shared state must be of type struct or pointer"),
+    }
 }
 
 /// Special system argument that tells the system how many times the
