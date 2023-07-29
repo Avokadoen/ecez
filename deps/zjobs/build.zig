@@ -1,36 +1,45 @@
 const std = @import("std");
 
 pub const Package = struct {
-    module: *std.Build.Module,
+    zjobs: *std.Build.Module,
+
+    pub fn link(pkg: Package, exe: *std.Build.CompileStep) void {
+        exe.addModule("zjobs", pkg.zjobs);
+    }
 };
 
-pub fn package(b: *std.Build, _: struct {}) Package {
-    const module = b.createModule(.{
+pub fn package(
+    b: *std.Build,
+    _: std.zig.CrossTarget,
+    _: std.builtin.Mode,
+    _: struct {},
+) Package {
+    const zjobs = b.createModule(.{
         .source_file = .{ .path = thisDir() ++ "/src/zjobs.zig" },
     });
-    return .{ .module = module };
+    return .{ .zjobs = zjobs };
 }
 
 pub fn build(b: *std.Build) void {
-    const build_mode = b.standardOptimizeOption(.{});
+    const optimize = b.standardOptimizeOption(.{});
     const target = b.standardTargetOptions(.{});
-    const tests = buildTests(b, build_mode, target);
 
     const test_step = b.step("test", "Run zjobs tests");
-    test_step.dependOn(&tests.step);
+    test_step.dependOn(runTests(b, optimize, target));
 }
 
-pub fn buildTests(
+pub fn runTests(
     b: *std.Build,
-    build_mode: std.builtin.Mode,
+    optimize: std.builtin.Mode,
     target: std.zig.CrossTarget,
-) *std.Build.CompileStep {
+) *std.Build.Step {
     const tests = b.addTest(.{
+        .name = "zjobs-tests",
         .root_source_file = .{ .path = thisDir() ++ "/src/zjobs.zig" },
         .target = target,
-        .optimize = build_mode,
+        .optimize = optimize,
     });
-    return tests;
+    return &b.addRunArtifact(tests).step;
 }
 
 inline fn thisDir() []const u8 {

@@ -2,30 +2,36 @@ const std = @import("std");
 const ztracy = @import("deps/ztracy/build.zig");
 const zjobs = @import("deps/zjobs/build.zig");
 
-/// Links a project exe with ecez and optinally enable ztracy
-/// The exe may also link with tracy and zjobs by setting link_ecez_dependencies
-pub fn link(b: *std.Build, exe: *std.Build.LibExeObjStep, link_ecez_dependencies: bool, enable_tracy: bool) void {
-    var ztracy_package = ztracy.package(b, .{ .options = .{ .enable_ztracy = enable_tracy } });
-
-    var zjobs_package = zjobs.package(b, .{});
+/// Links a project exe with ecez
+/// ecez depend on ztracy and zjobs which you can either link manually or with link_ecez_dependencies
+pub fn link(
+    b: *std.Build,
+    exe: *std.Build.LibExeObjStep,
+    target: std.zig.CrossTarget,
+    mode: std.builtin.Mode,
+    link_ecez_dependencies: bool,
+    enable_tracy: bool,
+) void {
+    var ztracy_package = ztracy.package(b, target, mode, .{
+        .options = .{ .enable_ztracy = enable_tracy },
+    });
+    var zjobs_package = zjobs.package(b, target, mode, .{});
 
     const ecez_module = b.createModule(std.Build.CreateModuleOptions{
         .source_file = .{ .path = thisDir() ++ "/src/main.zig" },
         .dependencies = &[_]std.Build.ModuleDependency{ .{
             .name = "ztracy",
-            .module = ztracy_package.module,
+            .module = ztracy_package.ztracy,
         }, .{
             .name = "zjobs",
-            .module = zjobs_package.module,
+            .module = zjobs_package.zjobs,
         } },
     });
     exe.addModule("ecez", ecez_module);
 
     if (link_ecez_dependencies) {
-        exe.addModule("ztracy", ztracy_package.module);
-        ztracy.link(exe, .{ .enable_ztracy = enable_tracy });
-
-        exe.addModule("zjobs", zjobs_package.module);
+        ztracy_package.link(exe);
+        zjobs_package.link(exe);
     }
 }
 
@@ -36,9 +42,10 @@ pub fn build(b: *std.Build) void {
 
     // initialize tracy
     const enable_tracy = b.option(bool, "enable-tracy", "Enable Tracy profiler") orelse false;
-    var ztracy_package = ztracy.package(b, .{ .options = .{ .enable_ztracy = enable_tracy } });
-
-    var zjobs_package = zjobs.package(b, .{});
+    var ztracy_package = ztracy.package(b, target, mode, .{ .options = .{
+        .enable_ztracy = enable_tracy,
+    } });
+    var zjobs_package = zjobs.package(b, target, mode, .{});
 
     // create a debuggable test executable
     {
@@ -48,9 +55,8 @@ pub fn build(b: *std.Build) void {
             .optimize = mode,
         });
 
-        main_tests.addModule("ztracy", ztracy_package.module);
-        ztracy.link(main_tests, .{ .enable_ztracy = enable_tracy });
-        main_tests.addModule("zjobs", zjobs_package.module);
+        ztracy_package.link(main_tests);
+        zjobs_package.link(main_tests);
 
         b.installArtifact(main_tests);
     }
@@ -61,9 +67,8 @@ pub fn build(b: *std.Build) void {
         .optimize = mode,
     });
 
-    main_tests.addModule("ztracy", ztracy_package.module);
-    ztracy.link(main_tests, .{ .enable_ztracy = enable_tracy });
-    main_tests.addModule("zjobs", zjobs_package.module);
+    ztracy_package.link(main_tests);
+    zjobs_package.link(main_tests);
 
     // main_tests_step.linkLibrary(lib);
     const test_step = b.step("test", "Run all tests");
@@ -74,10 +79,10 @@ pub fn build(b: *std.Build) void {
         .source_file = .{ .path = "src/main.zig" },
         .dependencies = &[_]std.Build.ModuleDependency{ .{
             .name = "ztracy",
-            .module = ztracy_package.module,
+            .module = ztracy_package.ztracy,
         }, .{
             .name = "zjobs",
-            .module = zjobs_package.module,
+            .module = zjobs_package.zjobs,
         } },
     });
 
@@ -96,11 +101,8 @@ pub fn build(b: *std.Build) void {
             .optimize = mode,
         });
 
-        exe.addModule("ecez", ecez_module);
-
-        exe.addModule("ztracy", ztracy_package.module);
-        ztracy.link(exe, .{ .enable_ztracy = enable_tracy });
-        exe.addModule("zjobs", zjobs_package.module);
+        // link ecez
+        link(b, exe, target, mode, true, enable_tracy);
 
         b.installArtifact(exe);
 
@@ -114,10 +116,10 @@ pub fn build(b: *std.Build) void {
             .root_source_file = .{ .path = path },
             .optimize = mode,
         });
-        example_tests.addModule("ecez", ecez_module);
 
-        example_tests.addModule("ztracy", ztracy_package.module);
-        ztracy.link(example_tests, .{ .enable_ztracy = enable_tracy });
+        example_tests.addModule("ecez", ecez_module);
+        ztracy_package.link(example_tests);
+        zjobs_package.link(example_tests);
 
         const example_test_run = b.addRunArtifact(example_tests);
         test_step.dependOn(&example_test_run.step);

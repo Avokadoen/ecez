@@ -123,7 +123,6 @@ pub fn JobQueue(comptime config: QueueConfig) type {
         // zig fmt: off
         data           : Data align(cache_line_size) = undefined,
         exec           : Main align(cache_line_size) = undefined,
-        name           : []const u8                  = undefined,
         id             : JobId                       = JobId.none,
         prereq         : JobId                       = JobId.none,
         cycle          : Atomic(u16)                 = .{ .value = 0 },
@@ -164,7 +163,6 @@ pub fn JobQueue(comptime config: QueueConfig) type {
             const id = jobId(@as(u16, @truncate(index)), new_cycle);
 
             self.exec = @as(Main, @ptrCast(exec));
-            self.name = @typeName(Job);
             self.id = id;
             self.prereq = if (prereq != id) prereq else JobId.none;
             return id;
@@ -270,9 +268,8 @@ pub fn JobQueue(comptime config: QueueConfig) type {
             var self = Self{};
 
             // initialize free queue
-            var i: usize = 0;
-            while (i < FreeQueue.capacity) : (i += 1) {
-                self._free_queue.enqueueAssumeNotFull(i);
+            for (0..FreeQueue.capacity) |free_index| {
+                self._free_queue.enqueueAssumeNotFull(free_index);
             }
 
             self._initialized.store(true, .Monotonic);
@@ -311,21 +308,18 @@ pub fn JobQueue(comptime config: QueueConfig) type {
             assert(was_stopping == false);
 
             // spawn up to (num_cpus - 1) threads
-            var n: usize = 0;
             const num_cpus = Thread.getCpuCount() catch 2;
-            const num_threads_goal = @min(num_cpus - 1, max_threads);
-            while (n < num_threads_goal) {
-                if (Thread.spawn(.{}, threadMain, .{ self, n })) |thread| {
-                    nameThread(thread, "JobQueue[{}]", .{n});
-                    self._threads[n] = thread;
-                    n += 1;
+            self._num_threads = @min(num_cpus - 1, max_threads);
+            for (self._threads[0..self._num_threads], 0..) |*thread, thread_index| {
+                if (Thread.spawn(.{}, threadMain, .{self})) |spawned_thread| {
+                    thread.* = spawned_thread;
+                    nameThread(thread.*, "JobQueue[{}]", .{thread_index});
                 } else |err| {
-                    print("thread[{}]: {}\n", .{ n, err });
+                    print("thread[{}]: {}\n", .{ thread_index, err });
+                    self._num_threads = thread_index;
                     break;
                 }
             }
-            // print("spawned {}/{} threads\n", .{ n, num_threads_goal });
-            self._num_threads = n;
         }
 
         /// Signals threads to stop running, and prevents scheduling more jobs.
@@ -357,15 +351,9 @@ pub fn JobQueue(comptime config: QueueConfig) type {
 
             if (!self.isStarted()) return;
 
-            const n = self._num_threads;
-            // print("joining {} threads...\n", .{n});
-
-            var i: u64 = 0;
-            while (i < n) : (i += 1) {
-                self._threads[i].join();
+            for (self._threads[0..self._num_threads]) |thread| {
+                thread.join();
             }
-
-            // print("joined {} threads\n", .{n});
 
             // drain job queue
             assert(self.isUnlockedThread());
@@ -460,11 +448,11 @@ pub fn JobQueue(comptime config: QueueConfig) type {
         /// The provided `job` must satisfy the following requirements:
         /// * The total size of the job must not exceed `config.max_job_size`
         /// * The job must be an instance of a struct
-        /// * The job must declare a function named `exec` with one of the
+        /// * The job must declare a public function named `exec` with one of the
         ///   following supported signatures:
         /// ```
-        ///   fn exec(*@This())
-        ///   fn exec(*const @This())
+        ///   pub fn exec(*@This())
+        ///   pub fn exec(*const @This())
         /// ```
         pub fn schedule(self: *Self, prereq: JobId, job: anytype) Error!JobId {
             const Job = @TypeOf(job);
@@ -494,19 +482,16 @@ pub fn JobQueue(comptime config: QueueConfig) type {
             if (prereqs.len == 1) return prereqs[0];
 
             var id = JobId.none;
-            var i: usize = 0;
-            const in: []const JobId = prereqs;
-            while (i < in.len) {
+            var in: []const JobId = prereqs;
+            while (in.len > 0) {
                 var job = CombinePrereqsJob{ .jobs = self };
 
                 // copy prereqs to job
-                var o: usize = 0;
                 const out: []JobId = &job.prereqs;
-                while (i < in.len and o < out.len) {
-                    out[o] = in[i];
-                    i += 1;
-                    o += 1;
-                }
+
+                const copy_len = @min(in.len, out.len);
+                std.mem.copyForwards(JobId, out, in[0..copy_len]);
+                in = in[copy_len..];
 
                 id = try self.schedule(id, job);
             }
@@ -571,10 +556,7 @@ pub fn JobQueue(comptime config: QueueConfig) type {
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-        fn threadMain(self: *Self, n: usize) void {
-            // print("thread[{}]: {}\n", .{ n, Thread.getCurrentId() });
-            ignore(n);
-
+        fn threadMain(self: *Self) void {
             assert(self.notMainThread());
             assert(self.isUnlockedThread());
 
@@ -585,8 +567,6 @@ pub fn JobQueue(comptime config: QueueConfig) type {
 
                 self.executeJobs(.unlocked, .dequeue_jobid_if_running);
             }
-
-            // print("thread[{}] DONE\n", .{n});
         }
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -610,7 +590,7 @@ pub fn JobQueue(comptime config: QueueConfig) type {
             jobs: *Self,
             prereqs: [max_prereqs]JobId = [_]JobId{JobId.none} ** max_prereqs,
 
-            fn exec(job: *@This()) void {
+            pub fn exec(job: *@This()) void {
                 for (job.prereqs) |prereq| {
                     job.jobs.wait(prereq);
                 }
@@ -685,8 +665,6 @@ pub fn JobQueue(comptime config: QueueConfig) type {
             comptime scope: LockScope,
             comptime result: ExecuteJobResult,
         ) ExecuteJobReturnType(result) {
-            // print("executeJob({}, {}, {})\n", .{id, scope, result});
-
             const _id = id.fields();
             assert(isLiveCycle(_id.cycle));
 
@@ -804,10 +782,8 @@ pub fn JobQueue(comptime config: QueueConfig) type {
             assert(this_thread != lock_thread);
             assert(site.len > 0);
 
-            // print("~{} '{s}' scope...\n", .{this_thread, site});
             self._mutex.lock();
             self._lock_thread.store(this_thread, .Release);
-            // print("~{} '{s}' locked\n", .{this_thread, site});
         }
 
         inline fn unlock(self: *Self, comptime site: []const u8) void {
@@ -817,7 +793,6 @@ pub fn JobQueue(comptime config: QueueConfig) type {
             assert(site.len > 0);
 
             self._mutex.unlock();
-            // print("~{} '{s}' unlocked\n", .{this_thread, site});
         }
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -870,16 +845,11 @@ pub fn JobQueue(comptime config: QueueConfig) type {
 
                 for (struct_info.decls) |decl| {
                     if (std.mem.eql(u8, decl.name, "exec")) {
-                        // compileAssert(
-                        //     decl.is_pub,
-                        //     "{s}.exec must be public",
-                        //     .{ @typeName(Job) },
-                        // );
                         break;
                     }
                 } else {
                     compileError(
-                        "{s}.exec(*{s}) not found",
+                        "{s}.exec(*{s}) is either not declared or not public",
                         .{ @typeName(Job), @typeName(Job) },
                     );
                 }
@@ -1028,7 +998,7 @@ test "JobQueue example" {
     const world_job_id: JobId = try jobs.schedule(
         hello_job_id, // waits for `hello_job_id` to be completed
         struct {
-            fn exec(_: *@This()) void {
+            pub fn exec(_: *@This()) void {
                 print("world!\n", .{});
             }
         }{}, // trailing `{}` initializes an instance of this anonymous struct
@@ -1046,7 +1016,7 @@ test "JobQueue example" {
         world_job_id, // waits for `world_job_id` to be completed
         struct {
             jobs: *Jobs, // stores a pointer to `jobs`
-            fn exec(self: *@This()) void {
+            pub fn exec(self: *@This()) void {
                 self.jobs.stop();
             }
         }{ // trailing `{}` initializes an instance of this anonymous struct
@@ -1143,7 +1113,7 @@ test "JobQueue throughput" {
         stat: *JobStat,
         workload: *JobWorkload,
 
-        fn exec(self: *@This()) void {
+        pub fn exec(self: *@This()) void {
             self.stat.start();
             defer self.stat.stop();
 
@@ -1169,7 +1139,7 @@ test "JobQueue throughput" {
     // schedule a job to stop the job queue
     _ = try jobs.schedule(.none, struct {
         jobs: *Jobs,
-        fn exec(self: *@This()) void {
+        pub fn exec(self: *@This()) void {
             self.jobs.stop();
         }
     }{ .jobs = &jobs });
@@ -1201,7 +1171,7 @@ test "combine jobs respect prereq" {
     const PrereqJob = struct {
         counter: *Counter,
 
-        fn exec(self: *@This()) void {
+        pub fn exec(self: *@This()) void {
             _ = self.counter.fetchAdd(1, .Monotonic);
         }
     };
@@ -1209,7 +1179,7 @@ test "combine jobs respect prereq" {
     const FinalJob = struct {
         counter: *Counter,
 
-        fn exec(self: *@This()) void {
+        pub fn exec(self: *@This()) void {
             const count = self.counter.load(.Monotonic);
             self.counter.store(count * 100, .Monotonic);
         }
