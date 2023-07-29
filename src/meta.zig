@@ -583,9 +583,9 @@ fn SystemInfo(comptime system_count: comptime_int) type {
 ///     - depend_on_systems: a TUPLE of one or more functions that the system depend on
 pub fn DependOn(comptime system: anytype, comptime depend_on_systems: anytype) type {
     return struct {
-        const secret_field = SystemType.depend_on;
-        const _system = system;
-        const _depend_on_systems = depend_on_systems;
+        pub const secret_field = SystemType.depend_on;
+        pub const _system = system;
+        pub const _depend_on_systems = depend_on_systems;
     };
 }
 
