@@ -62,6 +62,9 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
         empty_bytes: [0]u8,
 
         pub fn init(allocator: Allocator) error{OutOfMemory}!ArcheContainer {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.arche_container);
+            defer zone.End();
+
             const pre_alloc_amount = 32;
 
             var archetypes = try ArrayList(OpaqueArchetype).initCapacity(allocator, pre_alloc_amount);
@@ -102,7 +105,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
         }
 
         pub inline fn clearRetainingCapacity(self: *ArcheContainer) void {
-            const zone = ztracy.ZoneNC(@src(), "Container clear", Color.arche_container);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.arche_container);
             defer zone.End();
 
             // Do not clear tree since archetypes persist
@@ -124,7 +127,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
         ///
         /// Returns: A bool indicating if a new archetype has been made, and the entity
         pub fn createEntity(self: *ArcheContainer, initial_state: anytype) error{OutOfMemory}!CreateEntityResult {
-            const zone = ztracy.ZoneNC(@src(), "Container createEntity", Color.arche_container);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.arche_container);
             defer zone.End();
 
             // create new entity
@@ -149,7 +152,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
         /// Return:
         ///     True if a new archetype was created for this operation
         pub fn setComponent(self: *ArcheContainer, entity: Entity, component: anytype) error{ EntityMissing, OutOfMemory }!bool {
-            const zone = ztracy.ZoneNC(@src(), "Container setComponent", Color.arche_container);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.arche_container);
             defer zone.End();
 
             const current_bit_index = self.entity_references.items[entity.id];
@@ -246,6 +249,9 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
         /// Return:
         ///     True if a new archetype was created for this operation
         pub fn removeComponent(self: *ArcheContainer, entity: Entity, comptime Component: type) error{ EntityMissing, OutOfMemory }!bool {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.arche_container);
+            defer zone.End();
+
             if (self.hasComponent(entity, Component) == false) {
                 return false;
             }
@@ -322,7 +328,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
             return self.archetypes.items[encoding_index].component_bitmask;
         }
 
-        pub inline fn hasComponent(self: ArcheContainer, entity: Entity, comptime Component: type) bool {
+        pub fn hasComponent(self: ArcheContainer, entity: Entity, comptime Component: type) bool {
             const component_bit = comptime comp_bit_blk: {
                 const global_index = componentIndex(Component);
                 break :comp_bit_blk (1 << global_index);
@@ -333,7 +339,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
         }
 
         pub fn getComponent(self: ArcheContainer, entity: Entity, comptime Component: type) ecez_error.ArchetypeError!Component {
-            const zone = ztracy.ZoneNC(@src(), "Container getComponent", Color.arche_container);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.arche_container);
             defer zone.End();
 
             const opaque_archetype_index = self.entity_references.items[entity.id];
@@ -362,7 +368,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
 
         /// This function can initialize the storage for the components of a given entity
         fn initializeEntityStorage(self: *ArcheContainer, entity: Entity, initial_state: anytype) error{OutOfMemory}!bool {
-            const zone = ztracy.ZoneNC(@src(), "Container createEntity", Color.arche_container);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.arche_container);
             defer zone.End();
 
             const ArchetypeStruct = @TypeOf(initial_state);
@@ -470,6 +476,9 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
 
         // Retrieve an archetype with the matching bitmask, this function will create an archetype if it does not exist
         pub fn setAndGetArchetypeIndexWithBitmap(self: *ArcheContainer, bitmap: BitMask.Bits) error{OutOfMemory}!usize {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.arche_container);
+            defer zone.End();
+
             // if archetype alread exist
             if (self.tree.getNodeDataIndex(bitmap)) |index| {
                 return index;
@@ -499,7 +508,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
             @compileError("component type " ++ @typeName(Component) ++ " is not a registered component type");
         }
 
-        pub fn getSortedComponentHashes() [sorted_components.len]u64 {
+        pub inline fn getSortedComponentHashes() [sorted_components.len]u64 {
             comptime var hashes: [sorted_components.len]u64 = undefined;
             inline for (&hashes, sorted_components) |*hash, Component| {
                 hash.* = comptime ecez_query.hashType(Component);
