@@ -410,17 +410,51 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             return list[0..iter_count];
         }
 
-        /// Given a single bit we can easily calculate how many bits are before the bit in the bitmask to extrapolate the index
-        /// of the component tied to the assigned bit in the bitmask.
-        inline fn bitInMaskToStorageIndex(self: OpaqueArchetype, comptime bitmask: ComponentMask.Bits) usize {
+        /// Given a single bit in a bitmask, returns the index of the component tied to the assigned bit in the bitmask.
+        fn bitInMaskToStorageIndex(self: OpaqueArchetype, comptime bitmask: ComponentMask.Bits) usize {
             comptime {
                 if (@popCount(bitmask) != 1) {
                     @compileError("bitInMaskToStorageIndex got a bitmask that did not have a single bit set");
                 }
             }
 
-            const new_bitmask = bitmask - 1;
-            return @popCount(self.component_bitmask & new_bitmask);
+            const least_significant_bits_mask = bitmask - 1;
+            return @popCount(self.component_bitmask & least_significant_bits_mask);
+        }
+
+        /// Given a vector single bit bitmasks, returns a vector of indices of the component tied to the assigned bit in each bitmask.
+        fn bitsInMaskToStorageIndices(
+            self: OpaqueArchetype,
+            comptime bitmask: ComponentMask.Bits,
+        ) MaskToVec(bitmask) {
+            const Vec = MaskToVec(bitmask);
+
+            // bruteforce extract each bit into the vector of single bit bitmasks
+            const bitmask_vec = isolate_bits_into_vec_blk: {
+                comptime var current_axis: usize = 0;
+                comptime var vec: Vec = undefined;
+
+                inline for (0..std.math.maxInt(ComponentMask.Shift)) |nth_bit| {
+                    const bit = bitmask & (1 << nth_bit);
+                    // if the bit is set, store it in the vector
+                    if (bit != 0) {
+                        vec[current_axis] = bit;
+                        current_axis += 1;
+                    }
+                }
+
+                break :isolate_bits_into_vec_blk vec;
+            };
+
+            const vec_1: Vec = @splat(1);
+            const least_significant_bits_masks: Vec = bitmask_vec - vec_1;
+            const splat_self_component_mask: Vec = @splat(self.component_bitmask);
+
+            return @popCount(splat_self_component_mask & least_significant_bits_masks);
+        }
+
+        pub fn MaskToVec(comptime bitmask: ComponentMask.Bits) type {
+            return @Vector(@popCount(bitmask), ComponentMask.Bits);
         }
     };
 }
@@ -445,6 +479,75 @@ test "hasComponent returns expected values" {
 
     try testing.expectEqual(true, archetype.hasComponents(Testing.Bits.A));
     try testing.expectEqual(false, archetype.hasComponents(Testing.Bits.B | Testing.Bits.C));
+}
+
+test "bitInMaskToStorageIndex returns correct index" {
+    var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All);
+    defer archetype.deinit();
+
+    try testing.expectEqual(
+        @as(usize, 0),
+        archetype.bitInMaskToStorageIndex(Testing.Bits.A),
+    );
+
+    try testing.expectEqual(
+        @as(usize, 1),
+        archetype.bitInMaskToStorageIndex(Testing.Bits.B),
+    );
+
+    try testing.expectEqual(
+        @as(usize, 2),
+        archetype.bitInMaskToStorageIndex(Testing.Bits.C),
+    );
+}
+
+test "bitsInMaskToStorageIndices returns correct indices" {
+    var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All);
+    defer archetype.deinit();
+
+    {
+        const Vec3 = @Vector(3, TestingMask.Bits);
+        try testing.expectEqual(
+            Vec3{ 0, 1, 2 },
+            archetype.bitsInMaskToStorageIndices(Testing.Bits.All),
+        );
+    }
+
+    {
+        const Vec2 = @Vector(2, TestingMask.Bits);
+        try testing.expectEqual(
+            Vec2{ 0, 1 },
+            archetype.bitsInMaskToStorageIndices(Testing.Bits.A | Testing.Bits.B),
+        );
+
+        try testing.expectEqual(
+            Vec2{ 0, 2 },
+            archetype.bitsInMaskToStorageIndices(Testing.Bits.A | Testing.Bits.C),
+        );
+
+        try testing.expectEqual(
+            Vec2{ 1, 2 },
+            archetype.bitsInMaskToStorageIndices(Testing.Bits.B | Testing.Bits.C),
+        );
+    }
+
+    {
+        const Vec1 = @Vector(1, TestingMask.Bits);
+        try testing.expectEqual(
+            Vec1{0},
+            archetype.bitsInMaskToStorageIndices(Testing.Bits.A),
+        );
+
+        try testing.expectEqual(
+            Vec1{1},
+            archetype.bitsInMaskToStorageIndices(Testing.Bits.B),
+        );
+
+        try testing.expectEqual(
+            Vec1{2},
+            archetype.bitsInMaskToStorageIndices(Testing.Bits.C),
+        );
+    }
 }
 
 test "getComponent returns expected value ptrs" {
