@@ -117,14 +117,14 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
-            const Component = @TypeOf(component);
-
             if (self.hasComponents(bitmask) == false) {
                 return ArchetypeError.ComponentMissing;
             }
             const entity_index = self.entities.get(entity) orelse {
                 return ArchetypeError.EntityMissing; // Entity not part of archetype
             };
+
+            const Component = @TypeOf(component);
             if (@sizeOf(Component) == 0) {
                 return; // no bytes to write
             }
@@ -134,6 +134,49 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             const bytes_from = entity_index * @sizeOf(Component);
 
             std.mem.copy(u8, self.component_storage[storage_index].items[bytes_from..], component_bytes);
+        }
+
+        /// Components *MUST* be sorted related to hash order
+        pub fn setComponents(
+            self: *OpaqueArchetype,
+            entity: Entity,
+            components: anytype,
+            comptime bitmask: ComponentMask.Bits,
+        ) ArchetypeError!void {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
+            defer zone.End();
+
+            if (self.hasComponents(bitmask) == false) {
+                return ArchetypeError.ComponentMissing;
+            }
+            const entity_index = self.entities.get(entity) orelse {
+                return ArchetypeError.EntityMissing; // Entity not part of archetype
+            };
+
+            const Components = @TypeOf(components);
+            const fields = std.meta.fields(Components);
+
+            const component_sizes = reflect_on_components_blk: {
+                comptime var arr: [fields.len]u32 = undefined;
+                inline for (&arr, fields) |*elem, field| {
+                    elem.* = @sizeOf(field.type);
+                }
+
+                break :reflect_on_components_blk arr;
+            };
+
+            const storage_indices = self.bitsInMaskToStorageIndices(bitmask);
+            assign_bytes_loop: inline for (fields, component_sizes, 0..) |field, size, field_index| {
+                if (size == 0) {
+                    continue :assign_bytes_loop; // no bytes to write
+                }
+
+                const component_bytes = std.mem.asBytes(&@field(components, field.name));
+                const bytes_from = entity_index * size;
+
+                const storage_index = storage_indices[field_index];
+                std.mem.copy(u8, self.component_storage[storage_index].items[bytes_from..], component_bytes);
+            }
         }
 
         pub fn prepareNewEntity(
@@ -600,6 +643,43 @@ test "setComponent can reassign values" {
 
         try archetype.setComponent(entity, A{ .value = 0 }, Testing.Bits.A);
         try archetype.setComponent(entity, B{ .value = 0 }, Testing.Bits.B);
+    }
+
+    for (0..100) |i| {
+        const entity = Entity{ .id = @as(entity_type.EntityId, @intCast(i)) };
+
+        try testing.expectEqual(
+            A{ .value = 0 },
+            (try archetype.getComponent(entity, Testing.Bits.A, A)).*,
+        );
+        try testing.expectEqual(
+            B{ .value = 0 },
+            (try archetype.getComponent(entity, Testing.Bits.B, B)).*,
+        );
+    }
+}
+
+test "setComponents can reassign values" {
+    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
+    var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All);
+    defer archetype.deinit();
+
+    for (0..100) |i| {
+        const entity = Entity{ .id = @as(entity_type.EntityId, @intCast(i)) };
+
+        const a = A{ .value = @as(u32, @intCast(i)) };
+        const b = B{ .value = @as(u8, @intCast(i)) };
+        var data: [3][]const u8 = undefined;
+        data[0] = std.mem.asBytes(&a);
+        data[1] = std.mem.asBytes(&b);
+        data[2] = &[0]u8{};
+        try archetype.registerEntity(entity, &data, sizes);
+
+        try archetype.setComponents(
+            entity,
+            Testing.Archetype.AB{ .a = A{ .value = 0 }, .b = B{ .value = 0 } },
+            Testing.Bits.A | Testing.Bits.B,
+        );
     }
 
     for (0..100) |i| {
