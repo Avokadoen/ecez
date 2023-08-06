@@ -101,18 +101,6 @@ pub fn CreateScheduler(
                     }
 
                     exclude_type.* = exclude_types[index];
-
-                    var type_is_component = false;
-                    for (Storage.sorted_component_types) |Component| {
-                        if (exclude_type.* == Component) {
-                            type_is_component = true;
-                            break;
-                        }
-                    }
-
-                    if (type_is_component == false) {
-                        @compileError("event include types field " ++ field.name ++ " is not a registered Storage component");
-                    }
                 }
                 break :exclude_type_extract_blk type_arr;
             };
@@ -146,27 +134,14 @@ pub fn CreateScheduler(
             inline for (triggered_event.systems_info.metadata, 0..) |metadata, system_index| {
                 const component_query_types = comptime metadata.componentQueryArgTypes();
 
-                comptime var field_map: [component_query_types.len]usize = undefined;
-                const sorted_components: [component_query_types.len]type = comptime sort_comps: {
-                    var index: usize = 0;
-                    var sort_components: [component_query_types.len]type = undefined;
-                    for (Storage.sorted_component_types) |SortedComp| {
-                        for (component_query_types, 0..) |QueryComp, query_index| {
-                            if (SortedComp == QueryComp) {
-                                sort_components[index] = QueryComp;
-                                field_map[query_index] = index;
-                                index += 1;
-                                break;
-                            }
-                        }
-                    }
-                    break :sort_comps sort_components;
-                };
+                // TODO: verify systems and arguments in type initialization
+                // verify that argument order is matching the storage order
+                comptime Storage.validateComponentOrderAndValidity(component_query_types);
 
                 const include_bitmask = include_bits_blk: {
                     comptime var bitmask = 0;
-                    inline for (sorted_components) |SortedComp| {
-                        bitmask |= 1 << Storage.Container.componentIndex(SortedComp);
+                    inline for (component_query_types) |Component| {
+                        bitmask |= 1 << Storage.Container.componentIndex(Component);
                     }
                     break :include_bits_blk bitmask;
                 };
@@ -178,7 +153,6 @@ pub fn CreateScheduler(
                     include_bitmask,
                     exclude_bitmask,
                     component_query_types,
-                    &field_map,
                     @TypeOf(event_extra_argument),
                 );
 
@@ -246,7 +220,6 @@ pub fn CreateScheduler(
             comptime include_bitmask: Storage.ComponentMask.Bits,
             comptime exclude_bitmask: Storage.ComponentMask.Bits,
             comptime component_query_types: []const type,
-            comptime field_map: []const usize,
             comptime ExtraArgumentType: type,
         ) type {
             // in the case where the extra argument is a pointer we get the pointer child type
@@ -294,22 +267,26 @@ pub fn CreateScheduler(
                                 param_types,
                                 comptime metadata.paramCategories(),
                                 0..,
-                            ) |Param, param_category, j| {
+                            ) |
+                                Param,
+                                param_category,
+                                nth_argument,
+                            | {
                                 switch (param_category) {
                                     .component_value => {
-                                        const component_index = if (comptime metadata.hasEntityArgument()) j - 1 else j;
-
                                         // get size of the parameter type
                                         const param_size = @sizeOf(Param);
                                         if (param_size > 0) {
+                                            const component_index = comptime if (metadata.hasEntityArgument()) nth_argument - 1 else nth_argument;
+
                                             const from = inner_index * param_size;
                                             const to = from + param_size;
-                                            const bytes = storage.outer[field_map[component_index]][from..to];
-                                            arguments[j] = @as(*Param, @ptrCast(@alignCast(bytes))).*;
+                                            const bytes = storage.outer[component_index][from..to];
+                                            arguments[nth_argument] = @as(*Param, @ptrCast(@alignCast(bytes))).*;
                                         }
                                     },
                                     .component_ptr => {
-                                        const component_index = if (comptime metadata.hasEntityArgument()) j - 1 else j;
+                                        const component_index = comptime if (metadata.hasEntityArgument()) nth_argument - 1 else nth_argument;
                                         const CompQueryType = component_query_types[component_index];
 
                                         // get size of the pointer child type (Param == *CompQueryType)
@@ -317,21 +294,21 @@ pub fn CreateScheduler(
                                         if (param_size > 0) {
                                             const from = inner_index * param_size;
                                             const to = from + param_size;
-                                            const bytes = storage.outer[field_map[component_index]][from..to];
-                                            arguments[j] = @as(*CompQueryType, @ptrCast(@alignCast(bytes)));
+                                            const bytes = storage.outer[component_index][from..to];
+                                            arguments[nth_argument] = @as(*CompQueryType, @ptrCast(@alignCast(bytes)));
                                         }
                                     },
-                                    .entity => arguments[j] = entities[inner_index],
+                                    .entity => arguments[nth_argument] = entities[inner_index],
                                     .query_ptr => {
                                         const Iter = @typeInfo(Param).Pointer.child;
                                         var iter = Iter.init(self_job.storage.container.archetypes.items, self_job.storage.container.tree);
-                                        arguments[j] = &iter;
+                                        arguments[nth_argument] = &iter;
                                     },
-                                    .invocation_number_value => arguments[j] = system_invocation_count,
-                                    .event_argument_value => arguments[j] = @as(*meta.EventArgument(ExtraArgumentType), @ptrCast(&self_job.extra_argument)).*,
-                                    .event_argument_ptr => arguments[j] = @as(*meta.EventArgument(extra_argument_child_type), @ptrCast(self_job.extra_argument)),
-                                    .shared_state_value => arguments[j] = self_job.storage.getSharedStateWithOuterType(Param),
-                                    .shared_state_ptr => arguments[j] = self_job.storage.getSharedStatePtrWithSharedStateType(Param),
+                                    .invocation_number_value => arguments[nth_argument] = system_invocation_count,
+                                    .event_argument_value => arguments[nth_argument] = @as(*meta.EventArgument(ExtraArgumentType), @ptrCast(&self_job.extra_argument)).*,
+                                    .event_argument_ptr => arguments[nth_argument] = @as(*meta.EventArgument(extra_argument_child_type), @ptrCast(self_job.extra_argument)),
+                                    .shared_state_value => arguments[nth_argument] = self_job.storage.getSharedStateWithOuterType(Param),
+                                    .shared_state_ptr => arguments[nth_argument] = self_job.storage.getSharedStatePtrWithSharedStateType(Param),
                                 }
                             }
 
@@ -412,36 +389,6 @@ test "event can mutate components" {
     const initial_state = AbEntityType{
         .a = Testing.Component.A{ .value = 1 },
         .b = Testing.Component.B{ .value = 2 },
-    };
-    const entity = try storage.createEntity(initial_state);
-
-    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
-    scheduler.waitEvent(.onFoo);
-
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 3 },
-        try storage.getComponent(entity, Testing.Component.A),
-    );
-}
-
-test "event parameter order is independent" {
-    const SystemStruct = struct {
-        pub fn mutateStuff(b: Testing.Component.B, c: Testing.Component.C, a: *Testing.Component.A) void {
-            _ = c;
-            a.value += @as(u32, @intCast(b.value));
-        }
-    };
-
-    var storage = try StorageStub.init(testing.allocator, .{});
-    defer storage.deinit();
-
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init();
-    defer scheduler.deinit();
-
-    const initial_state = AbcEntityType{
-        .a = Testing.Component.A{ .value = 1 },
-        .b = Testing.Component.B{ .value = 2 },
-        .c = Testing.Component.C{},
     };
     const entity = try storage.createEntity(initial_state);
 

@@ -7,18 +7,18 @@ const Color = @import("misc.zig").Color;
 
 const Entity = @import("entity_type.zig").Entity;
 const meta = @import("meta.zig");
-const query = @import("query.zig");
 
 /// Initialize an iterator given an sorted slice of types
 pub fn FromTypes(
     comptime ItemType: type,
-    comptime field_map: []const comptime_int,
     comptime query_has_entity: bool,
     comptime include_bitmap: anytype,
     comptime exclude_bitmap: anytype,
     comptime OpaqueArchetype: type,
     comptime BinaryTree: type,
 ) type {
+    const field_len = std.meta.fields(ItemType).len;
+
     return struct {
         /// This iterator allow users to iterate results of queries without having to care about internal
         /// storage details
@@ -31,7 +31,7 @@ pub fn FromTypes(
         tree_cursor: BinaryTree.IterCursor,
 
         storage_buffer: OpaqueArchetype.StorageData,
-        outer_storage_buffer: [field_map.len][]u8,
+        outer_storage_buffer: [field_len][]u8,
 
         inner_cursor: usize = 0,
 
@@ -82,7 +82,8 @@ pub fn FromTypes(
 
             const fields_start_index = if (query_has_entity) 1 else 0;
 
-            inline for (fields[fields_start_index..], field_map) |field, storage_index| {
+            const byte_storage = self.storage_buffer.outer[0..fields[fields_start_index..].len];
+            inline for (fields[fields_start_index..], byte_storage) |field, byte_storage_field| {
                 const field_type_info = @typeInfo(field.type);
                 switch (field_type_info) {
                     .Pointer => |pointer| {
@@ -91,7 +92,7 @@ pub fn FromTypes(
                         } else {
                             const from = self.inner_cursor * @sizeOf(pointer.child);
                             const to = from + @sizeOf(pointer.child);
-                            const bytes = self.storage_buffer.outer[storage_index][from..to];
+                            const bytes = byte_storage_field[from..to];
 
                             @field(item, field.name) = @ptrCast(@alignCast(bytes));
                         }
@@ -102,7 +103,7 @@ pub fn FromTypes(
                         } else {
                             const from = self.inner_cursor * @sizeOf(field.type);
                             const to = from + @sizeOf(field.type);
-                            const bytes = self.storage_buffer.outer[storage_index][from..to];
+                            const bytes = byte_storage_field[from..to];
 
                             @field(item, field.name) = @as(*field.type, @ptrCast(@alignCast(bytes))).*;
                         }
@@ -150,7 +151,6 @@ const Testing = @import("Testing.zig");
 const A = Testing.Component.A;
 const B = Testing.Component.B;
 const C = Testing.Component.C;
-const hashType = @import("query.zig").hashType;
 
 const entity_type = @import("entity_type.zig");
 
@@ -204,7 +204,6 @@ test "value iterating works" {
     {
         const A_Iterator = FromTypes(
             struct { a: A },
-            &[_]comptime_int{0},
             false,
             Testing.Bits.A,
             Testing.Bits.None,
@@ -224,7 +223,6 @@ test "value iterating works" {
     {
         const B_Iterator = FromTypes(
             struct { b: B },
-            &[_]comptime_int{0},
             false,
             Testing.Bits.B,
             Testing.Bits.None,
@@ -244,7 +242,6 @@ test "value iterating works" {
     {
         const A_B_Iterator = FromTypes(
             struct { a: A, b: B },
-            &[_]comptime_int{ 0, 1 },
             false,
             Testing.Bits.A | Testing.Bits.B,
             Testing.Bits.None,
@@ -265,7 +262,6 @@ test "value iterating works" {
     {
         const A_B_C_Iterator = FromTypes(
             struct { a: A, b: B, c: C },
-            &[_]comptime_int{ 0, 1, 2 },
             false,
             Testing.Bits.All,
             Testing.Bits.None,
@@ -311,7 +307,6 @@ test "ptr iterating works and can mutate storage data" {
         {
             const A_Iterator = FromTypes(
                 struct { a_ptr: *A },
-                &[_]comptime_int{0},
                 false,
                 Testing.Bits.A,
                 Testing.Bits.None,
@@ -329,7 +324,6 @@ test "ptr iterating works and can mutate storage data" {
         {
             const A_Iterator = FromTypes(
                 struct { a: A },
-                &[_]comptime_int{0},
                 false,
                 Testing.Bits.A,
                 Testing.Bits.None,
@@ -393,7 +387,6 @@ test "reset moves iterator to start" {
     {
         const A_Iterator = FromTypes(
             struct { a: A },
-            &[_]comptime_int{0},
             false,
             Testing.Bits.A,
             Testing.Bits.None,
@@ -466,7 +459,6 @@ test "skip moves iterator to requested entry" {
     {
         const A_Iterator = FromTypes(
             struct { a: A },
-            &[_]comptime_int{0},
             false,
             Testing.Bits.A,
             Testing.Bits.None,

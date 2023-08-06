@@ -39,7 +39,6 @@ test {
     _ = @import("ezby.zig");
     _ = @import("iterator.zig");
     _ = @import("opaque_archetype.zig");
-    _ = @import("query.zig");
     _ = @import("storage.zig");
     _ = @import("scheduler.zig");
     _ = @import("meta.zig");

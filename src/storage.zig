@@ -9,7 +9,6 @@ const JobId = zjobs.JobId;
 const Color = @import("misc.zig").Color;
 
 const meta = @import("meta.zig");
-const query = @import("query.zig");
 const archetype_container = @import("archetype_container.zig");
 const opaque_archetype = @import("opaque_archetype.zig");
 const Entity = @import("entity_type.zig").Entity;
@@ -19,24 +18,30 @@ pub fn CreateStorage(
     comptime components: anytype,
     comptime shared_state_types: anytype,
 ) type {
-    return struct {
-        pub const sorted_component_types = blk: {
-            const components_info = @typeInfo(@TypeOf(components));
-            if (components_info != .Struct) {
-                @compileError("components was not a tuple of types");
-            }
-            var types: [components_info.Struct.fields.len]type = undefined;
-            for (components_info.Struct.fields, 0..) |_, i| {
-                types[i] = components[i];
-                if (@typeInfo(types[i]) != .Struct) {
-                    @compileError("expected " ++ @typeName(types[i]) ++ " component type to be a struct");
-                }
-            }
-            break :blk query.sortTypes(&types);
-        };
+    // a flat array of the type of each field in the components tuple
+    const component_type_array = verify_and_extract_field_types_blk: {
+        const components_info = @typeInfo(@TypeOf(components));
+        if (components_info != .Struct) {
+            @compileError("components was not a tuple of types");
+        }
 
-        pub const ComponentMask = meta.BitMaskFromComponents(&sorted_component_types);
-        pub const Container = archetype_container.FromComponents(&sorted_component_types, ComponentMask);
+        var field_types: [components_info.Struct.fields.len]type = undefined;
+        for (&field_types, components_info.Struct.fields, 0..) |*field_type, field, component_index| {
+            if (@typeInfo(field.type) != .Type) {
+                @compileError("components must be a struct of types, field '" ++ field.name ++ "' was " ++ @typeName(field.type));
+            }
+
+            if (@typeInfo(components[component_index]) != .Struct) {
+                @compileError("component types must be a struct, field '" ++ field.name ++ "' was '" ++ @typeName(components[component_index]));
+            }
+            field_type.* = components[component_index];
+        }
+        break :verify_and_extract_field_types_blk field_types;
+    };
+
+    return struct {
+        pub const ComponentMask = meta.BitMaskFromComponents(&component_type_array);
+        pub const Container = archetype_container.FromComponents(&component_type_array, ComponentMask);
         pub const OpaqueArchetype = opaque_archetype.FromComponentMask(ComponentMask);
         pub const SharedStateStorage = meta.SharedStateStorage(shared_state_types);
 
@@ -104,6 +109,21 @@ pub fn CreateStorage(
         pub fn createEntity(self: *Storage, entity_state: anytype) error{OutOfMemory}!Entity {
             const zone = ztracy.ZoneNC(@src(), "Storage createEntity", Color.storage);
             defer zone.End();
+
+            // validate the entity state before submitting the data to the container
+            comptime {
+                const state_type_info = @typeInfo(@TypeOf(entity_state));
+                if (state_type_info != .Struct) {
+                    @compileError(@src().fn_name ++ " expect entity_state to be struct/tuple of components");
+                }
+
+                var field_types: [state_type_info.Struct.fields.len]type = undefined;
+                inline for (&field_types, state_type_info.Struct.fields) |*field_type, field| {
+                    field_type.* = field.type;
+                }
+
+                validateComponentOrderAndValidity(&field_types);
+            }
 
             var create_result = try self.container.createEntity(entity_state);
             return create_result.entity;
@@ -193,14 +213,15 @@ pub fn CreateStorage(
 
         /// Query components which can be iterated upon.
         /// Parameters:
-        ///     - ResultItem:   All the components you would like to iterate over in a single struct
-        ///                      each component in the struct will belong to the same entity
-        ///                      A field does not have to be a component if it is of type Entity
+        ///     - ResultItem:    All the components you would like to iterate over in a single struct.
+        ///                      Each component in the struct will belong to the same entity.
+        ///                      A field does not have to be a component if it is of type Entity and it's the first
+        ///                      field.
         ///     - exclude_types: All the components that should be excluded from the query result
         ///
         /// Example:
         /// ```
-        /// var a_iter = Storage.Query(struct{ a: A, entity: Entity }, .{B}).submit(storage, std.testing.allocator);
+        /// var a_iter = Storage.Query(struct{ entity: Entity, a: A }, .{B}).submit(storage, std.testing.allocator);
         /// defer a_iter.deinit();
         ///
         /// while (a_iter.next()) |item| {
@@ -243,7 +264,10 @@ pub fn CreateStorage(
             inline for (
                 &include_inner_type_arr,
                 include_type_info.Struct.fields[after_entity_index..],
-            ) |*inner_type, result_field| {
+            ) |
+                *inner_type,
+                result_field,
+            | {
                 inner_type.* = blk: {
                     const field_info = @typeInfo(result_field.type);
                     if (field_info != .Pointer) {
@@ -253,24 +277,21 @@ pub fn CreateStorage(
                     break :blk field_info.Pointer.child;
                 };
 
-                verify_field_type_blk: {
-                    if (inner_type.* == Entity) {
-                        break :verify_field_type_blk;
-                    }
-
-                    var type_is_component: bool = false;
-                    for (sorted_component_types) |Component| {
-                        if (inner_type.* == Component) {
-                            type_is_component = true;
-                            break;
-                        }
-                    }
-
-                    if (type_is_component == false) {
-                        @compileError("query include types field " ++ result_field.name ++ " is not a registered Storage component");
+                var type_is_component: bool = false;
+                inline for (component_type_array) |Component| {
+                    if (inner_type.* == Component) {
+                        type_is_component = true;
+                        break;
                     }
                 }
+
+                if (type_is_component == false) {
+                    @compileError("query include types field " ++ result_field.name ++ " is not a registered Storage component");
+                }
             }
+
+            // validate that the components are in a legal order
+            validateComponentOrderAndValidity(&include_inner_type_arr);
 
             var exclude_type_arr: [exclude_type_info.Struct.fields.len]type = undefined;
             inline for (&exclude_type_arr, exclude_type_info.Struct.fields, 0..) |*exclude_type, field, index| {
@@ -281,7 +302,7 @@ pub fn CreateStorage(
                 exclude_type.* = exclude_types[index];
 
                 var type_is_component = false;
-                for (sorted_component_types) |Component| {
+                for (component_type_array) |Component| {
                     if (exclude_type.* == Component) {
                         type_is_component = true;
                         break;
@@ -317,21 +338,8 @@ pub fn CreateStorage(
                 }
             }
 
-            const sorted_include_inner_type_arr = query.sortTypes(&include_inner_type_arr);
-
-            comptime var field_map: [item_component_count]comptime_int = undefined;
-            assign_map: inline for (&field_map, include_inner_type_arr) |*map_entry, org_type| {
-                inline for (sorted_include_inner_type_arr, 0..) |sorted_type, new_index| {
-                    if (sorted_type == org_type) {
-                        map_entry.* = new_index;
-                        continue :assign_map;
-                    }
-                }
-            }
-
             const IterType = iterator.FromTypes(
                 ResultItem,
-                &field_map,
                 query_has_entity,
                 include_bitmask,
                 exclude_bitmask,
@@ -360,7 +368,52 @@ pub fn CreateStorage(
             return self.container.setAndGetArchetypeIndexWithBitmap(bitmap);
         }
 
+        /// Check if array of component types is ordered the same as the registered components and
+        /// if they actually are registered in this storage
+        pub inline fn validateComponentOrderAndValidity(comptime other_components: []const type) void {
+            meta.comptimeOnlyFn();
+
+            // valid if empty
+            if (other_components.len == 0) {
+                return;
+            }
+
+            // find first index
+            var previous_component_index = initial_component_index_blk: {
+                inline for (component_type_array, 0..) |Component, comp_index| {
+                    if (other_components[0] == Component) {
+                        break :initial_component_index_blk comp_index;
+                    }
+                }
+                @compileError("type '" ++ @typeName(other_components[0]) ++ "' is not a registered component type");
+            };
+
+            // no more work to do as we validated first component already
+            if (other_components.len == 1) {
+                return;
+            }
+
+            inline for (other_components[1..], 0..) |OtherComponent, prev_other_index| {
+                inline for (component_type_array, 0..) |Component, comp_index| {
+                    if (OtherComponent == Component) {
+                        if (previous_component_index > comp_index) {
+                            const error_message = std.fmt.comptimePrint(
+                                "Components must be submitted in order they were registered in storage, '{s}' should come *before* '{s}'",
+                                .{
+                                    @typeName(OtherComponent),
+                                    @typeName(other_components[prev_other_index]),
+                                },
+                            );
+                            @compileError(error_message);
+                        }
+                    }
+                }
+            }
+        }
+
         fn indexOfSharedType(comptime Shared: type) comptime_int {
+            meta.comptimeOnlyFn();
+
             const shared_storage_fields = @typeInfo(SharedStateStorage).Struct.fields;
             inline for (shared_storage_fields, 0..) |field, i| {
                 if (field.type == Shared) {
@@ -917,41 +970,6 @@ test "query with entity and include and exclude only works" {
     }
 }
 
-test "query fields are order independent" {
-    var storage = try StorageStub.init(std.testing.allocator, .{});
-    defer storage.deinit();
-
-    const entity_state = AbEntityType{};
-    const entity = try storage.createEntity(entity_state);
-    _ = entity;
-
-    {
-        var iter = StorageStub.Query(
-            AbEntityType,
-            .{},
-        ).submit(&storage);
-
-        const ab_item = iter.next();
-        try testing.expectEqual(ab_item, ab_item);
-        try testing.expectEqual(@as(?AbEntityType, null), iter.next());
-    }
-
-    {
-        const BaEntityType = struct {
-            b: Testing.Component.B = .{},
-            a: Testing.Component.A = .{},
-        };
-        var iter = StorageStub.Query(
-            BaEntityType,
-            .{},
-        ).submit(&storage);
-
-        const ab_item = iter.next();
-        try testing.expectEqual(ab_item, ab_item);
-        try testing.expectEqual(@as(?BaEntityType, null), iter.next());
-    }
-}
-
 // this reproducer never had an issue filed, so no issue number
 test "reproducer: component data is mangled by adding additional components to entity" {
     // until issue https://github.com/Avokadoen/ecez/issues/91 is resolved we must make sure to match type names
@@ -1114,28 +1132,28 @@ test "reproducer: Removing component cause storage to become in invalid state" {
     var obj = ObjectMetadata{ .a = Entity{ .id = 3 }, .b = 3, .c = undefined };
 
     _ = try storage.createEntity(.{
-        instance_handle,
+        obj,
         transform,
         position,
         rotation,
         scale,
-        obj,
+        instance_handle,
     });
     const entity = try storage.createEntity(.{
-        instance_handle,
+        obj,
         transform,
         position,
         rotation,
         scale,
-        obj,
+        instance_handle,
     });
     _ = try storage.createEntity(.{
-        instance_handle,
+        obj,
         transform,
         position,
         rotation,
         scale,
-        obj,
+        instance_handle,
     });
 
     try testing.expectEqual(instance_handle, try storage.getComponent(entity, InstanceHandle));
@@ -1188,11 +1206,11 @@ test "reproducer: MineSweeper index out of bound caused by incorrect mapping of 
     }, .{});
 
     const QueryItem = struct {
-        children: Children,
         position: transform.Position,
         rotation: transform.Rotation,
         scale: transform.Scale,
         world_transform: *transform.WorldTransform,
+        children: Children,
     };
     const Query = Storage.Query(
         QueryItem,

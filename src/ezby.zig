@@ -9,7 +9,6 @@ const Color = @import("misc.zig").Color;
 const entity_type = @import("entity_type.zig");
 const EntityRef = entity_type.EntityRef;
 const Entity = entity_type.Entity;
-const query = @import("query.zig");
 const EntityMap = entity_type.Map;
 
 // TODO: option to use stack instead of heap
@@ -84,7 +83,7 @@ pub fn serialize(
         const arch_zone = ztracy.ZoneNC(@src(), "COMP chunk", Color.serializer);
         defer arch_zone.End();
 
-        const component_hashes = comptime Storage.Container.getSortedComponentHashes();
+        const component_hashes = comptime Storage.Container.getComponentHashes();
 
         const comp_chunk_size = @sizeOf(Chunk.Comp) + (component_hashes.len * @sizeOf(u64)) + (storage.container.component_sizes.len * @sizeOf(u32));
         try written_bytes.ensureUnusedCapacity(comp_chunk_size);
@@ -180,7 +179,7 @@ pub fn deserialize(comptime Storage: type, storage: *Storage, ezby_bytes: []cons
     bytes_pos = parseCompChunk(bytes_pos, &comp, &hash_list, &size_list);
 
     for (
-        Storage.Container.getSortedComponentHashes(),
+        comptime Storage.Container.getComponentHashes(),
         hash_list[0..comp.number_of_component_types],
     ) |component_hash, type_hash| {
         // TODO: option to cull some components through config
@@ -444,17 +443,19 @@ test "serializing then using parseCompChunk produce expected COMP chunk" {
         comp.number_of_component_types,
     );
 
+    const meta = @import("meta.zig");
+
     // check hashes
     try testing.expectEqual(
-        query.hashType(Testing.Component.A),
+        comptime meta.hashType(Testing.Component.A),
         hash_list[0],
     );
     try testing.expectEqual(
-        query.hashType(Testing.Component.B),
+        comptime meta.hashType(Testing.Component.B),
         hash_list[1],
     );
     try testing.expectEqual(
-        query.hashType(Testing.Component.C),
+        comptime meta.hashType(Testing.Component.C),
         hash_list[2],
     );
 

@@ -506,7 +506,6 @@ const Testing = @import("Testing.zig");
 const A = Testing.Component.A;
 const B = Testing.Component.B;
 const C = Testing.Component.C;
-const hashType = @import("query.zig").hashType;
 
 const TestingMask = Testing.ComponentBitmask;
 const TestOpaqueArchetype = FromComponentMask(TestingMask);

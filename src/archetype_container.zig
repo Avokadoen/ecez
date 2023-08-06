@@ -13,9 +13,6 @@ const entity_type = @import("entity_type.zig");
 const Entity = entity_type.Entity;
 const EntityRef = entity_type.EntityRef;
 
-const ecez_query = @import("query.zig");
-const QueryBuilder = ecez_query.QueryBuilder;
-const Query = ecez_query.Query;
 const binary_tree = @import("binary_tree.zig");
 
 const meta = @import("meta.zig");
@@ -24,11 +21,11 @@ const Testing = @import("Testing.zig");
 const ecez_error = @import("error.zig");
 const StorageError = ecez_error.StorageError;
 
-pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask: type) type {
+pub fn FromComponents(comptime components: []const type, comptime BitMask: type) type {
     // search biggest component size and verify types are structs
     const biggest_component_size = comptime biggest_comp_search_blk: {
         var biggest_size = 0;
-        for (sorted_components) |Component| {
+        for (components) |Component| {
             if (@sizeOf(Component) > biggest_size) {
                 biggest_size = @sizeOf(Component);
             }
@@ -42,7 +39,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
     };
 
     return struct {
-        pub const BinaryTree = binary_tree.FromConfig(sorted_components.len + 1, BitMask);
+        pub const BinaryTree = binary_tree.FromConfig(components.len + 1, BitMask);
         pub const OpaqueArchetype = opaque_archetype.FromComponentMask(BitMask);
 
         const ArcheContainer = @This();
@@ -57,7 +54,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
 
         tree: BinaryTree,
 
-        component_sizes: [sorted_components.len]u32,
+        component_sizes: [components.len]u32,
 
         empty_bytes: [0]u8,
 
@@ -76,8 +73,8 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
             const tree = try BinaryTree.init(allocator, pre_alloc_amount);
             errdefer tree.deinit();
 
-            comptime var component_sizes: [sorted_components.len]u32 = undefined;
-            inline for (sorted_components, &component_sizes) |Component, *size| {
+            comptime var component_sizes: [components.len]u32 = undefined;
+            inline for (components, &component_sizes) |Component, *size| {
                 size.* = @sizeOf(Component);
             }
 
@@ -204,7 +201,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                     };
 
                     // fetch a view of the component data
-                    var data: [sorted_components.len][]u8 = undefined;
+                    var data: [components.len][]u8 = undefined;
                     try self.archetypes.items[current_bit_index].fetchEntityComponentView(
                         entity,
                         self.component_sizes,
@@ -296,7 +293,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
             };
 
             // fetch a view of the component data
-            var data: [sorted_components.len][]u8 = undefined;
+            var data: [components.len][]u8 = undefined;
             try self.archetypes.items[old_archetype_index].fetchEntityComponentView(
                 entity,
                 self.component_sizes,
@@ -380,55 +377,37 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                 break :blk info.Struct;
             };
 
-            // sort the types in the inital state to produce a valid binary path
-            const sorted_initial_state_field_types = comptime sort_fields_blk: {
+            // produce flat array of field types
+            const initial_state_field_types = comptime field_types_blk: {
                 var field_types: [arche_struct_info.fields.len]type = undefined;
                 inline for (&field_types, arche_struct_info.fields) |*field_type, field_info| {
                     field_type.* = field_info.type;
                 }
-                // TODO: in-place sort instead
-                break :sort_fields_blk ecez_query.sortTypes(&field_types);
+                break :field_types_blk field_types;
             };
 
             // calculate the bits that describe the path to the archetype of this entity
             const initial_bit_encoding: BitMask.Bits = comptime bit_calc_blk: {
                 var bits: BitMask.Bits = 0;
-                outer_loop: inline for (sorted_initial_state_field_types, 0..) |initial_state_field_type, field_index| {
-                    inline for (sorted_components[field_index..], field_index..) |Component, comp_index| {
+                outer_loop: inline for (initial_state_field_types, 0..) |initial_state_field_type, field_index| {
+                    inline for (components[field_index..], field_index..) |Component, comp_index| {
                         if (initial_state_field_type == Component) {
                             bits |= 1 << comp_index;
                             continue :outer_loop;
                         }
                     }
-                    @compileError(@typeName(initial_state_field_type) ++ " is not a World registered component type");
+                    @compileError(@typeName(initial_state_field_type) ++ " is not a Storage registered component type");
                 }
                 break :bit_calc_blk bits;
             };
 
-            // generate a map from initial state to the internal storage order so we store binary data in the correct location
-            // the map goes as followed: field_map[initial_state_index] => internal_storage_index
-            const field_map = comptime field_map_blk: {
-                var map: [arche_struct_info.fields.len]usize = undefined;
-                inline for (&map, arche_struct_info.fields) |*map_entry, initial_field| {
-                    inline for (sorted_initial_state_field_types, 0..) |SortedType, sorted_index| {
-                        if (initial_field.type == SortedType) {
-                            map_entry.* = sorted_index;
-                            break;
-                        }
-                    }
-                }
-
-                break :field_map_blk map;
-            };
-
-            // create a component byte data view (sort initial state according to type)
-            var sorted_state_data: [arche_struct_info.fields.len][]const u8 = undefined;
-            inline for (arche_struct_info.fields, field_map) |initial_field_info, data_index| {
+            var state_data: [arche_struct_info.fields.len][]const u8 = undefined;
+            inline for (&state_data, arche_struct_info.fields) |*state_data_field, initial_field_info| {
                 if (@sizeOf(initial_field_info.type) > 0) {
                     const field = &@field(initial_state, initial_field_info.name);
-                    sorted_state_data[data_index] = std.mem.asBytes(field);
+                    state_data_field.* = std.mem.asBytes(field);
                 } else {
-                    sorted_state_data[data_index] = &self.empty_bytes;
+                    state_data_field.* = &self.empty_bytes;
                 }
             }
 
@@ -439,7 +418,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
                 if (new_archetype_index) |index| {
                     try self.archetypes.items[index].registerEntity(
                         entity,
-                        &sorted_state_data,
+                        &state_data,
                         self.component_sizes,
                     );
                     break :regiser_entity_blk false;
@@ -459,7 +438,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
 
                 try self.archetypes.items[opaque_archetype_index].registerEntity(
                     entity,
-                    &sorted_state_data,
+                    &state_data,
                     self.component_sizes,
                 );
                 errdefer self.archetypes.items[opaque_archetype_index].removeEntity(entity, self.component_sizes) catch unreachable;
@@ -500,7 +479,7 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
         }
 
         pub inline fn componentIndex(comptime Component: type) comptime_int {
-            inline for (sorted_components, 0..) |SortComponent, i| {
+            inline for (components, 0..) |SortComponent, i| {
                 if (Component == SortComponent) {
                     return i;
                 }
@@ -508,10 +487,12 @@ pub fn FromComponents(comptime sorted_components: []const type, comptime BitMask
             @compileError("component type " ++ @typeName(Component) ++ " is not a registered component type");
         }
 
-        pub inline fn getSortedComponentHashes() [sorted_components.len]u64 {
-            comptime var hashes: [sorted_components.len]u64 = undefined;
-            inline for (&hashes, sorted_components) |*hash, Component| {
-                hash.* = comptime ecez_query.hashType(Component);
+        pub inline fn getComponentHashes() [components.len]u64 {
+            meta.comptimeOnlyFn();
+
+            comptime var hashes: [components.len]u64 = undefined;
+            inline for (&hashes, components) |*hash, Component| {
+                hash.* = meta.hashType(Component);
             }
 
             return hashes;
@@ -607,11 +588,14 @@ test "ArcheContainer hasComponent works" {
     try testing.expectEqual(true, container.hasComponent(entity, Testing.Component.C));
 }
 
-test "ArcheContainer getSortedComponentHashes works" {
-    const expected_hashes = [_]u64{
-        ecez_query.hashType(Testing.Component.A),
-        ecez_query.hashType(Testing.Component.B),
-        ecez_query.hashType(Testing.Component.C),
+test "ArcheContainer getComponentHashes works" {
+    const expected_hashes = comptime [_]u64{
+        meta.hashType(Testing.Component.A),
+        meta.hashType(Testing.Component.B),
+        meta.hashType(Testing.Component.C),
     };
-    try testing.expectEqualSlices(u64, &expected_hashes, &TestContainer.getSortedComponentHashes());
+
+    const actual_hashes = comptime TestContainer.getComponentHashes();
+
+    try testing.expectEqualSlices(u64, &expected_hashes, &actual_hashes);
 }

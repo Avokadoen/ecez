@@ -1073,6 +1073,20 @@ pub fn EventArgument(comptime Argument: type) type {
     } });
 }
 
+const hashfn: fn (str: []const u8) u64 = std.hash.Fnv1a_64.hash;
+pub fn hashType(comptime T: type) u64 {
+    comptimeOnlyFn();
+
+    const type_name = @typeName(T);
+    return hashfn(type_name[0..]);
+}
+
+pub inline fn comptimeOnlyFn() void {
+    if (@inComptime() == false) {
+        @compileError(@src().fn_name ++ " can only be called in comptime");
+    }
+}
+
 test "CommonSystem componentQueryArgTypes results in queryable types" {
     const A = struct {};
     const B = struct {};
