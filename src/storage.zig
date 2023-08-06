@@ -141,6 +141,33 @@ pub fn CreateStorage(
             _ = new_archetype_created;
         }
 
+        /// Reassign a component value owned by entity
+        /// Parameters:
+        ///     - entity:               the entity that should be assigned the component value
+        ///     - struct_of_components: the new component values
+        pub fn setComponents(self: *Storage, entity: Entity, struct_of_components: anytype) error{ EntityMissing, OutOfMemory }!void {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
+            defer zone.End();
+
+            // validate the entity state before submitting the data to the container
+            comptime {
+                const state_type_info = @typeInfo(@TypeOf(struct_of_components));
+                if (state_type_info != .Struct) {
+                    @compileError(@src().fn_name ++ " expect struct_of_components to be struct/tuple of components");
+                }
+
+                var field_types: [state_type_info.Struct.fields.len]type = undefined;
+                inline for (&field_types, state_type_info.Struct.fields) |*field_type, field| {
+                    field_type.* = field.type;
+                }
+
+                validateComponentOrderAndValidity(&field_types);
+            }
+
+            const new_archetype_created = try self.container.setComponents(entity, struct_of_components);
+            _ = new_archetype_created;
+        }
+
         /// Remove a component owned by entity
         /// Parameters:
         ///     - entity:    the entity that should be assigned the component value
@@ -528,6 +555,50 @@ test "setComponent() with empty component moves entity" {
     try storage.setComponent(entity, c);
 
     try testing.expectEqual(true, storage.hasComponent(entity, Testing.Component.C));
+}
+
+test "setComponents() can reassign multiple components" {
+    var storage = try StorageStub.init(testing.allocator, .{});
+    defer storage.deinit();
+
+    const initial_state = AbEntityType{
+        .a = Testing.Component.A{ .value = 0 },
+        .b = Testing.Component.B{ .value = 0 },
+    };
+    const entity = try storage.createEntity(initial_state);
+
+    const new_a = Testing.Component.A{ .value = 1 };
+    const new_b = Testing.Component.B{ .value = 2 };
+    try storage.setComponents(entity, Testing.Archetype.AB{
+        .a = new_a,
+        .b = new_b,
+    });
+
+    const stored_a = try storage.getComponent(entity, Testing.Component.A);
+    try testing.expectEqual(new_a, stored_a);
+
+    const stored_b = try storage.getComponent(entity, Testing.Component.B);
+    try testing.expectEqual(new_b, stored_b);
+}
+
+test "setComponents() can add new components to entity" {
+    var storage = try StorageStub.init(testing.allocator, .{});
+    defer storage.deinit();
+
+    const entity = try storage.createEntity(.{});
+
+    const new_a = Testing.Component.A{ .value = 1 };
+    const new_b = Testing.Component.B{ .value = 2 };
+    try storage.setComponents(entity, Testing.Archetype.AB{
+        .a = new_a,
+        .b = new_b,
+    });
+
+    const stored_a = try storage.getComponent(entity, Testing.Component.A);
+    try testing.expectEqual(new_a, stored_a);
+
+    const stored_b = try storage.getComponent(entity, Testing.Component.B);
+    try testing.expectEqual(new_b, stored_b);
 }
 
 test "removeComponent() removes the component as expected" {

@@ -239,6 +239,134 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
             return false;
         }
 
+        /// Assign multiple component values to an entity
+        /// Errors:
+        ///     - EntityMissing: if the entity does not exist
+        ///     - OutOfMemory: if OOM
+        /// Return:
+        ///     True if a new archetype was created for this operation
+        pub fn setComponents(self: *ArcheContainer, entity: Entity, struct_of_components: anytype) error{ EntityMissing, OutOfMemory }!bool {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.arche_container);
+            defer zone.End();
+
+            const Components = @TypeOf(struct_of_components);
+            const fields = std.meta.fields(Components);
+
+            const new_bits: comptime_int = comptime calculate_new_bits_blk: {
+                var bitmask: BitMask.Bits = 0;
+                inline for (fields) |field| {
+                    bitmask |= @as(BitMask.Bits, 1 << componentIndex(field.type));
+                }
+
+                break :calculate_new_bits_blk bitmask;
+            };
+
+            const entity_ref = self.entity_references.items[entity.id];
+            const old_bit_encoding = self.archetypes.items[entity_ref].component_bitmask;
+
+            // try to update component in current archetype
+            self.archetypes.items[entity_ref].setComponents(entity, struct_of_components, new_bits) catch |err| switch (err) {
+                // component is not part of current archetype
+                error.ComponentMissing => {
+                    const new_encoding = old_bit_encoding | new_bits;
+
+                    // we need the indices of the new components
+                    const new_local_component_indices: [fields.len]BitMask.Shift = new_comp_indices_calc_blk: {
+                        var immediate_bits = old_bit_encoding;
+                        var new_indices: [fields.len]BitMask.Shift = undefined;
+
+                        inline for (&new_indices, fields) |*index, field| {
+                            // calculate mask that filters out most significant bits
+                            const new_after_bits_mask = comptime @as(BitMask.Bits, (1 << componentIndex(field.type)) - 1);
+                            index.* = @popCount(immediate_bits & new_after_bits_mask);
+                            immediate_bits |= (@as(BitMask.Bits, 1) << index.*);
+                        }
+
+                        break :new_comp_indices_calc_blk new_indices;
+                    };
+
+                    const total_local_components: u32 = @popCount(new_encoding);
+
+                    var new_archetype_index = self.tree.getNodeDataIndex(new_encoding);
+
+                    var new_archetype_created: bool = maybe_create_archetype_blk: {
+                        // if the archetype already exist
+                        if (new_archetype_index != null) {
+                            break :maybe_create_archetype_blk false;
+                        }
+
+                        var new_archetype = try OpaqueArchetype.init(
+                            self.allocator,
+                            new_encoding,
+                        );
+                        errdefer new_archetype.deinit();
+
+                        const opaque_archetype_index = @as(u32, @intCast(self.archetypes.items.len));
+                        try self.archetypes.append(new_archetype);
+                        errdefer _ = self.archetypes.pop();
+
+                        try self.tree.appendChain(opaque_archetype_index, new_encoding);
+
+                        new_archetype_index = opaque_archetype_index;
+                        break :maybe_create_archetype_blk true;
+                    };
+
+                    // fetch a view of the component data
+                    var data: [components.len][]u8 = undefined;
+                    const current_data_len = self.archetypes.items[entity_ref].getComponentCount();
+                    try self.archetypes.items[entity_ref].fetchEntityComponentView(
+                        entity,
+                        self.component_sizes,
+                        data[0..current_data_len],
+                    );
+
+                    // TODO: is this buffer needed??
+                    var buffers: [fields.len][biggest_component_size]u8 = undefined;
+
+                    // loop over the new component data
+                    inline for (new_local_component_indices, fields, &buffers) |local_storage_index, field, *buffer| {
+                        // get bit for new component type
+                        const new_component_data_bit = comptime @as(BitMask.Bits, 1 << componentIndex(field.type));
+
+                        const component_bytes = std.mem.asBytes(&@field(struct_of_components, field.name));
+
+                        // if the component already exist in the storage
+                        if ((new_component_data_bit & old_bit_encoding) != 0) {
+                            // simply overwrite old bytes with the new bytes
+                            @memcpy(data[local_storage_index][0..@sizeOf(field.type)], component_bytes);
+                        } else {
+                            // move the data slices around to make room for the new component data
+                            var rhd = data[local_storage_index..total_local_components];
+                            std.mem.rotate([]u8, rhd, rhd.len - 1);
+
+                            // copy the new component bytes to a stack buffer and assing the datat entry to this buffer
+                            @memcpy(buffer[0..@sizeOf(field.type)], component_bytes);
+                            data[local_storage_index] = buffer;
+                        }
+                    }
+
+                    const unwrapped_index = new_archetype_index.?;
+                    // register the component bytes and entity to it's new archetype
+                    try self.archetypes.items[unwrapped_index].registerEntity(entity, data[0..total_local_components], self.component_sizes);
+
+                    // remove the entity and it's components from the old archetype, we know entity exist in old archetype because we called fetchEntityComponentView successfully
+                    self.archetypes.items[entity_ref].swapRemoveEntity(entity, self.component_sizes) catch unreachable;
+
+                    // update entity reference
+                    self.entity_references.items[entity.id] = @as(
+                        EntityRef,
+                        @intCast(unwrapped_index),
+                    );
+
+                    return new_archetype_created;
+                },
+                // if this happen, then the container is in an invalid state
+                error.EntityMissing => unreachable,
+            };
+
+            return false;
+        }
+
         /// Remove the Component type from an entity
         /// Errors:
         ///     - EntityMissing: if the entity does not exist
@@ -558,6 +686,51 @@ test "ArcheContainer removeComponent & getComponent works" {
     _ = try container.removeComponent(entity, Testing.Component.C);
     try testing.expectEqual(initial_state.a, try container.getComponent(entity, Testing.Component.A));
     try testing.expectEqual(false, container.hasComponent(entity, Testing.Component.C));
+}
+
+test "ArcheContainer setComponents & getComponent works" {
+    var container = try TestContainer.init(testing.allocator);
+    defer container.deinit();
+
+    const a = Testing.Component.A{ .value = 40 };
+    const b = Testing.Component.B{ .value = 42 };
+
+    {
+        const entity = (try container.createEntity(.{})).entity;
+
+        _ = try container.setComponents(entity, Testing.Archetype.AB{ .a = a, .b = b });
+
+        try testing.expectEqual(a, try container.getComponent(entity, Testing.Component.A));
+        try testing.expectEqual(b, try container.getComponent(entity, Testing.Component.B));
+    }
+
+    {
+        const entity = (try container.createEntity(Testing.Archetype.A{ .a = .{ .value = 0 } })).entity;
+
+        _ = try container.setComponents(entity, Testing.Archetype.AB{ .a = a, .b = b });
+
+        try testing.expectEqual(a, try container.getComponent(entity, Testing.Component.A));
+        try testing.expectEqual(b, try container.getComponent(entity, Testing.Component.B));
+    }
+
+    {
+        const entity = (try container.createEntity(Testing.Archetype.B{ .b = .{ .value = 0 } })).entity;
+
+        _ = try container.setComponents(entity, Testing.Archetype.AB{ .a = a, .b = b });
+
+        try testing.expectEqual(a, try container.getComponent(entity, Testing.Component.A));
+        try testing.expectEqual(b, try container.getComponent(entity, Testing.Component.B));
+    }
+
+    {
+        const entity = (try container.createEntity(Testing.Archetype.ABC{})).entity;
+
+        _ = try container.setComponents(entity, Testing.Archetype.ABC{ .a = a, .b = b, .c = .{} });
+
+        try testing.expectEqual(a, try container.getComponent(entity, Testing.Component.A));
+        try testing.expectEqual(b, try container.getComponent(entity, Testing.Component.B));
+        try testing.expectEqual(Testing.Component.C{}, try container.getComponent(entity, Testing.Component.C));
+    }
 }
 
 test "ArcheContainer getEntityBitEncoding works" {
