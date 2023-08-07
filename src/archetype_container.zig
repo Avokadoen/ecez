@@ -22,22 +22,6 @@ const ecez_error = @import("error.zig");
 const StorageError = ecez_error.StorageError;
 
 pub fn FromComponents(comptime components: []const type, comptime BitMask: type) type {
-    // search biggest component size and verify types are structs
-    const biggest_component_size = comptime biggest_comp_search_blk: {
-        var biggest_size = 0;
-        for (components) |Component| {
-            if (@sizeOf(Component) > biggest_size) {
-                biggest_size = @sizeOf(Component);
-            }
-
-            const type_info = @typeInfo(Component);
-            if (type_info != .Struct) {
-                @compileError("component " ++ @typeName(Component) ++ " is not of type struct");
-            }
-        }
-        break :biggest_comp_search_blk biggest_size;
-    };
-
     return struct {
         pub const BinaryTree = binary_tree.FromConfig(components.len + 1, BitMask);
         pub const OpaqueArchetype = opaque_archetype.FromComponentMask(BitMask);
@@ -213,9 +197,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
                     std.mem.rotate([]u8, rhd, rhd.len - 1);
 
                     // copy the new component bytes to a stack buffer and assing the datat entry to this buffer
-                    var buf: [biggest_component_size]u8 = undefined;
-                    @memcpy(buf[0..@sizeOf(Component)], std.mem.asBytes(&component));
-                    data[new_local_component_index] = &buf;
+                    data[new_local_component_index] = @constCast(std.mem.asBytes(&component));
 
                     const unwrapped_index = new_archetype_index.?;
                     // register the component bytes and entity to it's new archetype
@@ -320,11 +302,8 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
                         data[0..current_data_len],
                     );
 
-                    // TODO: is this buffer needed??
-                    var buffers: [fields.len][biggest_component_size]u8 = undefined;
-
                     // loop over the new component data
-                    inline for (new_local_component_indices, fields, &buffers) |local_storage_index, field, *buffer| {
+                    inline for (new_local_component_indices, fields) |local_storage_index, field| {
                         // get bit for new component type
                         const new_component_data_bit = comptime @as(BitMask.Bits, 1 << componentIndex(field.type));
 
@@ -340,8 +319,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
                             std.mem.rotate([]u8, rhd, rhd.len - 1);
 
                             // copy the new component bytes to a stack buffer and assing the datat entry to this buffer
-                            @memcpy(buffer[0..@sizeOf(field.type)], component_bytes);
-                            data[local_storage_index] = buffer;
+                            data[local_storage_index] = @constCast(component_bytes);
                         }
                     }
 
