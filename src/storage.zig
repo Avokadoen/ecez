@@ -107,7 +107,7 @@ pub fn CreateStorage(
         /// Parameters:
         ///     - entity_state: the components that the new entity should be assigned
         pub fn createEntity(self: *Storage, entity_state: anytype) error{OutOfMemory}!Entity {
-            const zone = ztracy.ZoneNC(@src(), "Storage createEntity", Color.storage);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
             // validate the entity state before submitting the data to the container
@@ -134,7 +134,7 @@ pub fn CreateStorage(
         ///     - entity:    the entity that should be assigned the component value
         ///     - component: the new component value
         pub fn setComponent(self: *Storage, entity: Entity, component: anytype) error{ EntityMissing, OutOfMemory }!void {
-            const zone = ztracy.ZoneNC(@src(), "Storage setComponent", Color.storage);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
             const new_archetype_created = try self.container.setComponent(entity, component);
@@ -173,7 +173,7 @@ pub fn CreateStorage(
         ///     - entity:    the entity that should be assigned the component value
         ///     - component: the new component value
         pub fn removeComponent(self: *Storage, entity: Entity, comptime Component: type) error{ EntityMissing, OutOfMemory }!void {
-            const zone = ztracy.ZoneNC(@src(), "Storage removeComponent", Color.storage);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
             const new_archetype_created = try self.container.removeComponent(entity, Component);
             _ = new_archetype_created;
@@ -184,7 +184,7 @@ pub fn CreateStorage(
         ///     - entity:    the entity to check for type Component
         ///     - Component: the type of the component to check after
         pub fn hasComponent(self: Storage, entity: Entity, comptime Component: type) bool {
-            const zone = ztracy.ZoneNC(@src(), "Storage hasComponent", Color.storage);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
             return self.container.hasComponent(entity, Component);
         }
@@ -194,7 +194,7 @@ pub fn CreateStorage(
         ///     - entity:    the entity to retrieve Component from
         ///     - Component: the type of the component to retrieve
         pub fn getComponent(self: *Storage, entity: Entity, comptime Component: type) error{ ComponentMissing, EntityMissing }!Component {
-            const zone = ztracy.ZoneNC(@src(), "Storage getComponent", Color.storage);
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
             return self.container.getComponent(entity, Component);
         }
