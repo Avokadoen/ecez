@@ -413,7 +413,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
                 break :archetype_create_blk true;
             };
 
-            var local_remove_component_index: usize = remove_index_calc_blk: {
+            const local_remove_component_index: usize = remove_index_calc_blk: {
                 // calculate mask that filters out most significant bits
                 const remove_after_bits_mask = remove_bit - 1;
                 const remove_index = @popCount(old_encoding & remove_after_bits_mask);
@@ -428,13 +428,112 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
                 data[0..old_component_count],
             );
 
-            // move the data slices around to make room for the new component data
+            // move the data slices around to remove component
             var rhd = data[local_remove_component_index..old_component_count];
             std.mem.rotate([]u8, rhd, 1);
 
             const unwrapped_index = new_archetype_index.?;
             // register the component bytes and entity to it's new archetype
             try self.archetypes.items[unwrapped_index].registerEntity(entity, data[0 .. old_component_count - 1], self.component_sizes);
+
+            // register the entity in the new archetype, we know entity exist in old archetype because we called fetchEntityComponentView successfully
+            self.archetypes.items[old_archetype_index].swapRemoveEntity(entity, self.component_sizes) catch unreachable;
+
+            // update entity reference
+            self.entity_references.items[entity.id] = @as(
+                EntityRef,
+                @intCast(unwrapped_index),
+            );
+
+            return new_archetype_created;
+        }
+
+        /// Remove the Component type from an entity
+        /// Errors:
+        ///     - EntityMissing: if the entity does not exist
+        ///     - OutOfMemory: if OOM
+        /// Return:
+        ///     True if a new archetype was created for this operation
+        pub fn removeComponents(self: *ArcheContainer, entity: Entity, comptime remove_component_array: []const type) error{ EntityMissing, OutOfMemory }!bool {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.arche_container);
+            defer zone.End();
+
+            const old_archetype_index = self.entity_references.items[entity.id];
+
+            // get old path and count how many components are stored in the entity
+            const old_encoding = self.archetypes.items[old_archetype_index].component_bitmask;
+            const old_component_count = @popCount(old_encoding);
+
+            const remove_bits = comptime bit_calc_blk: {
+                var bits: BitMask.Bits = 0;
+                inline for (remove_component_array) |RemoveComponent| {
+                    bits |= @as(BitMask.Bits, 1 << componentIndex(RemoveComponent));
+                }
+
+                break :bit_calc_blk bits;
+            };
+            const new_encoding = old_encoding & ~remove_bits;
+
+            var new_archetype_index = self.tree.getNodeDataIndex(new_encoding);
+
+            var new_archetype_created = archetype_create_blk: {
+                // if archetype already exist
+                if (new_archetype_index != null) {
+                    break :archetype_create_blk false;
+                }
+
+                var new_archetype = try OpaqueArchetype.init(self.allocator, new_encoding);
+                errdefer new_archetype.deinit();
+
+                const opaque_archetype_index = @as(u32, @intCast(self.archetypes.items.len));
+
+                try self.archetypes.append(new_archetype);
+                errdefer _ = self.archetypes.pop();
+
+                try self.tree.appendChain(opaque_archetype_index, new_encoding);
+
+                new_archetype_index = opaque_archetype_index;
+                break :archetype_create_blk true;
+            };
+
+            var local_indices_len: usize = 0;
+            // we need the indices of the new components
+            const local_indices_buffer: [remove_component_array.len]BitMask.Shift = new_comp_indices_calc_blk: {
+                var immediate_bits = old_encoding;
+                var new_indices: [remove_component_array.len]BitMask.Shift = undefined;
+
+                inline for (remove_component_array) |RemoveComponent| {
+                    if (self.hasComponent(entity, RemoveComponent)) {
+                        // calculate mask that filters out most significant bits
+                        const new_after_bits_mask = comptime @as(BitMask.Bits, (1 << componentIndex(RemoveComponent)) - 1);
+                        new_indices[local_indices_len] = @popCount(immediate_bits & new_after_bits_mask);
+                        immediate_bits |= (@as(BitMask.Bits, 1) << new_indices[local_indices_len]);
+                        local_indices_len += 1;
+                    }
+                }
+
+                break :new_comp_indices_calc_blk new_indices;
+            };
+
+            const local_remove_component_indices = local_indices_buffer[0..local_indices_len];
+
+            // fetch a view of the component data
+            var data: [components.len][]u8 = undefined;
+            try self.archetypes.items[old_archetype_index].fetchEntityComponentView(
+                entity,
+                self.component_sizes,
+                data[0..old_component_count],
+            );
+
+            for (local_remove_component_indices) |local_remove_component_index| {
+                // move the data slices around to remove component
+                var rhd = data[local_remove_component_index..old_component_count];
+                std.mem.rotate([]u8, rhd, 1);
+            }
+
+            const unwrapped_index = new_archetype_index.?;
+            // register the component bytes and entity to it's new archetype
+            try self.archetypes.items[unwrapped_index].registerEntity(entity, data[0..@popCount(new_encoding)], self.component_sizes);
 
             // register the entity in the new archetype, we know entity exist in old archetype because we called fetchEntityComponentView successfully
             self.archetypes.items[old_archetype_index].swapRemoveEntity(entity, self.component_sizes) catch unreachable;
@@ -731,6 +830,21 @@ test "ArcheContainer setComponents & getComponent works" {
         try testing.expectEqual(b, try container.getComponent(entity, Testing.Component.B));
         try testing.expectEqual(Testing.Component.C{}, try container.getComponent(entity, Testing.Component.C));
     }
+}
+
+test "ArcheContainer removeComponents & getComponent works" {
+    var container = try TestContainer.init(testing.allocator);
+    defer container.deinit();
+
+    const initial_state = Testing.Archetype.ABC{
+        .b = Testing.Component.B{ .value = 0 },
+    };
+    const entity = (try container.createEntity(initial_state)).entity;
+
+    _ = try container.removeComponents(entity, &[_]type{ Testing.Component.A, Testing.Component.C });
+    try testing.expectEqual(false, container.hasComponent(entity, Testing.Component.A));
+    try testing.expectEqual(Testing.Component.B{ .value = 0 }, try container.getComponent(entity, Testing.Component.B));
+    try testing.expectEqual(false, container.hasComponent(entity, Testing.Component.C));
 }
 
 test "ArcheContainer getEntityBitEncoding works" {

@@ -149,7 +149,7 @@ pub fn CreateStorage(
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
-            // validate the entity state before submitting the data to the container
+            // validate the struct_of_components before submitting the data to the container
             comptime {
                 const state_type_info = @typeInfo(@TypeOf(struct_of_components));
                 if (state_type_info != .Struct) {
@@ -170,12 +170,44 @@ pub fn CreateStorage(
 
         /// Remove a component owned by entity
         /// Parameters:
-        ///     - entity:    the entity that should be assigned the component value
-        ///     - component: the new component value
+        ///     - entity:    the entity being mutated
+        ///     - component: the component type to remove
         pub fn removeComponent(self: *Storage, entity: Entity, comptime Component: type) error{ EntityMissing, OutOfMemory }!void {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
             const new_archetype_created = try self.container.removeComponent(entity, Component);
+            _ = new_archetype_created;
+        }
+
+        /// Remove components owned by entity
+        /// Parameters:
+        ///     - entity:    the entity being mutated
+        ///     - components: the components to remove in a tuple/struct
+        pub fn removeComponents(self: *Storage, entity: Entity, comptime struct_of_remove_components: anytype) error{ EntityMissing, OutOfMemory }!void {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
+            defer zone.End();
+
+            // validate struct_of_remove_components before submitting the types to the container
+            const field_types = comptime validate_blk: {
+                const state_type_info = @typeInfo(@TypeOf(struct_of_remove_components));
+                if (state_type_info != .Struct) {
+                    @compileError(@src().fn_name ++ " expect struct_of_remove_components to be struct/tuple of component types");
+                }
+
+                var types: [state_type_info.Struct.fields.len]type = undefined;
+                inline for (&types, state_type_info.Struct.fields) |*field_type, field| {
+                    if (field.type != type) {
+                        @compileError(@src().fn_name ++ " struct_of_remove_components can only have type members");
+                    }
+                    field_type.* = @field(struct_of_remove_components, field.name);
+                }
+
+                validateComponentOrderAndValidity(&types);
+
+                break :validate_blk types;
+            };
+
+            const new_archetype_created = try self.container.removeComponents(entity, &field_types);
             _ = new_archetype_created;
         }
 
@@ -634,6 +666,20 @@ test "removeComponent() removes all components from entity" {
 
     try storage.removeComponent(entity, Testing.Component.A);
     try testing.expectEqual(false, storage.hasComponent(entity, Testing.Component.A));
+}
+
+test "removeComponents() removes multiple components" {
+    var storage = try StorageStub.init(testing.allocator, .{});
+    defer storage.deinit();
+
+    const initial_state = Testing.Archetype.ABC{};
+    const entity = try storage.createEntity(initial_state);
+
+    try storage.removeComponents(entity, .{ Testing.Component.A, Testing.Component.C });
+
+    try testing.expectEqual(false, storage.hasComponent(entity, Testing.Component.A));
+    try testing.expectEqual(true, storage.hasComponent(entity, Testing.Component.B));
+    try testing.expectEqual(false, storage.hasComponent(entity, Testing.Component.C));
 }
 
 test "hasComponent() responds as expected" {
