@@ -477,8 +477,8 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
                 comptime var current_axis: usize = 0;
                 comptime var vec: Vec = undefined;
 
-                inline for (0..std.math.maxInt(ComponentMask.Shift)) |nth_bit| {
-                    const bit = bitmask & (1 << nth_bit);
+                inline for (0..max_component_count) |nth_bit| {
+                    const bit: ComponentMask.Bits = bitmask & (1 << nth_bit);
                     // if the bit is set, store it in the vector
                     if (bit != 0) {
                         vec[current_axis] = bit;
