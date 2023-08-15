@@ -347,7 +347,7 @@ var happy_healhy_monster_iter = Storage.Query(
     },
     // excluded types are submitted in a tuple of types
     .{SadTag, SickTag}
-).submit(world);
+).submit(&storage);
 
 while (happy_healhy_monster_iter.next()) |happy_healhy_monster| {
     // these monsters are not sick or sad so they become more happy :)
