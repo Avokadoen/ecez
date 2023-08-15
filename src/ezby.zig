@@ -628,6 +628,15 @@ test "serialize and deserialize is idempotent" {
         entity.* = try storage.createEntity(.{ a.*, b.* });
     }
 
+    var ac_as: [test_data_count]Testing.Component.A = undefined;
+    var ac_bs: [test_data_count]Testing.Component.B = undefined;
+    var ac_entities: [test_data_count]Entity = undefined;
+    for (&ac_as, &ac_bs, &ac_entities, 0..) |*a, *b, *entity, index| {
+        a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
+        b.* = Testing.Component.B{ .value = @as(u8, @intCast(index)) };
+        entity.* = try storage.createEntity(.{ a.*, b.* });
+    }
+
     var abc_as: [test_data_count]Testing.Component.A = undefined;
     var abc_bs: [test_data_count]Testing.Component.B = undefined;
     var abc_cs: Testing.Component.C = .{};
