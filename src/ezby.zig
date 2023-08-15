@@ -94,6 +94,7 @@ pub fn serialize(
         written_bytes.appendSliceAssumeCapacity(mem.asBytes(&comp_chunk));
         written_bytes.appendSliceAssumeCapacity(mem.sliceAsBytes(&component_hashes));
         written_bytes.appendSliceAssumeCapacity(mem.sliceAsBytes(&storage.container.component_sizes));
+        written_bytes.appendSliceAssumeCapacity(mem.sliceAsBytes(&storage.container.component_log2_align));
     }
 
     // step through the archetype tree and serialize each archetype (ARCH)
@@ -176,7 +177,14 @@ pub fn deserialize(comptime Storage: type, storage: *Storage, ezby_bytes: []cons
     var comp: *Chunk.Comp = undefined;
     var hash_list: Chunk.Comp.HashList = undefined;
     var size_list: Chunk.Comp.SizeList = undefined;
-    bytes_pos = parseCompChunk(bytes_pos, &comp, &hash_list, &size_list);
+    var align_list: Chunk.Comp.AlignList = undefined;
+    bytes_pos = parseCompChunk(
+        bytes_pos,
+        &comp,
+        &hash_list,
+        &size_list,
+        &align_list,
+    );
 
     for (
         comptime Storage.Container.getComponentHashes(),
@@ -239,8 +247,11 @@ pub fn deserialize(comptime Storage: type, storage: *Storage, ezby_bytes: []cons
         var component_byte_cursor: usize = 0;
         for (rtti_indices_list[0..arch.number_of_component_types], 0..) |rtti_index, iteration| {
             const component_size = size_list[rtti_index];
+            const component_log2_align = align_list[rtti_index];
             const total_byte_count = component_size * arch.number_of_entities;
             try archetype.component_storage[iteration].appendSlice(
+                storage.allocator,
+                component_log2_align,
                 component_bytes[component_byte_cursor .. component_byte_cursor + total_byte_count],
             );
 
@@ -267,6 +278,7 @@ pub const Chunk = struct {
         pub const Rtti = u64;
         pub const HashList = [*]const u64;
         pub const SizeList = [*]const u32;
+        pub const AlignList = [*]const u8;
     };
 
     pub const Arch = packed struct {
@@ -302,6 +314,7 @@ fn parseCompChunk(
     chunk: **const Chunk.Comp,
     hash_list: *Chunk.Comp.HashList,
     size_list: *Chunk.Comp.SizeList,
+    align_list: *Chunk.Comp.AlignList,
 ) []const u8 {
     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.serializer);
     defer zone.End();
@@ -314,19 +327,28 @@ fn parseCompChunk(
         @ptrCast(@alignCast(bytes.ptr)),
     );
 
+    const hash_list_offset = @sizeOf(Chunk.Comp);
     hash_list.* = @as(
         Chunk.Comp.HashList,
-        @ptrCast(@alignCast(bytes[@sizeOf(Chunk.Comp)..].ptr)),
+        @ptrCast(@alignCast(bytes[hash_list_offset..].ptr)),
     );
     const hash_list_size = chunk.*.number_of_component_types * @sizeOf(u64);
 
+    const size_list_offset = hash_list_offset + hash_list_size;
     size_list.* = @as(
         Chunk.Comp.SizeList,
-        @ptrCast(@alignCast(bytes[@sizeOf(Chunk.Comp) + hash_list_size ..].ptr)),
+        @ptrCast(@alignCast(bytes[size_list_offset..].ptr)),
     );
     const size_list_size = chunk.*.number_of_component_types * @sizeOf(u32);
 
-    const next_byte = @sizeOf(Chunk.Comp) + hash_list_size + size_list_size;
+    const align_list_offset = size_list_offset + size_list_size;
+    align_list.* = @as(
+        Chunk.Comp.AlignList,
+        @ptrCast(@alignCast(bytes[align_list_offset..].ptr)),
+    );
+    const align_list_size = chunk.*.number_of_component_types * @sizeOf(u8);
+
+    const next_byte = @sizeOf(Chunk.Comp) + hash_list_size + size_list_size + align_list_size;
     return bytes[next_byte..];
 }
 
@@ -435,7 +457,14 @@ test "serializing then using parseCompChunk produce expected COMP chunk" {
     var comp: *Chunk.Comp = undefined;
     var hash_list: Chunk.Comp.HashList = undefined;
     var size_list: Chunk.Comp.SizeList = undefined;
-    _ = parseCompChunk(eref_bytes, &comp, &hash_list, &size_list);
+    var align_list: Chunk.Comp.AlignList = undefined;
+    _ = parseCompChunk(
+        eref_bytes,
+        &comp,
+        &hash_list,
+        &size_list,
+        &align_list,
+    );
 
     // we initialize world with 3 component types
     try testing.expectEqual(
@@ -472,6 +501,20 @@ test "serializing then using parseCompChunk produce expected COMP chunk" {
         @as(u64, @sizeOf(Testing.Component.C)),
         size_list[2],
     );
+
+    // check alignments
+    try testing.expectEqual(
+        @as(u64, std.math.log2(@alignOf(Testing.Component.A))),
+        align_list[0],
+    );
+    try testing.expectEqual(
+        @as(u64, std.math.log2(@alignOf(Testing.Component.B))),
+        align_list[1],
+    );
+    try testing.expectEqual(
+        @as(u64, std.math.log2(@alignOf(Testing.Component.C))),
+        align_list[2],
+    );
 }
 
 test "serializing then using parseArchChunk produce expected ARCH chunk" {
@@ -496,7 +539,14 @@ test "serializing then using parseArchChunk produce expected ARCH chunk" {
     var comp: *Chunk.Comp = undefined;
     var hash_list: Chunk.Comp.HashList = undefined;
     var size_list: Chunk.Comp.SizeList = undefined;
-    const void_arch_bytes = parseCompChunk(eref_bytes, &comp, &hash_list, &size_list);
+    var align_list: Chunk.Comp.AlignList = undefined;
+    const void_arch_bytes = parseCompChunk(
+        eref_bytes,
+        &comp,
+        &hash_list,
+        &size_list,
+        &align_list,
+    );
 
     const a_b_arch_bytes = blk: {
         var arch: *Chunk.Arch = undefined;

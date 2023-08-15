@@ -157,6 +157,13 @@ const entity_type = @import("entity_type.zig");
 const TestOpaqueArchetype = @import("opaque_archetype.zig").FromComponentMask(Testing.ComponentBitmask);
 const TestTree = @import("binary_tree.zig").FromConfig(Testing.AllComponentsArr.len + 1, Testing.ComponentBitmask);
 
+const sizes = [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
+const alignments = [_]u8{
+    std.math.log2(@alignOf(A)),
+    std.math.log2(@alignOf(B)),
+    std.math.log2(@alignOf(C)),
+};
+
 test "value iterating works" {
     var tree = try TestTree.init(testing.allocator, 12);
     defer tree.deinit();
@@ -164,14 +171,13 @@ test "value iterating works" {
     tree.appendChain(@as(u32, 0), Testing.Bits.A | Testing.Bits.B) catch unreachable;
     tree.appendChain(@as(u32, 1), Testing.Bits.All) catch unreachable;
 
-    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
     var archetypes: [2]TestOpaqueArchetype = .{
         TestOpaqueArchetype.init(testing.allocator, Testing.Bits.A | Testing.Bits.B) catch unreachable,
         TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All) catch unreachable,
     };
     defer {
         for (&archetypes) |*archetype| {
-            archetype.deinit();
+            archetype.deinit(alignments);
         }
     }
 
@@ -185,6 +191,7 @@ test "value iterating works" {
             Entity{ .id = @as(entity_type.EntityId, @intCast(i)) },
             data[0..2],
             sizes,
+            alignments,
         );
     }
 
@@ -198,6 +205,7 @@ test "value iterating works" {
             Entity{ .id = @as(entity_type.EntityId, @intCast(i)) },
             data[0..3],
             sizes,
+            alignments,
         );
     }
 
@@ -286,12 +294,10 @@ test "ptr iterating works and can mutate storage data" {
     defer tree.deinit();
     tree.appendChain(@as(u32, 0), Testing.Bits.All) catch unreachable;
 
-    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
-
     var archetypes = [_]TestOpaqueArchetype{
         try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All),
     };
-    defer archetypes[0].deinit();
+    defer archetypes[0].deinit(alignments);
 
     for (0..100) |i| {
         const a = A{ .value = @as(u32, @intCast(i)) };
@@ -300,7 +306,12 @@ test "ptr iterating works and can mutate storage data" {
         data[0] = std.mem.asBytes(&a);
         data[1] = std.mem.asBytes(&b);
         data[2] = &[0]u8{};
-        try archetypes[0].registerEntity(Entity{ .id = @as(entity_type.EntityId, @intCast(i)) }, &data, sizes);
+        try archetypes[0].registerEntity(
+            Entity{ .id = @as(entity_type.EntityId, @intCast(i)) },
+            &data,
+            sizes,
+            alignments,
+        );
     }
 
     {
@@ -347,14 +358,13 @@ test "reset moves iterator to start" {
     tree.appendChain(@as(u32, 0), Testing.Bits.A | Testing.Bits.B) catch unreachable;
     tree.appendChain(@as(u32, 1), Testing.Bits.All) catch unreachable;
 
-    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
     var archetypes: [2]TestOpaqueArchetype = .{
         TestOpaqueArchetype.init(testing.allocator, Testing.Bits.A | Testing.Bits.B) catch unreachable,
         TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All) catch unreachable,
     };
     defer {
         for (&archetypes) |*archetype| {
-            archetype.deinit();
+            archetype.deinit(alignments);
         }
     }
 
@@ -368,6 +378,7 @@ test "reset moves iterator to start" {
             Entity{ .id = @as(entity_type.EntityId, @intCast(i)) },
             data[0..2],
             sizes,
+            alignments,
         );
     }
 
@@ -381,6 +392,7 @@ test "reset moves iterator to start" {
             Entity{ .id = @as(entity_type.EntityId, @intCast(i)) },
             data[0..3],
             sizes,
+            alignments,
         );
     }
 
@@ -419,14 +431,13 @@ test "skip moves iterator to requested entry" {
     tree.appendChain(@as(u32, 0), Testing.Bits.A | Testing.Bits.B) catch unreachable;
     tree.appendChain(@as(u32, 1), Testing.Bits.All) catch unreachable;
 
-    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
     var archetypes: [2]TestOpaqueArchetype = .{
         TestOpaqueArchetype.init(testing.allocator, Testing.Bits.A | Testing.Bits.B) catch unreachable,
         TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All) catch unreachable,
     };
     defer {
         for (&archetypes) |*archetype| {
-            archetype.deinit();
+            archetype.deinit(alignments);
         }
     }
 
@@ -440,6 +451,7 @@ test "skip moves iterator to requested entry" {
             Entity{ .id = @as(entity_type.EntityId, @intCast(i)) },
             data[0..2],
             sizes,
+            alignments,
         );
     }
 
@@ -453,6 +465,7 @@ test "skip moves iterator to requested entry" {
             Entity{ .id = @as(entity_type.EntityId, @intCast(i)) },
             data[0..3],
             sizes,
+            alignments,
         );
     }
 

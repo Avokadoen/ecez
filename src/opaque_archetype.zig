@@ -1,6 +1,5 @@
 const std = @import("std");
 const testing = std.testing;
-const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 
 const ztracy = @import("ztracy");
@@ -10,6 +9,8 @@ const entity_type = @import("entity_type.zig");
 const Color = @import("misc.zig").Color;
 const Entity = entity_type.Entity;
 const EntityMap = entity_type.Map;
+
+const RuntimeAlignedByteArrayList = @import("RuntimeAlignedByteArrayList.zig");
 
 const ecez_error = @import("error.zig");
 const ArchetypeError = ecez_error.ArchetypeError;
@@ -27,7 +28,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
         entities: EntityMap,
 
         component_bitmask: ComponentMask.Bits,
-        component_storage: []ArrayList(u8),
+        component_storage: []RuntimeAlignedByteArrayList,
         void_component: [0]u8 = [0]u8{},
 
         pub fn init(allocator: Allocator, component_bitmask: ComponentMask.Bits) error{OutOfMemory}!OpaqueArchetype {
@@ -35,11 +36,11 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             defer zone.End();
 
             const type_count = @popCount(component_bitmask);
-            var component_storage = try allocator.alloc(ArrayList(u8), type_count);
+            var component_storage = try allocator.alloc(RuntimeAlignedByteArrayList, type_count);
             errdefer allocator.free(component_storage);
 
             for (component_storage) |*component_buffer| {
-                component_buffer.* = ArrayList(u8).init(allocator);
+                component_buffer.* = RuntimeAlignedByteArrayList{};
             }
 
             return OpaqueArchetype{
@@ -50,13 +51,22 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             };
         }
 
-        pub fn deinit(self: *OpaqueArchetype) void {
+        pub fn deinit(self: *OpaqueArchetype, all_log2_alignments: [max_component_count]u8) void {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
             self.entities.deinit();
-            for (self.component_storage) |component_buffer| {
-                component_buffer.deinit();
+
+            var bitmask = self.component_bitmask;
+            var cursor: u32 = 0;
+            for (self.component_storage) |*storage| {
+                const step = @as(ComponentMask.Shift, @intCast(@ctz(bitmask)));
+                std.debug.assert((bitmask >> step) & 1 == 1);
+                bitmask = (bitmask >> step) >> 1;
+                cursor += @as(u32, @intCast(step)) + 1;
+
+                const component_alignment = all_log2_alignments[cursor - 1];
+                storage.deinit(self.allocator, component_alignment);
             }
             self.allocator.free(self.component_storage);
         }
@@ -183,6 +193,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             self: *OpaqueArchetype,
             entity: Entity,
             all_component_sizes: [max_component_count]u32,
+            all_log2_alignments: [max_component_count]u8,
         ) error{OutOfMemory}!void {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
@@ -200,7 +211,8 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
                 cursor += @as(u32, @intCast(step)) + 1;
 
                 const component_size = all_component_sizes[cursor - 1];
-                try storage.ensureUnusedCapacity(component_size);
+                const component_alignment = all_log2_alignments[cursor - 1];
+                try storage.ensureUnusedCapacity(self.allocator, component_alignment, component_size);
             }
         }
 
@@ -209,6 +221,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             entity: Entity,
             data: []const []const u8,
             all_component_sizes: [max_component_count]u32,
+            all_log2_alignments: [max_component_count]u8,
         ) error{OutOfMemory}!void {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
@@ -230,8 +243,9 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
                 cursor += @as(u32, @intCast(step)) + 1;
 
                 const component_size = all_component_sizes[cursor - 1];
+                const component_alignment = all_log2_alignments[cursor - 1];
                 // TODO: proper errdefer
-                try storage.appendSlice(data_entry[0..component_size]);
+                try storage.appendSlice(self.allocator, component_alignment, data_entry[0..component_size]);
             }
         }
 
@@ -510,14 +524,21 @@ const C = Testing.Component.C;
 const TestingMask = Testing.ComponentBitmask;
 const TestOpaqueArchetype = FromComponentMask(TestingMask);
 
+const sizes = [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
+const alignments = [_]u8{
+    std.math.log2(@alignOf(A)),
+    std.math.log2(@alignOf(B)),
+    std.math.log2(@alignOf(C)),
+};
+
 test "init() + deinit() is idempotent" {
     var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.None);
-    archetype.deinit();
+    archetype.deinit(alignments);
 }
 
 test "hasComponent returns expected values" {
     var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.A);
-    defer archetype.deinit();
+    defer archetype.deinit(alignments);
 
     try testing.expectEqual(true, archetype.hasComponents(Testing.Bits.A));
     try testing.expectEqual(false, archetype.hasComponents(Testing.Bits.B | Testing.Bits.C));
@@ -525,7 +546,7 @@ test "hasComponent returns expected values" {
 
 test "bitInMaskToStorageIndex returns correct index" {
     var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All);
-    defer archetype.deinit();
+    defer archetype.deinit(alignments);
 
     try testing.expectEqual(
         @as(usize, 0),
@@ -545,7 +566,7 @@ test "bitInMaskToStorageIndex returns correct index" {
 
 test "bitsInMaskToStorageIndices returns correct indices" {
     var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All);
-    defer archetype.deinit();
+    defer archetype.deinit(alignments);
 
     {
         const Vec3 = @Vector(3, TestingMask.Bits);
@@ -593,9 +614,8 @@ test "bitsInMaskToStorageIndices returns correct indices" {
 }
 
 test "getComponent returns expected value ptrs" {
-    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
     var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All);
-    defer archetype.deinit();
+    defer archetype.deinit(alignments);
 
     for (0..100) |i| {
         const a = A{ .value = @as(u32, @intCast(i)) };
@@ -608,6 +628,7 @@ test "getComponent returns expected value ptrs" {
             Entity{ .id = @as(entity_type.EntityId, @intCast(i)) },
             &data,
             sizes,
+            alignments,
         );
     }
 
@@ -625,9 +646,8 @@ test "getComponent returns expected value ptrs" {
 }
 
 test "setComponent can reassign values" {
-    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
     var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All);
-    defer archetype.deinit();
+    defer archetype.deinit(alignments);
 
     for (0..100) |i| {
         const entity = Entity{ .id = @as(entity_type.EntityId, @intCast(i)) };
@@ -638,7 +658,7 @@ test "setComponent can reassign values" {
         data[0] = std.mem.asBytes(&a);
         data[1] = std.mem.asBytes(&b);
         data[2] = &[0]u8{};
-        try archetype.registerEntity(entity, &data, sizes);
+        try archetype.registerEntity(entity, &data, sizes, alignments);
 
         try archetype.setComponent(entity, A{ .value = 0 }, Testing.Bits.A);
         try archetype.setComponent(entity, B{ .value = 0 }, Testing.Bits.B);
@@ -659,9 +679,8 @@ test "setComponent can reassign values" {
 }
 
 test "setComponents can reassign values" {
-    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
     var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All);
-    defer archetype.deinit();
+    defer archetype.deinit(alignments);
 
     for (0..100) |i| {
         const entity = Entity{ .id = @as(entity_type.EntityId, @intCast(i)) };
@@ -672,7 +691,7 @@ test "setComponents can reassign values" {
         data[0] = std.mem.asBytes(&a);
         data[1] = std.mem.asBytes(&b);
         data[2] = &[0]u8{};
-        try archetype.registerEntity(entity, &data, sizes);
+        try archetype.registerEntity(entity, &data, sizes, alignments);
 
         try archetype.setComponents(
             entity,
@@ -696,9 +715,8 @@ test "setComponents can reassign values" {
 }
 
 test "fetchEntityComponentView gives correct component views" {
-    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
     var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All);
-    defer archetype.deinit();
+    defer archetype.deinit(alignments);
 
     var buffer: [3][]u8 = undefined;
     for (0..100) |i| {
@@ -709,7 +727,7 @@ test "fetchEntityComponentView gives correct component views" {
         buffer[1] = std.mem.asBytes(&b);
         buffer[2] = &[0]u8{};
 
-        try archetype.registerEntity(mock_entity, &buffer, sizes);
+        try archetype.registerEntity(mock_entity, &buffer, sizes, alignments);
     }
 
     var buf_0: [@sizeOf(A)]u8 = undefined;
@@ -759,9 +777,8 @@ test "fetchEntityComponentView gives correct component views" {
 }
 
 test "swapRemoveEntity makes entity invalid for archetype" {
-    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
     var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All);
-    defer archetype.deinit();
+    defer archetype.deinit(alignments);
 
     var entities: [100]Entity = undefined;
     var buffer: [3][]u8 = undefined;
@@ -773,7 +790,7 @@ test "swapRemoveEntity makes entity invalid for archetype" {
         buffer[1] = std.mem.asBytes(&b);
         buffer[2] = &[0]u8{};
 
-        try archetype.registerEntity(entity.*, &buffer, sizes);
+        try archetype.registerEntity(entity.*, &buffer, sizes, alignments);
     }
 
     {
@@ -833,9 +850,8 @@ test "swapRemoveEntity makes entity invalid for archetype" {
 }
 
 test "removeEntity removes entity and components" {
-    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
     var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All);
-    defer archetype.deinit();
+    defer archetype.deinit(alignments);
 
     var buffer: [3][]u8 = undefined;
     for (0..100) |i| {
@@ -846,7 +862,7 @@ test "removeEntity removes entity and components" {
         buffer[1] = std.mem.asBytes(&b);
         buffer[2] = &[0]u8{};
 
-        try archetype.registerEntity(mock_entity, &buffer, sizes);
+        try archetype.registerEntity(mock_entity, &buffer, sizes, alignments);
     }
 
     {
@@ -882,9 +898,8 @@ test "removeEntity removes entity and components" {
 }
 
 test "getStorageData retrieves components view" {
-    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
     var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All);
-    defer archetype.deinit();
+    defer archetype.deinit(alignments);
 
     {
         var buffer: [3][]u8 = undefined;
@@ -896,7 +911,7 @@ test "getStorageData retrieves components view" {
             buffer[1] = std.mem.asBytes(&b);
             buffer[2] = &[0]u8{};
 
-            try archetype.registerEntity(mock_entity, &buffer, sizes);
+            try archetype.registerEntity(mock_entity, &buffer, sizes, alignments);
         }
     }
 
@@ -943,9 +958,8 @@ test "getStorageData retrieves components view" {
 }
 
 test "entity map values are increment of previous" {
-    const sizes = comptime [_]u32{ @sizeOf(A), @sizeOf(B), @sizeOf(C) };
     var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.All);
-    defer archetype.deinit();
+    defer archetype.deinit(alignments);
 
     {
         var buffer: [3][]u8 = undefined;
@@ -957,7 +971,7 @@ test "entity map values are increment of previous" {
             buffer[1] = std.mem.asBytes(&b);
             buffer[2] = &[0]u8{};
 
-            try archetype.registerEntity(mock_entity, &buffer, sizes);
+            try archetype.registerEntity(mock_entity, &buffer, sizes, alignments);
         }
     }
 
@@ -968,7 +982,7 @@ test "entity map values are increment of previous" {
 
 test "getComponentTypeIndices produce correct indices" {
     var archetype = try TestOpaqueArchetype.init(testing.allocator, Testing.Bits.A | Testing.Bits.C);
-    defer archetype.deinit();
+    defer archetype.deinit(alignments);
 
     try testing.expectEqualSlices(
         u32,

@@ -1,4 +1,4 @@
-# ECEZ byte format - .ezby VERSION 0.3.0
+# ECEZ byte format - .ezby VERSION 0.4.0
 
 Ecez support a custom byte format called ezby. This format define different [chunks](#chunk_sec) that contain structured bytes. This is inspired by the fantastic .vox format which is made by [ephtracy](https://github.com/ephtracy). 
 
@@ -28,6 +28,7 @@ TODO: mention alignment restrictions
 | *number of<br>components*           | 4     | how many compoents that are stored in<br>the chunk (N) |
 | *component_hash*                    | 8 * N | Component type hash identifier. The<br>component data is sorted on the hashes<br>. Smallest to biggest.|
 | *component_size*                    | 4 * N | Component byte size                                    |
+| *component_log2_align*              | N     | Component log2 alignment                               |
 
 ### <a name="SHAR"></a>  SHAR - SharedState chunk (TODO)
 

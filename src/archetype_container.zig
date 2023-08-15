@@ -38,7 +38,9 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
 
         tree: BinaryTree,
 
+        // TODO: these can exist in comptime
         component_sizes: [components.len]u32,
+        component_log2_align: [components.len]u8,
 
         empty_bytes: [0]u8,
 
@@ -58,8 +60,14 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
             errdefer tree.deinit();
 
             comptime var component_sizes: [components.len]u32 = undefined;
-            inline for (components, &component_sizes) |Component, *size| {
+            comptime var component_log2_align: [components.len]u8 = undefined;
+            inline for (
+                components,
+                &component_sizes,
+                &component_log2_align,
+            ) |Component, *size, *alignment| {
                 size.* = @sizeOf(Component);
+                alignment.* = std.math.log2(@alignOf(Component));
             }
 
             const void_bitmask = @as(BitMask.Bits, 0);
@@ -72,13 +80,14 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
                 .entity_references = entity_references,
                 .tree = tree,
                 .component_sizes = component_sizes,
+                .component_log2_align = component_log2_align,
                 .empty_bytes = .{},
             };
         }
 
         pub inline fn deinit(self: *ArcheContainer) void {
             for (self.archetypes.items) |*archetype| {
-                archetype.deinit();
+                archetype.deinit(self.component_log2_align);
             }
             self.archetypes.deinit();
             self.entity_references.deinit();
@@ -172,7 +181,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
                             self.allocator,
                             new_encoding,
                         );
-                        errdefer new_archetype.deinit();
+                        errdefer new_archetype.deinit(self.component_log2_align);
 
                         const opaque_archetype_index = @as(u32, @intCast(self.archetypes.items.len));
                         try self.archetypes.append(new_archetype);
@@ -201,10 +210,18 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
 
                     const unwrapped_index = new_archetype_index.?;
                     // register the component bytes and entity to it's new archetype
-                    try self.archetypes.items[unwrapped_index].registerEntity(entity, data[0..total_local_components], self.component_sizes);
+                    try self.archetypes.items[unwrapped_index].registerEntity(
+                        entity,
+                        data[0..total_local_components],
+                        self.component_sizes,
+                        self.component_log2_align,
+                    );
 
                     // remove the entity and it's components from the old archetype, we know entity exist in old archetype because we called fetchEntityComponentView successfully
-                    self.archetypes.items[current_bit_index].swapRemoveEntity(entity, self.component_sizes) catch unreachable;
+                    self.archetypes.items[current_bit_index].swapRemoveEntity(
+                        entity,
+                        self.component_sizes,
+                    ) catch unreachable;
 
                     // update entity reference
                     self.entity_references.items[entity.id] = @as(
@@ -281,7 +298,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
                             self.allocator,
                             new_encoding,
                         );
-                        errdefer new_archetype.deinit();
+                        errdefer new_archetype.deinit(self.component_log2_align);
 
                         const opaque_archetype_index = @as(u32, @intCast(self.archetypes.items.len));
                         try self.archetypes.append(new_archetype);
@@ -325,7 +342,12 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
 
                     const unwrapped_index = new_archetype_index.?;
                     // register the component bytes and entity to it's new archetype
-                    try self.archetypes.items[unwrapped_index].registerEntity(entity, data[0..total_local_components], self.component_sizes);
+                    try self.archetypes.items[unwrapped_index].registerEntity(
+                        entity,
+                        data[0..total_local_components],
+                        self.component_sizes,
+                        self.component_log2_align,
+                    );
 
                     // remove the entity and it's components from the old archetype, we know entity exist in old archetype because we called fetchEntityComponentView successfully
                     self.archetypes.items[entity_ref].swapRemoveEntity(entity, self.component_sizes) catch unreachable;
@@ -378,7 +400,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
                 }
 
                 var new_archetype = try OpaqueArchetype.init(self.allocator, new_encoding);
-                errdefer new_archetype.deinit();
+                errdefer new_archetype.deinit(self.component_log2_align);
 
                 const opaque_archetype_index = @as(u32, @intCast(self.archetypes.items.len));
 
@@ -412,7 +434,12 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
 
             const unwrapped_index = new_archetype_index.?;
             // register the component bytes and entity to it's new archetype
-            try self.archetypes.items[unwrapped_index].registerEntity(entity, data[0 .. old_component_count - 1], self.component_sizes);
+            try self.archetypes.items[unwrapped_index].registerEntity(
+                entity,
+                data[0 .. old_component_count - 1],
+                self.component_sizes,
+                self.component_log2_align,
+            );
 
             // register the entity in the new archetype, we know entity exist in old archetype because we called fetchEntityComponentView successfully
             self.archetypes.items[old_archetype_index].swapRemoveEntity(entity, self.component_sizes) catch unreachable;
@@ -461,7 +488,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
                 }
 
                 var new_archetype = try OpaqueArchetype.init(self.allocator, new_encoding);
-                errdefer new_archetype.deinit();
+                errdefer new_archetype.deinit(self.component_log2_align);
 
                 const opaque_archetype_index = @as(u32, @intCast(self.archetypes.items.len));
 
@@ -511,7 +538,12 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
 
             const unwrapped_index = new_archetype_index.?;
             // register the component bytes and entity to it's new archetype
-            try self.archetypes.items[unwrapped_index].registerEntity(entity, data[0..@popCount(new_encoding)], self.component_sizes);
+            try self.archetypes.items[unwrapped_index].registerEntity(
+                entity,
+                data[0..@popCount(new_encoding)],
+                self.component_sizes,
+                self.component_log2_align,
+            );
 
             // register the entity in the new archetype, we know entity exist in old archetype because we called fetchEntityComponentView successfully
             self.archetypes.items[old_archetype_index].swapRemoveEntity(entity, self.component_sizes) catch unreachable;
@@ -625,6 +657,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
                         entity,
                         &state_data,
                         self.component_sizes,
+                        self.component_log2_align,
                     );
                     break :regiser_entity_blk false;
                 }
@@ -633,7 +666,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
                     self.allocator,
                     initial_bit_encoding,
                 );
-                errdefer new_archetype.deinit();
+                errdefer new_archetype.deinit(self.component_log2_align);
 
                 const opaque_archetype_index = @as(u32, @intCast(self.archetypes.items.len));
                 try self.archetypes.append(new_archetype);
@@ -645,6 +678,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
                     entity,
                     &state_data,
                     self.component_sizes,
+                    self.component_log2_align,
                 );
                 errdefer self.archetypes.items[opaque_archetype_index].removeEntity(entity, self.component_sizes) catch unreachable;
 
@@ -672,7 +706,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
                 self.allocator,
                 bitmap,
             );
-            errdefer new_archetype.deinit();
+            errdefer new_archetype.deinit(self.component_log2_align);
 
             const opaque_archetype_index = @as(u32, @intCast(self.archetypes.items.len));
             try self.archetypes.append(new_archetype);
