@@ -75,7 +75,7 @@ pub fn build(b: *std.Build) void {
     const main_tests_run = b.addRunArtifact(main_tests);
     test_step.dependOn(&main_tests_run.step);
 
-    var ecez_module = b.createModule(std.Build.CreateModuleOptions{
+    const ecez_module = b.createModule(std.Build.CreateModuleOptions{
         .source_file = .{ .path = "src/main.zig" },
         .dependencies = &[_]std.Build.ModuleDependency{ .{
             .name = "ztracy",
@@ -94,7 +94,7 @@ pub fn build(b: *std.Build) void {
         .name = "game-of-life",
     }}) |example| {
         const path = "examples/" ++ example.name ++ "/main.zig";
-        var exe = b.addExecutable(.{
+        const exe = b.addExecutable(.{
             .name = example.name,
             .root_source_file = .{ .path = path },
             .target = target,
