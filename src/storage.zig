@@ -280,7 +280,7 @@ pub fn CreateStorage(
         ///
         /// Example:
         /// ```
-        /// var a_iter = Storage.Query(struct{ entity: Entity, a: A }, .{B}).submit(storage, std.testing.allocator);
+        /// var a_iter = Storage.Query(struct{ entity: Entity, a: A }, .{B}).submit(&storage);
         /// defer a_iter.deinit();
         ///
         /// while (a_iter.next()) |item| {
