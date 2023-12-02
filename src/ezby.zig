@@ -521,8 +521,8 @@ test "serializing then using parseArchChunk produce expected ARCH chunk" {
     var storage = try StorageStub.init(testing.allocator, .{});
     defer storage.deinit();
 
-    var a = Testing.Component.A{};
-    var b = Testing.Component.B{};
+    const a = Testing.Component.A{};
+    const b = Testing.Component.B{};
 
     var entities: [10]Entity = undefined;
     for (&entities) |*entity| {
@@ -639,7 +639,7 @@ test "serialize and deserialize is idempotent" {
 
     var abc_as: [test_data_count]Testing.Component.A = undefined;
     var abc_bs: [test_data_count]Testing.Component.B = undefined;
-    var abc_cs: Testing.Component.C = .{};
+    const abc_cs: Testing.Component.C = .{};
     var abc_entities: [test_data_count]Entity = undefined;
     for (&abc_as, &abc_bs, &abc_entities, 0..) |*a, *b, *entity, index| {
         a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };

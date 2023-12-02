@@ -157,7 +157,7 @@ pub fn CreateScheduler(
                 );
 
                 // initialized the system job
-                var system_job = DispatchJob{
+                const system_job = DispatchJob{
                     .storage = storage,
                     .extra_argument = event_extra_argument,
                 };
@@ -1256,7 +1256,7 @@ test "reproducer: Dispatcher does not include new components to systems previous
     var scheduler = Scheduler.init();
     defer scheduler.deinit();
 
-    var a = Testing.Component.A{ .value = 1 };
+    const a = Testing.Component.A{ .value = 1 };
     _ = try storage.createEntity(.{a});
     _ = try storage.createEntity(.{a});
 

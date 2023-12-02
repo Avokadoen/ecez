@@ -162,7 +162,7 @@ pub const CommonSystem = struct {
         };
 
         var param_category_buffer: [32]ParamCategory = undefined;
-        var param_categories = param_category_buffer[0..fn_info.params.len];
+        const param_categories = param_category_buffer[0..fn_info.params.len];
 
         const parse_result = parseParams(function_name, param_categories, &param_types);
 

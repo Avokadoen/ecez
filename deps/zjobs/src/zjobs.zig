@@ -74,7 +74,6 @@ pub const QueueConfig = struct {
     max_threads: u8 = 32,
     idle_sleep_ns: u32 = 50,
 };
-
 /// Returns a struct that executes jobs on a pool of threads, which may be
 /// configured as follows:
 /// * `max_jobs` - the maximum number of jobs that can be waiting in the queue.
@@ -91,31 +90,31 @@ pub const QueueConfig = struct {
 /// * `JobQueue` is not designed to support single threaded environments, and
 ///   has not been tested for correctness in case background threads cannot be
 ///   spawned.
-pub fn JobQueue(comptime config: QueueConfig) type {
+pub fn JobQueue(comptime queue_config: QueueConfig) type {
     compileAssert(
-        config.max_jobs >= min_jobs,
+        queue_config.max_jobs >= min_jobs,
         "config.max_jobs ({}) must be at least min_jobs ({})",
-        .{ config.max_jobs, min_jobs },
+        .{ queue_config.max_jobs, min_jobs },
     );
 
     compileAssert(
-        config.max_job_size >= cache_line_size,
+        queue_config.max_job_size >= cache_line_size,
         "config.max_job_size ({}) must be at least cache_line_size ({})",
-        .{ config.max_job_size, cache_line_size },
+        .{ queue_config.max_job_size, cache_line_size },
     );
 
     compileAssert(
-        config.max_job_size % cache_line_size == 0,
+        queue_config.max_job_size % cache_line_size == 0,
         "config.max_job_size ({}) must be a multiple of cache_line_size ({})",
-        .{ config.max_job_size, cache_line_size },
+        .{ queue_config.max_job_size, cache_line_size },
     );
 
-    const Atomic = std.atomic.Atomic;
+    const Atomic = std.atomic.Value;
 
     const Slot = struct {
         const Self = @This();
 
-        pub const max_job_size = config.max_job_size;
+        pub const max_job_size = queue_config.max_job_size;
 
         const Data = [max_job_size]u8;
         const Main = *const fn (*Data) void;
@@ -125,7 +124,7 @@ pub fn JobQueue(comptime config: QueueConfig) type {
         exec           : Main align(cache_line_size) = undefined,
         id             : JobId                       = JobId.none,
         prereq         : JobId                       = JobId.none,
-        cycle          : Atomic(u16)                 = .{ .value = 0 },
+        cycle          : Atomic(u16)                 = .{ .raw = 0 },
         idle_mutex     : std.Thread.Mutex            = .{},
         idle_condition : std.Thread.Condition        = .{},
         // zig fmg: on
@@ -147,7 +146,7 @@ pub fn JobQueue(comptime config: QueueConfig) type {
                 self.idle_mutex.lock();
                 defer self.idle_mutex.unlock();
 
-                const acquired: bool = null == self.cycle.compareAndSwap(
+                const acquired: bool = null == self.cycle.cmpxchgStrong(
                     old_cycle,
                     new_cycle,
                     .Monotonic,
@@ -183,7 +182,7 @@ pub fn JobQueue(comptime config: QueueConfig) type {
             {
                 self.idle_mutex.lock();
                 defer self.idle_mutex.unlock();
-                const released: bool = null == self.cycle.compareAndSwap(
+                const released: bool = null == self.cycle.cmpxchgStrong(
                     old_cycle,
                     new_cycle,
                     .Monotonic,
@@ -214,13 +213,17 @@ pub fn JobQueue(comptime config: QueueConfig) type {
 
     return struct {
 
-        pub const max_jobs: u16 = config.max_jobs;
+        pub const StartConfig = struct {
+            num_threads: ?u8 = null,
+        };
 
-        pub const max_threads: u8 = config.max_threads;
+        pub const max_jobs: u16 = queue_config.max_jobs;
 
-        pub const max_job_size: u16 = config.max_job_size;
+        pub const max_threads: u8 = queue_config.max_threads;
 
-        pub const idle_sleep_ns: u64 = config.idle_sleep_ns;
+        pub const max_job_size: u16 = queue_config.max_job_size;
+
+        pub const idle_sleep_ns: u64 = queue_config.idle_sleep_ns;
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -247,12 +250,12 @@ pub fn JobQueue(comptime config: QueueConfig) type {
         _free_queue     : FreeQueue    = .{},
         _idle_event     : ResetEvent   = .{},
         _num_threads    : u64          = 0,
-        _main_thread    : Atomic(u64)  = .{ .value = 0 },
-        _lock_thread    : Atomic(u64)  = .{ .value = 0 },
-        _initialized    : Atomic(bool) = .{ .value = false },
-        _started        : Atomic(bool) = .{ .value = false },
-        _running        : Atomic(bool) = .{ .value = false },
-        _stopping       : Atomic(bool) = .{ .value = false },
+        _main_thread    : Atomic(u64)  = .{ .raw = 0 },
+        _lock_thread    : Atomic(u64)  = .{ .raw = 0 },
+        _initialized    : Atomic(bool) = .{ .raw = false },
+        _started        : Atomic(bool) = .{ .raw = false },
+        _running        : Atomic(bool) = .{ .raw = false },
+        _stopping       : Atomic(bool) = .{ .raw = false },
         // zig fmt: on
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -287,7 +290,7 @@ pub fn JobQueue(comptime config: QueueConfig) type {
 
         /// Spawn threads and begin executing jobs.
         /// `JobQueue` must be initialized, and not yet started or stopped.
-        pub fn start(self: *Self) void {
+        pub fn start(self: *Self, start_config: StartConfig) void {
             self.lock("start");
             defer self.unlock("start");
 
@@ -308,8 +311,19 @@ pub fn JobQueue(comptime config: QueueConfig) type {
             assert(was_stopping == false);
 
             // spawn up to (num_cpus - 1) threads
-            const num_cpus = Thread.getCpuCount() catch 2;
-            self._num_threads = @min(num_cpus - 1, max_threads);
+            const num_cpus = num_cpus_blk: {
+                if (start_config.num_threads) |num_threads| {
+                    std.debug.assert(num_threads <= max_threads);
+                    break :num_cpus_blk num_threads;
+                }
+
+                break :num_cpus_blk (Thread.getCpuCount() catch 2) - 1;
+            };
+
+            // zjobs does not currently support less than 2 threads
+            std.debug.assert(num_cpus > 1);
+
+            self._num_threads = @min(num_cpus, max_threads);
             for (self._threads[0..self._num_threads], 0..) |*thread, thread_index| {
                 if (Thread.spawn(.{}, threadMain, .{self})) |spawned_thread| {
                     thread.* = spawned_thread;
@@ -984,7 +998,7 @@ test "JobQueue example" {
     // Scheduled jobs will not execute until `start()` is called.
     // The `start()` function spawns the threads that will run the jobs.
     // Note that we can schedule jobs before and after calling `start()`.
-    jobs.start();
+    jobs.start(.{});
 
     // Now we will schedule a second job that will print "world!" when it runs.
     // We want this job to run after the `HelloJob` completes, so we provide
@@ -1103,7 +1117,7 @@ test "JobQueue throughput" {
         }
     };
 
-    var job_stats = try allocator.alloc(JobStat, job_count);
+    const job_stats = try allocator.alloc(JobStat, job_count);
     defer allocator.free(job_stats);
     for (job_stats) |*job_stat| {
         job_stat.* = .{ .main = main_thread };
@@ -1144,7 +1158,7 @@ test "JobQueue throughput" {
         }
     }{ .jobs = &jobs });
 
-    jobs.start();
+    jobs.start(.{});
     const started = now();
 
     jobs.join();
@@ -1166,7 +1180,7 @@ test "combine jobs respect prereq" {
     var jobs = Jobs.init();
     defer jobs.deinit();
 
-    const Counter = std.atomic.Atomic(u32);
+    const Counter = std.atomic.Value(u32);
 
     const PrereqJob = struct {
         counter: *Counter,
@@ -1189,7 +1203,7 @@ test "combine jobs respect prereq" {
     defer std.testing.allocator.destroy(counter);
     counter.* = Counter.init(0);
 
-    jobs.start();
+    jobs.start(.{});
     var stressers: usize = 0;
     while (stressers < 1000) : (stressers += 1) {
         // Generate more prereqs than fit in a single CombinePrereqsJob

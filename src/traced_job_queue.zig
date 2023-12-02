@@ -41,7 +41,7 @@ pub fn TracedJobQueue(comptime config: zjobs.QueueConfig) type {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.job_queue);
             defer zone.End();
 
-            self.queue.start();
+            self.queue.start(.{});
         }
 
         /// Signals threads to stop running, and prevents scheduling more jobs.

@@ -47,7 +47,7 @@ pub fn main() anyerror!void {
             std.log.err("leak detected", .{});
         }
     }
-    var aa = std.heap.ArenaAllocator.init(gpa.allocator());
+    const aa = std.heap.ArenaAllocator.init(gpa.allocator());
     var tracy_allocator = ecez.tracy_alloc.TracyAllocator(std.heap.ArenaAllocator).init(aa);
     // optionally profile memory usage with tracy
     const allocator = tracy_allocator.allocator();

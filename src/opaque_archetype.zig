@@ -36,7 +36,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             defer zone.End();
 
             const type_count = @popCount(component_bitmask);
-            var component_storage = try allocator.alloc(RuntimeAlignedByteArrayList, type_count);
+            const component_storage = try allocator.alloc(RuntimeAlignedByteArrayList, type_count);
             errdefer allocator.free(component_storage);
 
             for (component_storage) |*component_buffer| {

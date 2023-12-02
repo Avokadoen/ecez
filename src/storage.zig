@@ -125,7 +125,7 @@ pub fn CreateStorage(
                 validateComponentOrderAndValidity(&field_types);
             }
 
-            var create_result = try self.container.createEntity(entity_state);
+            const create_result = try self.container.createEntity(entity_state);
             return create_result.entity;
         }
 
@@ -438,7 +438,7 @@ pub fn CreateStorage(
             }
 
             // find first index
-            var previous_component_index = initial_component_index_blk: {
+            const previous_component_index = initial_component_index_blk: {
                 inline for (component_type_array, 0..) |Component, comp_index| {
                     if (other_components[0] == Component) {
                         break :initial_component_index_blk comp_index;
@@ -733,7 +733,7 @@ test "getComponent() can mutate component value with ptr" {
     };
     const entity = try storage.createEntity(initial_state);
 
-    var a_ptr = try storage.getComponent(entity, *Testing.Component.A);
+    const a_ptr = try storage.getComponent(entity, *Testing.Component.A);
     try testing.expectEqual(initial_state.a, a_ptr.*);
 
     const mutate_a_value = Testing.Component.A{ .value = 42 };
@@ -1236,17 +1236,17 @@ test "reproducer: Removing component cause storage to become in invalid state" {
     var storage = try RepStorage.init(testing.allocator, .{});
     defer storage.deinit();
 
-    var instance_handle = InstanceHandle{ .a = 3, .b = 3, .c = 3 };
-    var transform = Transform{ .mat = .{
+    const instance_handle = InstanceHandle{ .a = 3, .b = 3, .c = 3 };
+    const transform = Transform{ .mat = .{
         [4]f32{ 3, 3, 3, 3 },
         [4]f32{ 3, 3, 3, 3 },
         [4]f32{ 3, 3, 3, 3 },
         [4]f32{ 3, 3, 3, 3 },
     } };
-    var position = Position{ .vec = [4]f32{ 3, 3, 3, 3 } };
-    var rotation = Rotation{ .quat = [4]f32{ 3, 3, 3, 3 } };
-    var scale = Scale{ .vec = [4]f32{ 3, 3, 3, 3 } };
-    var obj = ObjectMetadata{ .a = Entity{ .id = 3 }, .b = 3, .c = undefined };
+    const position = Position{ .vec = [4]f32{ 3, 3, 3, 3 } };
+    const rotation = Rotation{ .quat = [4]f32{ 3, 3, 3, 3 } };
+    const scale = Scale{ .vec = [4]f32{ 3, 3, 3, 3 } };
+    const obj = ObjectMetadata{ .a = Entity{ .id = 3 }, .b = 3, .c = undefined };
 
     _ = try storage.createEntity(.{
         obj,

@@ -171,7 +171,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
 
                     var new_archetype_index = self.tree.getNodeDataIndex(new_encoding);
 
-                    var new_archetype_created: bool = maybe_create_archetype_blk: {
+                    const new_archetype_created: bool = maybe_create_archetype_blk: {
                         // if the archetype already exist
                         if (new_archetype_index != null) {
                             break :maybe_create_archetype_blk false;
@@ -202,7 +202,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
                     );
 
                     // move the data slices around to make room for the new component data
-                    var rhd = data[new_local_component_index..total_local_components];
+                    const rhd = data[new_local_component_index..total_local_components];
                     std.mem.rotate([]u8, rhd, rhd.len - 1);
 
                     // copy the new component bytes to a stack buffer and assing the datat entry to this buffer
@@ -288,7 +288,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
 
                     var new_archetype_index = self.tree.getNodeDataIndex(new_encoding);
 
-                    var new_archetype_created: bool = maybe_create_archetype_blk: {
+                    const new_archetype_created: bool = maybe_create_archetype_blk: {
                         // if the archetype already exist
                         if (new_archetype_index != null) {
                             break :maybe_create_archetype_blk false;
@@ -332,7 +332,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
                             @memcpy(data[local_storage_index][0..@sizeOf(field.type)], component_bytes);
                         } else {
                             // move the data slices around to make room for the new component data
-                            var rhd = data[local_storage_index..total_local_components];
+                            const rhd = data[local_storage_index..total_local_components];
                             std.mem.rotate([]u8, rhd, rhd.len - 1);
 
                             // copy the new component bytes to a stack buffer and assing the datat entry to this buffer
@@ -393,7 +393,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
 
             var new_archetype_index = self.tree.getNodeDataIndex(new_encoding);
 
-            var new_archetype_created = archetype_create_blk: {
+            const new_archetype_created = archetype_create_blk: {
                 // if archetype already exist
                 if (new_archetype_index != null) {
                     break :archetype_create_blk false;
@@ -429,7 +429,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
             );
 
             // move the data slices around to remove component
-            var rhd = data[local_remove_component_index..old_component_count];
+            const rhd = data[local_remove_component_index..old_component_count];
             std.mem.rotate([]u8, rhd, 1);
 
             const unwrapped_index = new_archetype_index.?;
@@ -481,7 +481,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
 
             var new_archetype_index = self.tree.getNodeDataIndex(new_encoding);
 
-            var new_archetype_created = archetype_create_blk: {
+            const new_archetype_created = archetype_create_blk: {
                 // if archetype already exist
                 if (new_archetype_index != null) {
                     break :archetype_create_blk false;
@@ -532,7 +532,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
 
             for (local_remove_component_indices) |local_remove_component_index| {
                 // move the data slices around to remove component
-                var rhd = data[local_remove_component_index..old_component_count];
+                const rhd = data[local_remove_component_index..old_component_count];
                 std.mem.rotate([]u8, rhd, 1);
             }
 
@@ -650,7 +650,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
 
             var new_archetype_index = self.tree.getNodeDataIndex(initial_bit_encoding);
 
-            var new_archetype_created: bool = regiser_entity_blk: {
+            const new_archetype_created: bool = regiser_entity_blk: {
                 // if the archetype already exist
                 if (new_archetype_index) |index| {
                     try self.archetypes.items[index].registerEntity(
