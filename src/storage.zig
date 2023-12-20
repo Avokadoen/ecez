@@ -118,7 +118,7 @@ pub fn CreateStorage(
                 }
 
                 var field_types: [state_type_info.Struct.fields.len]type = undefined;
-                inline for (&field_types, state_type_info.Struct.fields) |*field_type, field| {
+                for (&field_types, state_type_info.Struct.fields) |*field_type, field| {
                     field_type.* = field.type;
                 }
 
@@ -157,7 +157,7 @@ pub fn CreateStorage(
                 }
 
                 var field_types: [state_type_info.Struct.fields.len]type = undefined;
-                inline for (&field_types, state_type_info.Struct.fields) |*field_type, field| {
+                for (&field_types, state_type_info.Struct.fields) |*field_type, field| {
                     field_type.* = field.type;
                 }
 
@@ -195,7 +195,7 @@ pub fn CreateStorage(
                 }
 
                 var types: [state_type_info.Struct.fields.len]type = undefined;
-                inline for (&types, state_type_info.Struct.fields) |*field_type, field| {
+                for (&types, state_type_info.Struct.fields) |*field_type, field| {
                     if (field.type != type) {
                         @compileError(@src().fn_name ++ " struct_of_remove_components can only have type members");
                     }
@@ -375,14 +375,14 @@ pub fn CreateStorage(
 
             const include_bitmask = comptime include_bit_blk: {
                 var bitmask: ComponentMask.Bits = 0;
-                inline for (include_inner_type_arr) |Component| {
+                for (include_inner_type_arr) |Component| {
                     bitmask |= 1 << Container.componentIndex(Component);
                 }
                 break :include_bit_blk bitmask;
             };
             const exclude_bitmask = comptime include_bit_blk: {
                 var bitmask: ComponentMask.Bits = 0;
-                inline for (exclude_type_arr) |Component| {
+                for (exclude_type_arr) |Component| {
                     bitmask |= 1 << Container.componentIndex(Component);
                 }
                 break :include_bit_blk bitmask;

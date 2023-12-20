@@ -253,7 +253,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
 
             const new_bits: comptime_int = comptime calculate_new_bits_blk: {
                 var bitmask: BitMask.Bits = 0;
-                inline for (fields) |field| {
+                for (fields) |field| {
                     bitmask |= @as(BitMask.Bits, 1 << componentIndex(field.type));
                 }
 
@@ -471,7 +471,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
 
             const remove_bits = comptime bit_calc_blk: {
                 var bits: BitMask.Bits = 0;
-                inline for (remove_component_array) |RemoveComponent| {
+                for (remove_component_array) |RemoveComponent| {
                     bits |= @as(BitMask.Bits, 1 << componentIndex(RemoveComponent));
                 }
 
@@ -617,7 +617,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
             // produce flat array of field types
             const initial_state_field_types = comptime field_types_blk: {
                 var field_types: [arche_struct_info.fields.len]type = undefined;
-                inline for (&field_types, arche_struct_info.fields) |*field_type, field_info| {
+                for (&field_types, arche_struct_info.fields) |*field_type, field_info| {
                     field_type.* = field_info.type;
                 }
                 break :field_types_blk field_types;
@@ -626,8 +626,8 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
             // calculate the bits that describe the path to the archetype of this entity
             const initial_bit_encoding: BitMask.Bits = comptime bit_calc_blk: {
                 var bits: BitMask.Bits = 0;
-                outer_loop: inline for (initial_state_field_types, 0..) |initial_state_field_type, field_index| {
-                    inline for (components[field_index..], field_index..) |Component, comp_index| {
+                outer_loop: for (initial_state_field_types, 0..) |initial_state_field_type, field_index| {
+                    for (components[field_index..], field_index..) |Component, comp_index| {
                         if (initial_state_field_type == Component) {
                             bits |= 1 << comp_index;
                             continue :outer_loop;

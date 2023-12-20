@@ -95,7 +95,7 @@ pub fn CreateScheduler(
 
             const exclude_type_arr = comptime exclude_type_extract_blk: {
                 var type_arr: [exclude_type_info.Struct.fields.len]type = undefined;
-                inline for (&type_arr, exclude_type_info.Struct.fields, 0..) |*exclude_type, field, index| {
+                for (&type_arr, exclude_type_info.Struct.fields, 0..) |*exclude_type, field, index| {
                     if (field.type != type) {
                         @compileError("event include types field " ++ field.name ++ "must be a component type, was " ++ @typeName(field.type));
                     }
@@ -106,7 +106,7 @@ pub fn CreateScheduler(
             };
             const exclude_bitmask = comptime include_bit_blk: {
                 var bitmask: Storage.ComponentMask.Bits = 0;
-                inline for (exclude_type_arr) |Component| {
+                for (exclude_type_arr) |Component| {
                     bitmask |= 1 << Storage.Container.componentIndex(Component);
                 }
                 break :include_bit_blk bitmask;
