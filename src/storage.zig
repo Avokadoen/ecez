@@ -3,9 +3,6 @@ const Allocator = std.mem.Allocator;
 
 const ztracy = @import("ztracy");
 
-const zjobs = @import("zjobs");
-const JobQueue = zjobs.JobQueue(.{});
-const JobId = zjobs.JobId;
 const Color = @import("misc.zig").Color;
 
 const meta = @import("meta.zig");
@@ -1248,30 +1245,26 @@ test "reproducer: Removing component cause storage to become in invalid state" {
     const scale = Scale{ .vec = [4]f32{ 3, 3, 3, 3 } };
     const obj = ObjectMetadata{ .a = Entity{ .id = 3 }, .b = 3, .c = undefined };
 
-    _ = try storage.createEntity(.{
-        obj,
-        transform,
-        position,
-        rotation,
-        scale,
-        instance_handle,
-    });
-    const entity = try storage.createEntity(.{
-        obj,
-        transform,
-        position,
-        rotation,
-        scale,
-        instance_handle,
-    });
-    _ = try storage.createEntity(.{
-        obj,
-        transform,
-        position,
-        rotation,
-        scale,
-        instance_handle,
-    });
+    const SceneObject = struct {
+        obj: ObjectMetadata,
+        transform: Transform,
+        position: Position,
+        rotation: Rotation,
+        scale: Scale,
+        instance_handle: InstanceHandle,
+    };
+    const entity_state = SceneObject{
+        .obj = obj,
+        .transform = transform,
+        .position = position,
+        .rotation = rotation,
+        .scale = scale,
+        .instance_handle = instance_handle,
+    };
+
+    _ = try storage.createEntity(entity_state);
+    const entity = try storage.createEntity(entity_state);
+    _ = try storage.createEntity(entity_state);
 
     try testing.expectEqual(instance_handle, try storage.getComponent(entity, InstanceHandle));
     try testing.expectEqual(transform, try storage.getComponent(entity, Transform));

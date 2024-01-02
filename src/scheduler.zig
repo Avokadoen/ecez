@@ -411,7 +411,10 @@ test "event exclude types exclude entities" {
     var storage = try StorageStub.init(testing.allocator, .{});
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init();
+    var scheduler = CreateScheduler(
+        StorageStub,
+        .{Event("onFoo", .{SystemStruct}, .{})},
+    ).init();
     defer scheduler.deinit();
 
     const a_entity = try storage.createEntity(AEntityType{
