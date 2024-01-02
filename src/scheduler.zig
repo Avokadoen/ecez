@@ -475,6 +475,87 @@ test "event exclude types exclude entities" {
     );
 }
 
+test "DependOn support structs" {
+    const SystemStruct1 = struct {
+        pub fn func1(a: *Testing.Component.A) void {
+            a.value += 1;
+        }
+
+        pub fn func2(a: *Testing.Component.B) void {
+            a.value += 1;
+        }
+    };
+
+    const SystemStruct2 = struct {
+        pub fn func3(a: *Testing.Component.A) void {
+            a.value *= 2;
+        }
+
+        pub fn func4(a: *Testing.Component.B) void {
+            a.value *= 2;
+        }
+    };
+
+    const SystemStruct3 = struct {
+        pub fn func5(a: *Testing.Component.A) void {
+            a.value += 1;
+        }
+
+        pub fn func6(a: *Testing.Component.B) void {
+            a.value += 1;
+        }
+    };
+
+    var storage = try StorageStub.init(testing.allocator, .{});
+    defer storage.deinit();
+
+    var scheduler = CreateScheduler(StorageStub, .{
+        Event("onFoo", .{
+            SystemStruct1,
+            DependOn(SystemStruct2, .{SystemStruct1}),
+            DependOn(SystemStruct3, .{SystemStruct2}),
+        }, .{}),
+    }).init();
+    defer scheduler.deinit();
+
+    const initial_state = Testing.Archetype.AB{
+        .a = Testing.Component.A{ .value = 0 },
+        .b = Testing.Component.B{ .value = 0 },
+    };
+    var entities: [1]Entity = undefined;
+    for (&entities) |*entity| {
+        entity.* = try storage.createEntity(initial_state);
+    }
+
+    // ((0 + 1) * 2) + 1 = 3
+    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
+
+    // ((3 + 1) * 2) + 1 = 9
+    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
+
+    // ((9 + 1) * 2) + 1 = 21
+    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
+
+    // ((21 + 1) * 2) + 1 = 45
+    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
+
+    const expected_value = 45;
+    for (entities) |entity| {
+        try testing.expectEqual(
+            Testing.Component.A{ .value = expected_value },
+            try storage.getComponent(entity, Testing.Component.A),
+        );
+        try testing.expectEqual(
+            Testing.Component.B{ .value = expected_value },
+            try storage.getComponent(entity, Testing.Component.B),
+        );
+    }
+}
+
 test "events can be registered through struct or individual function(s)" {
     const SystemStruct1 = struct {
         pub fn func1(a: *Testing.Component.A) void {
