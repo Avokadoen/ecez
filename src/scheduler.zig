@@ -475,60 +475,6 @@ test "event exclude types exclude entities" {
     );
 }
 
-test "DependOn support structs" {
-    const SystemStruct1 = struct {
-        pub fn func1(a: *Testing.Component.A) void {
-            a.value += 1;
-        }
-
-        pub fn func2(a: *Testing.Component.B) void {
-            a.value += 1;
-        }
-    };
-
-    const SystemStruct2 = struct {
-        pub fn func3(a: *Testing.Component.A) void {
-            a.value *= 2;
-        }
-
-        pub fn func4(a: *Testing.Component.B) void {
-            a.value *= 2;
-        }
-    };
-
-    var storage = try StorageStub.init(testing.allocator, .{});
-    defer storage.deinit();
-
-    var scheduler = CreateScheduler(StorageStub, .{
-        Event("onFoo", .{
-            SystemStruct1,
-            DependOn(SystemStruct2, .{SystemStruct1}),
-        }, .{}),
-    }).init();
-    defer scheduler.deinit();
-
-    const initial_state = Testing.Archetype.AB{
-        .a = Testing.Component.A{ .value = 0 },
-        .b = Testing.Component.B{ .value = 0 },
-    };
-    const entity = try storage.createEntity(initial_state);
-
-    const loop_count = 100;
-    for (0..loop_count) |_| {
-        scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
-        scheduler.waitEvent(.onFoo);
-    }
-
-    try testing.expectEqual(
-        Testing.Component.A{ .value = loop_count * 2 },
-        try storage.getComponent(entity, Testing.Component.A),
-    );
-    try testing.expectEqual(
-        Testing.Component.B{ .value = loop_count * 2 },
-        try storage.getComponent(entity, Testing.Component.B),
-    );
-}
-
 test "events can be registered through struct or individual function(s)" {
     const SystemStruct1 = struct {
         pub fn func1(a: *Testing.Component.A) void {

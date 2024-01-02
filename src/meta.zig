@@ -447,7 +447,7 @@ pub fn countAndVerifyEvents(comptime events: anytype) comptime_int {
     const EventsType = @TypeOf(events);
     const events_type_info = @typeInfo(EventsType);
     if (events_type_info != .Struct) {
-        @compileError("CreateScheduler expected tuple or struct argument for events, got " ++ @typeName(EventsType));
+        @compileError("CreateWorld expected tuple or struct argument for events, got " ++ @typeName(EventsType));
     }
 
     comptime var event_count = 0;
@@ -463,7 +463,7 @@ pub fn countAndVerifyEvents(comptime events: anytype) comptime_int {
                         event_count += 1;
                     },
                     else => {
-                        const err_msg = std.fmt.comptimePrint("CreateScheduler expected struct type, got {s}", .{
+                        const err_msg = std.fmt.comptimePrint("CreateWorld expected struct type, got {s}", .{
                             @typeInfo(events[i]),
                         });
                         @compileError(err_msg);
@@ -471,7 +471,7 @@ pub fn countAndVerifyEvents(comptime events: anytype) comptime_int {
                 }
             },
             else => {
-                const err_msg = std.fmt.comptimePrint("CreateScheduler expected function or struct, got {s}", .{
+                const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct, got {s}", .{
                     @typeName(field_info.type),
                 });
                 @compileError(err_msg);
@@ -509,7 +509,7 @@ pub fn countAndVerifySystems(comptime systems: anytype) comptime_int {
     const SystemsType = @TypeOf(systems);
     const systems_type_info = @typeInfo(SystemsType);
     if (systems_type_info != .Struct) {
-        @compileError("CreateScheduler system argument expected tuple- or struct type, found " ++ @typeName(SystemsType) ++ "\n\tHint: did you rembember to wrap your depend_on_systems in a tuple '.{system}'?");
+        @compileError("CreateWorld system argument expected tuple- or struct type, found " ++ @typeName(SystemsType) ++ "\n\tHint: did you rembember to wrap your depend_on_systems in a tuple '.{system}'?");
     }
 
     const fields_info = systems_type_info.Struct.fields;
@@ -523,30 +523,8 @@ pub fn countAndVerifySystems(comptime systems: anytype) comptime_int {
                     .Struct => |stru| {
                         switch (getSystemType(systems[i])) {
                             .depend_on => {
-                                const execute_systems = @field(systems[i], "_system");
-                                switch (@typeInfo(@TypeOf(execute_systems))) {
-                                    .Fn => |_| systems_count += 1,
-                                    .Type => |_| {
-                                        switch (@typeInfo(execute_systems)) {
-                                            .Struct => |execute_systems_info| {
-                                                inline for (execute_systems_info.decls) |decl| {
-                                                    const DeclType = @TypeOf(@field(execute_systems, decl.name));
-                                                    switch (@typeInfo(DeclType)) {
-                                                        .Fn => systems_count += 1,
-                                                        else => {
-                                                            const err_msg = std.fmt.comptimePrint("CreateScheduler expected type of functions, got member {s}", .{
-                                                                @typeName(DeclType),
-                                                            });
-                                                            @compileError(err_msg);
-                                                        },
-                                                    }
-                                                }
-                                            },
-                                            else => @compileError("DependOn's system must be a function, or struct type of functions"),
-                                        }
-                                    },
-                                    else => @compileError("DependOn's system must be a function, or struct type of functions"),
-                                }
+                                // should be one inner system at this point
+                                systems_count += 1;
                             },
                             .common => {
                                 // it's not a DependOn, or Zip struct, check each member of the struct to find functions
@@ -555,7 +533,7 @@ pub fn countAndVerifySystems(comptime systems: anytype) comptime_int {
                                     switch (@typeInfo(DeclType)) {
                                         .Fn => systems_count += 1,
                                         else => {
-                                            const err_msg = std.fmt.comptimePrint("CreateScheduler expected type of functions, got member {s}", .{
+                                            const err_msg = std.fmt.comptimePrint("CreateWorld expected type of functions, got member {s}", .{
                                                 @typeName(DeclType),
                                             });
                                             @compileError(err_msg);
@@ -568,7 +546,7 @@ pub fn countAndVerifySystems(comptime systems: anytype) comptime_int {
                         }
                     },
                     else => {
-                        const err_msg = std.fmt.comptimePrint("CreateScheduler expected struct type, got {s}", .{
+                        const err_msg = std.fmt.comptimePrint("CreateWorld expected struct type, got {s}", .{
                             @typeInfo(systems[i]),
                         });
                         @compileError(err_msg);
@@ -576,76 +554,7 @@ pub fn countAndVerifySystems(comptime systems: anytype) comptime_int {
                 }
             },
             else => {
-                const err_msg = std.fmt.comptimePrint("CreateScheduler expected function or struct, got {s}", .{
-                    @typeName(field_info.type),
-                });
-                @compileError(err_msg);
-            },
-        }
-    }
-    return systems_count;
-}
-
-/// get type of nth system
-pub fn getNthSystem(comptime systems: anytype, comptime n: comptime_int) type {
-    const SystemsType = @TypeOf(systems);
-    const systems_type_info = @typeInfo(SystemsType);
-    if (systems_type_info != .Struct) {
-        @compileError("CreateScheduler system argument expected tuple- or struct type, found " ++ @typeName(SystemsType) ++ "\n\tHint: did you rembember to wrap your depend_on_systems in a tuple '.{system}'?");
-    }
-
-    const fields_info = systems_type_info.Struct.fields;
-    comptime var systems_count = 0;
-    // start by counting systems registered
-    inline for (fields_info, 0..) |field_info, i| {
-        switch (@typeInfo(field_info.type)) {
-            .Fn => {
-                if (systems_count == n) {
-                    return @field(systems, field_info.name);
-                }
-                systems_count += 1;
-            },
-            .Type => {
-                switch (@typeInfo(systems[i])) {
-                    .Struct => |stru| {
-                        switch (getSystemType(systems[i])) {
-                            .depend_on => {
-                                @compileError("illegal use of DependOn");
-                            },
-                            .common => {
-                                // it's not a DependOn, or Zip struct, check each member of the struct to find functions
-                                inline for (stru.decls) |decl| {
-                                    const DeclType = @TypeOf(@field(systems[i], decl.name));
-                                    switch (@typeInfo(DeclType)) {
-                                        .Fn => {
-                                            if (systems_count == n) {
-                                                return @field(systems, field_info.name);
-                                            }
-                                            systems_count += 1;
-                                        },
-                                        else => {
-                                            const err_msg = std.fmt.comptimePrint("CreateScheduler expected type of functions, got member {s}", .{
-                                                @typeName(DeclType),
-                                            });
-                                            @compileError(err_msg);
-                                        },
-                                    }
-                                }
-                            },
-                            .event => @compileError("nested events are not allowed"), // because it does not make sense :)
-
-                        }
-                    },
-                    else => {
-                        const err_msg = std.fmt.comptimePrint("CreateScheduler expected struct type, got {s}", .{
-                            @typeInfo(systems[i]),
-                        });
-                        @compileError(err_msg);
-                    },
-                }
-            },
-            else => {
-                const err_msg = std.fmt.comptimePrint("CreateScheduler expected function or struct, got {s}", .{
+                const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct, got {s}", .{
                     @typeName(field_info.type),
                 });
                 @compileError(err_msg);
@@ -670,7 +579,7 @@ fn SystemInfo(comptime system_count: comptime_int) type {
 
 /// Specifiy a dependency where a system depends on one or more systems
 /// Parameters:
-///     - system: the system(s) that you are registering
+///     - system: the system that you are registering
 ///     - depend_on_systems: a TUPLE of one or more functions that the system depend on
 pub fn DependOn(comptime system: anytype, comptime depend_on_systems: anytype) type {
     return struct {
@@ -680,7 +589,7 @@ pub fn DependOn(comptime system: anytype, comptime depend_on_systems: anytype) t
     };
 }
 
-/// perform compile-time reflection on systems to extrapolate information about registered systems
+/// perform compile-time reflection on systems to extrapolate different information about registered systems
 pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: anytype) SystemInfo(system_count) {
     const SystemsType = @TypeOf(systems);
     const systems_type_info = @typeInfo(SystemsType);
@@ -709,45 +618,19 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                     const depend_on_range = blk: {
                                         const from = systems_info.depend_on_indices_used;
 
-                                        var outer_field_index = 0;
-                                        inline while (systems_info.depend_on_indices_used < system_depend_on_count) {
-                                            const dependency_info = @typeInfo(dependency_functions[outer_field_index]);
-                                            switch (dependency_info) {
-                                                .Fn => |_| {
-                                                    const dependency_function = dependency_functions[outer_field_index];
-                                                    const previous_system_info_index: usize = indexOfFunctionInSystems(dependency_function, i, systems) orelse {
-                                                        const err_msg = std.fmt.comptimePrint(
-                                                            "System {d} did not find '{s}' in systems tuple, dependencies must be added before system that depend on them",
-                                                            .{ i, @typeName(@TypeOf(dependency_function)) },
-                                                        );
-                                                        @compileError(err_msg);
-                                                    };
-                                                    systems_info.depend_on_index_pool[systems_info.depend_on_indices_used] = previous_system_info_index;
-                                                    systems_info.depend_on_indices_used += 1;
+                                        inline for (0..system_depend_on_count) |depend_on_index| {
+                                            const dependency_func = dependency_functions[depend_on_index];
 
-                                                    outer_field_index += 1;
-                                                },
-                                                .Struct => |dependency_struct_info| {
-                                                    for (dependency_struct_info.decls) |decl| {
-                                                        const dependency_function = @field(dependency_functions[outer_field_index], decl.name);
-
-                                                        const previous_system_info_index: usize = indexOfFunctionInSystems(dependency_function, i, systems) orelse {
-                                                            const err_msg = std.fmt.comptimePrint(
-                                                                "System {d} did not find '{s}' in systems tuple, dependencies must be added before system that depend on them",
-                                                                .{ i, @typeName(@TypeOf(dependency_function)) },
-                                                            );
-                                                            @compileError(err_msg);
-                                                        };
-                                                        systems_info.depend_on_index_pool[systems_info.depend_on_indices_used] = previous_system_info_index;
-                                                        systems_info.depend_on_indices_used += 1;
-                                                    }
-
-                                                    outer_field_index += 1;
-                                                },
-                                                else => @compileError("DependOn dependencies must be function or struct"),
-                                            }
+                                            const previous_system_info_index: usize = indexOfFunctionInSystems(dependency_func, j, systems) orelse {
+                                                const err_msg = std.fmt.comptimePrint(
+                                                    "System {d} did not find '{s}' in systems tuple, dependencies must be added before system that depend on them",
+                                                    .{ i, @typeName(@TypeOf(dependency_func)) },
+                                                );
+                                                @compileError(err_msg);
+                                            };
+                                            systems_info.depend_on_index_pool[systems_info.depend_on_indices_used] = previous_system_info_index;
+                                            systems_info.depend_on_indices_used += 1;
                                         }
-                                        std.debug.assert(systems_info.depend_on_indices_used == system_depend_on_count);
                                         const to = systems_info.depend_on_indices_used;
 
                                         break :blk DependOnSystem.Range{ .from = from, .to = to };
@@ -756,46 +639,19 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                     const dep_on_function = @field(systems[j], "_system");
                                     const DepSystemDeclType = @TypeOf(dep_on_function);
                                     const dep_system_decl_info = @typeInfo(DepSystemDeclType);
-
-                                    switch (dep_system_decl_info) {
-                                        .Fn => {
-                                            systems_info.metadata[i] = SystemMetadata{
-                                                .depend_on = DependOnSystem.init(depend_on_range, DepSystemDeclType, dep_system_decl_info.Fn),
-                                            };
-                                            systems_info.function_types[i] = DepSystemDeclType;
-                                            systems_info.functions[i] = &dep_on_function;
-                                            i += 1;
-                                        },
-                                        .Type => {
-                                            switch (@typeInfo(dep_on_function)) {
-                                                .Struct => |dep_on_struct_info| {
-                                                    inline for (dep_on_struct_info.decls) |decl| {
-                                                        const function = @field(dep_on_function, decl.name);
-                                                        const DeclType = @TypeOf(function);
-                                                        const decl_info = @typeInfo(DeclType);
-                                                        switch (decl_info) {
-                                                            .Fn => |fn_info| {
-                                                                systems_info.metadata[i] = SystemMetadata{
-                                                                    .depend_on = DependOnSystem.init(depend_on_range, DepSystemDeclType, fn_info),
-                                                                };
-                                                                systems_info.function_types[i] = DeclType;
-                                                                systems_info.functions[i] = &function;
-                                                                i += 1;
-                                                            },
-                                                            else => {
-                                                                const err_msg = std.fmt.comptimePrint("CreateScheduler expected function or struct and/or type with functions, got {s}", .{
-                                                                    @typeName(DeclType),
-                                                                });
-                                                                @compileError(err_msg);
-                                                            },
-                                                        }
-                                                    }
-                                                },
-                                                else => @compileError("DependOn system(s) must be a function or type struct containing functions"),
-                                            }
-                                        },
-                                        else => @compileError("DependOn system(s) must be a function or type struct containing functions"),
+                                    if (dep_system_decl_info == .Struct) {
+                                        @compileError("Struct of system is not yet supported for DependOn");
                                     }
+                                    if (dep_system_decl_info != .Fn and dep_system_decl_info != .Struct) {
+                                        // TODO: remove if above so this is not so confusing
+                                        @compileError("DependOn must be a function or struct");
+                                    }
+                                    systems_info.metadata[i] = SystemMetadata{
+                                        .depend_on = DependOnSystem.init(depend_on_range, DepSystemDeclType, dep_system_decl_info.Fn),
+                                    };
+                                    systems_info.function_types[i] = DepSystemDeclType;
+                                    systems_info.functions[i] = &dep_on_function;
+                                    i += 1;
                                 },
                                 .common => {
                                     inline for (stru.decls) |decl| {
@@ -804,13 +660,15 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                         const decl_info = @typeInfo(DeclType);
                                         switch (decl_info) {
                                             .Fn => |func| {
+                                                // const err_msg = std.fmt.comptimePrint("{d}", .{func.params.len});
+                                                // @compileError(err_msg);
                                                 systems_info.metadata[i] = SystemMetadata{ .common = CommonSystem.init(DeclType, func) };
                                                 systems_info.function_types[i] = DeclType;
                                                 systems_info.functions[i] = &function;
                                                 i += 1;
                                             },
                                             else => {
-                                                const err_msg = std.fmt.comptimePrint("CreateScheduler expected function or struct and/or type with functions, got {s}", .{
+                                                const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct and/or type with functions, got {s}", .{
                                                     @typeName(DeclType),
                                                 });
                                                 @compileError(err_msg);
@@ -822,7 +680,7 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                             }
                         },
                         else => {
-                            const err_msg = std.fmt.comptimePrint("CreateScheduler expected function or struct and/or type with functions, got {s}", .{
+                            const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct and/or type with functions, got {s}", .{
                                 @typeName(field_info.type),
                             });
                             @compileError(err_msg);
@@ -864,20 +722,19 @@ pub fn indexOfFunctionInSystems(comptime function: anytype, comptime stop_at: us
                                 }
                                 i += 1;
                             } else {
-                                // if not a depend on struct, then we assume struct of system functions
                                 inline for (stru.decls) |decl| {
                                     const inner_func = @field(systems[j], decl.name);
                                     const DeclType = @TypeOf(function);
                                     const decl_info = @typeInfo(DeclType);
                                     switch (decl_info) {
                                         .Fn => {
-                                            if (@TypeOf(inner_func) == @TypeOf(function) and function == inner_func) {
+                                            if (@TypeOf(systems[j]) == @TypeOf(function) and function == inner_func) {
                                                 return i;
                                             }
                                             i += 1;
                                         },
                                         else => {
-                                            const err_msg = std.fmt.comptimePrint("CreateScheduler expected function or struct and/or type with functions, got {s}", .{
+                                            const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct and/or type with functions, got {s}", .{
                                                 @typeName(DeclType),
                                             });
                                             @compileError(err_msg);
@@ -887,7 +744,7 @@ pub fn indexOfFunctionInSystems(comptime function: anytype, comptime stop_at: us
                             }
                         },
                         else => {
-                            const err_msg = std.fmt.comptimePrint("CreateScheduler expected function or struct and/or type with functions, got {s}", .{
+                            const err_msg = std.fmt.comptimePrint("CreateWorld expected function or struct and/or type with functions, got {s}", .{
                                 @typeName(field_info.type),
                             });
                             @compileError(err_msg);
