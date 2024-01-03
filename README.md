@@ -260,7 +260,7 @@ You can use the ``DependOn`` function to communicate order of system execution.
 
 #### Example:
 ```zig
-    const Scheduler = ecez.CreateScheduler(
+    const Scheduler1 = ecez.CreateScheduler(
         Storage,
         .{
             ecez.Event("update_loop", .{
@@ -276,6 +276,21 @@ You can use the ``DependOn`` function to communicate order of system execution.
                 // We also have to make sure that a new "hello world" is visible in the 
                 // terminal as well because why not :)                       
                 ecez.DependOn(Systems.move, .{Systems.applyDrag, Systems.printHelloWorld}),
+            }, .{}),
+        },
+    );
+
+    // You can also use structs with systems for DependOn
+    const Scheduler2 = ecez.CreateScheduler(
+        Storage,
+        .{
+            ecez.Event("update_loop", .{
+                // Submit all combat systems in a single struct
+                CombatSystemsStruct,
+                // Submit all physics systems in a single struct
+                PhysicsSystemsStruct,
+                // Submit all AI systems, wait for Physics and Combat.attack to complete
+                ecez.DependOn(AiSystemsStruct, .{PhysicsSystemsStruct, CombatSystemsStruct.attack}),
             }, .{}),
         },
     );
