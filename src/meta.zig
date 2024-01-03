@@ -711,11 +711,10 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
 
                                         var outer_field_index = 0;
                                         inline while (systems_info.depend_on_indices_used - from < system_depend_on_count) {
-                                            const dependency_info = @typeInfo(dependency_functions[outer_field_index]);
-                                            switch (dependency_info) {
+                                            switch (@typeInfo(@TypeOf(dependency_functions[outer_field_index]))) {
                                                 .Fn => |_| {
                                                     const dependency_function = dependency_functions[outer_field_index];
-                                                    const previous_system_info_index: usize = indexOfFunctionInSystems(dependency_function, systems_info.depend_on_indices_used, systems) orelse {
+                                                    const previous_system_info_index: usize = indexOfFunctionInSystems(dependency_function, systems) orelse {
                                                         const err_msg = std.fmt.comptimePrint(
                                                             "System {d} did not find '{s}' in systems tuple, dependencies must be added before system that depend on them",
                                                             .{ i, @typeName(@TypeOf(dependency_function)) },
@@ -727,22 +726,27 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
 
                                                     outer_field_index += 1;
                                                 },
-                                                .Struct => |dependency_struct_info| {
-                                                    for (dependency_struct_info.decls) |decl| {
-                                                        const dependency_function = @field(dependency_functions[outer_field_index], decl.name);
+                                                .Type => {
+                                                    switch (@typeInfo(dependency_functions[outer_field_index])) {
+                                                        .Struct => |dependency_struct_info| {
+                                                            for (dependency_struct_info.decls) |decl| {
+                                                                const dependency_function = @field(dependency_functions[outer_field_index], decl.name);
 
-                                                        const previous_system_info_index: usize = indexOfFunctionInSystems(dependency_function, systems_info.depend_on_indices_used, systems) orelse {
-                                                            const err_msg = std.fmt.comptimePrint(
-                                                                "System {d} did not find '{s}' in systems tuple, dependencies must be added before system that depend on them",
-                                                                .{ i, @typeName(@TypeOf(dependency_function)) },
-                                                            );
-                                                            @compileError(err_msg);
-                                                        };
-                                                        systems_info.depend_on_index_pool[systems_info.depend_on_indices_used] = previous_system_info_index;
-                                                        systems_info.depend_on_indices_used += 1;
+                                                                const previous_system_info_index: usize = indexOfFunctionInSystems(dependency_function, systems) orelse {
+                                                                    const err_msg = std.fmt.comptimePrint(
+                                                                        "System {d} did not find '{s}' in systems tuple, dependencies must be added before system that depend on them",
+                                                                        .{ i, @typeName(@TypeOf(dependency_function)) },
+                                                                    );
+                                                                    @compileError(err_msg);
+                                                                };
+                                                                systems_info.depend_on_index_pool[systems_info.depend_on_indices_used] = previous_system_info_index;
+                                                                systems_info.depend_on_indices_used += 1;
+                                                            }
+
+                                                            outer_field_index += 1;
+                                                        },
+                                                        else => @compileError("DependOn dependencies must be function or struct"),
                                                     }
-
-                                                    outer_field_index += 1;
                                                 },
                                                 else => @compileError("DependOn dependencies must be function or struct"),
                                             }
@@ -838,7 +842,7 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
 
 /// Look for the index of a given function in a tuple of functions and structs of functions
 /// Returns: index of function, null if function is not in systems
-pub fn indexOfFunctionInSystems(comptime function: anytype, comptime stop_at: usize, comptime systems: anytype) ?usize {
+pub fn indexOfFunctionInSystems(comptime function: anytype, comptime systems: anytype) ?usize {
     const SystemsType = @TypeOf(systems);
     const systems_type_info = @typeInfo(SystemsType);
     const fields_info = systems_type_info.Struct.fields;
@@ -926,10 +930,6 @@ pub fn indexOfFunctionInSystems(comptime function: anytype, comptime stop_at: us
                     }
                 },
                 else => unreachable,
-            }
-
-            if (i > stop_at) {
-                return null;
             }
         }
     }
