@@ -399,7 +399,13 @@ pub fn Event(comptime event_name: []const u8, comptime systems: anytype, comptim
         pub const secret_field = SystemType.event;
         pub const name = event_name;
         pub const s = systems;
-        pub const system_count = countAndVerifySystems(systems);
+        pub const system_count = system_count_blk: {
+            const count = countAndVerifySystems(systems);
+            if (count == 0) {
+                @compileError("event " ++ event_name ++ " has 0 systems");
+            }
+            break :system_count_blk count;
+        };
         pub const systems_info = createSystemInfo(system_count, systems);
         pub const EventArgument = EventArgumentType;
     };
@@ -482,14 +488,10 @@ pub fn countAndVerifyEvents(comptime events: anytype) comptime_int {
 }
 
 pub fn GenerateEventsEnum(comptime event_count: comptime_int, comptime events: anytype) type {
-    const EventsType = @TypeOf(events);
-    const events_type_info = @typeInfo(EventsType);
-    const fields_info = events_type_info.Struct.fields;
-
     var enum_fields: [event_count]Type.EnumField = undefined;
-    inline for (fields_info, 0..) |_, i| {
-        enum_fields[i] = Type.EnumField{
-            .name = events[i].name,
+    inline for (&enum_fields, 0..) |*enum_field, i| {
+        enum_field.* = Type.EnumField{
+            .name = @ptrCast(events[i].name ++ [_]u8{0}),
             .value = i,
         };
     }
@@ -517,7 +519,9 @@ pub fn countAndVerifySystems(comptime systems: anytype) comptime_int {
     // start by counting systems registered
     inline for (fields_info, 0..) |field_info, i| {
         switch (@typeInfo(field_info.type)) {
-            .Fn => systems_count += 1,
+            // https://github.com/Avokadoen/ecez/issues/162
+            // .Fn => systems_count += 1,
+            .Fn => @compileError("Using functions direcly as systems is temporarly disabled because of a zig compiler TODO. Wrap functions in a struct to work around this."),
             .Type => {
                 switch (@typeInfo(systems[i])) {
                     .Struct => |stru| {
@@ -939,11 +943,12 @@ pub fn indexOfFunctionInSystems(comptime function: anytype, comptime systems: an
 /// Generate an archetype's SOA component storage
 pub fn ComponentStorage(comptime types: []const type) type {
     var struct_fields: [types.len]Type.StructField = undefined;
+    var num_buf: [8]u8 = undefined;
     inline for (types, 0..) |T, i| {
         const ArrT = std.ArrayList(T);
-        var num_buf: [8]u8 = undefined;
+        const name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable;
         struct_fields[i] = .{
-            .name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable,
+            .name = @ptrCast(name ++ [_]u8{0}),
             .type = if (@sizeOf(T) > 0) ArrT else T,
             .default_value = null,
             .is_comptime = false,
@@ -951,7 +956,7 @@ pub fn ComponentStorage(comptime types: []const type) type {
         };
     }
     const RtrTypeInfo = Type{ .Struct = .{
-        .layout = .Auto,
+        .layout = .auto,
         .fields = &struct_fields,
         .decls = &[0]Type.Declaration{},
         .is_tuple = true,
@@ -972,7 +977,7 @@ pub fn ComponentStruct(comptime field_names: []const []const u8, comptime types:
         };
     }
     const RtrTypeInfo = Type{ .Struct = .{
-        .layout = .Auto,
+        .layout = .auto,
         .fields = &struct_fields,
         .decls = &[0]Type.Declaration{},
         .is_tuple = false,
@@ -1141,7 +1146,7 @@ pub fn SharedStateStorage(comptime shared_state: anytype) type {
         }
         const ActualStoredSharedState = SharedState(shared_state[i]);
         storage_fields[i] = Type.StructField{
-            .name = str_i,
+            .name = @ptrCast(str_i ++ [_]u8{0}),
             .type = ActualStoredSharedState,
             .default_value = null,
             .is_comptime = false,
@@ -1151,7 +1156,7 @@ pub fn SharedStateStorage(comptime shared_state: anytype) type {
     }
 
     return @Type(Type{ .Struct = .{
-        .layout = .Auto,
+        .layout = .auto,
         .fields = &storage_fields,
         .decls = &[0]Type.Declaration{},
         .is_tuple = true,
@@ -1198,7 +1203,7 @@ pub fn SharedState(comptime State: type) type {
             }, shared_state_tag_field };
 
             return @Type(Type{ .Struct = .{
-                .layout = .Auto,
+                .layout = .auto,
                 .fields = &shared_state_fields,
                 .decls = &[0]Type.Declaration{},
                 .is_tuple = false,
@@ -1386,13 +1391,22 @@ test "GenerateEventEnum generate expected enum" {
 }
 
 test "systemCount count systems" {
+    // https://github.com/Avokadoen/ecez/issues/162
+    // const TestSystems = struct {
+    //     pub fn hello() void {}
+    //     pub fn world() void {}
+    // };
+    // const count = countAndVerifySystems(.{ countAndVerifySystems, TestSystems });
+
+    // try testing.expectEqual(3, count);
+
     const TestSystems = struct {
         pub fn hello() void {}
         pub fn world() void {}
     };
-    const count = countAndVerifySystems(.{ countAndVerifySystems, TestSystems });
+    const count = countAndVerifySystems(.{ TestSystems, TestSystems });
 
-    try testing.expectEqual(3, count);
+    try testing.expectEqual(4, count);
 }
 
 test "createSystemInfo generate accurate system information" {

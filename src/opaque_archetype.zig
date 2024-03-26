@@ -142,8 +142,9 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             const storage_index = self.bitInMaskToStorageIndex(bitmask);
             const component_bytes = std.mem.asBytes(&component);
             const bytes_from = entity_index * @sizeOf(Component);
+            const bytes_to = bytes_from + @sizeOf(Component);
 
-            @memcpy(self.component_storage[storage_index].items[bytes_from..], component_bytes);
+            @memcpy(self.component_storage[storage_index].items[bytes_from..bytes_to], component_bytes);
         }
 
         /// Components *MUST* be sorted related to hash order

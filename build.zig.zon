@@ -1,0 +1,19 @@
+.{
+    .name = "ecez",
+    .version = "0.0.0",
+    .dependencies = .{
+        .ztracy = .{ .path = "deps/ztracy" },
+        .zjobs = .{ .path = "deps/zjobs" },
+    },
+    .paths = .{
+        // Examples are not included when ecez is used as a library
+        // "examples",
+
+        "deps",
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "byte_format.md",
+        "README.md",
+    },
+}

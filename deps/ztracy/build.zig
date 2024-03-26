@@ -1,99 +1,90 @@
 const std = @import("std");
 
-pub const Options = struct {
-    enable_ztracy: bool = false,
-    enable_fibers: bool = false,
-};
+pub fn build(b: *std.Build) void {
+    const optimize = b.standardOptimizeOption(.{});
+    const target = b.standardTargetOptions(.{});
 
-pub const Package = struct {
-    options: Options,
-    ztracy: *std.Build.Module,
-    ztracy_options: *std.Build.Module,
-    ztracy_c_cpp: *std.Build.CompileStep,
+    const options = .{
+        .enable_ztracy = b.option(
+            bool,
+            "enable_ztracy",
+            "Enable Tracy profile markers",
+        ) orelse false,
+        .enable_fibers = b.option(
+            bool,
+            "enable_fibers",
+            "Enable Tracy fiber support",
+        ) orelse false,
+        .on_demand = b.option(
+            bool,
+            "on_demand",
+            "Build tracy with TRACY_ON_DEMAND",
+        ) orelse false,
+    };
 
-    pub fn link(pkg: Package, exe: *std.Build.CompileStep) void {
-        exe.addModule("ztracy", pkg.ztracy);
-        exe.addModule("ztracy_options", pkg.ztracy_options);
-        if (pkg.options.enable_ztracy) {
-            exe.addIncludePath(.{ .path = thisDir() ++ "/libs/tracy/tracy" });
-            exe.linkLibrary(pkg.ztracy_c_cpp);
-        }
+    const options_step = b.addOptions();
+    inline for (std.meta.fields(@TypeOf(options))) |field| {
+        options_step.addOption(field.type, field.name, @field(options, field.name));
     }
-};
 
-pub fn package(
-    b: *std.Build,
-    target: std.zig.CrossTarget,
-    optimize: std.builtin.Mode,
-    args: struct {
-        options: Options = .{},
-    },
-) Package {
-    const step = b.addOptions();
-    step.addOption(bool, "enable_ztracy", args.options.enable_ztracy);
+    const options_module = options_step.createModule();
 
-    const ztracy_options = step.createModule();
+    const ztracy = b.addModule("root", .{
+        .root_source_file = .{ .path = "src/ztracy.zig" },
+        .imports = &.{
+            .{ .name = "ztracy_options", .module = options_module },
+        },
+    });
+    ztracy.addIncludePath(.{ .path = "libs/tracy/tracy" });
 
-    const ztracy = b.createModule(.{
-        .source_file = .{ .path = thisDir() ++ "/src/ztracy.zig" },
-        .dependencies = &.{
-            .{ .name = "ztracy_options", .module = ztracy_options },
+    const tracy = b.addStaticLibrary(.{
+        .name = "tracy",
+        .target = target,
+        .optimize = optimize,
+    });
+
+    tracy.addIncludePath(.{ .path = "libs/tracy/tracy" });
+    tracy.addCSourceFile(.{
+        .file = .{ .path = "libs/tracy/TracyClient.cpp" },
+        .flags = &.{
+            "-DTRACY_ENABLE",
+            if (options.enable_fibers) "-DTRACY_FIBERS" else "",
+            "-fno-sanitize=undefined",
         },
     });
 
-    const ztracy_c_cpp = if (args.options.enable_ztracy) ztracy_c_cpp: {
-        const enable_fibers = if (args.options.enable_fibers) "-DTRACY_FIBERS" else "";
+    if (options.on_demand) tracy.defineCMacro("TRACY_ON_DEMAND", null);
 
-        const ztracy_c_cpp = b.addStaticLibrary(.{
-            .name = "ztracy",
-            .target = target,
-            .optimize = optimize,
-        });
+    tracy.linkLibC();
+    if (target.result.abi != .msvc)
+        tracy.linkLibCpp();
 
-        ztracy_c_cpp.addIncludePath(.{ .path = thisDir() ++ "/libs/tracy/tracy" });
-        ztracy_c_cpp.addCSourceFile(.{
-            .file = .{ .path = thisDir() ++ "/libs/tracy/TracyClient.cpp" },
-            .flags = &.{
-                "-DTRACY_ENABLE",
-                enable_fibers,
-                // MinGW doesn't have all the newfangled windows features,
-                // so we need to pretend to have an older windows version.
-                "-D_WIN32_WINNT=0x601",
-                "-fno-sanitize=undefined",
-            },
-        });
+    switch (target.result.os.tag) {
+        .windows => {
+            tracy.linkSystemLibrary("ws2_32");
+            tracy.linkSystemLibrary("dbghelp");
+        },
+        .macos => {
+            const system_sdk = b.dependency("system_sdk", .{});
+            tracy.addFrameworkPath(
+                .{ .path = system_sdk.path("System/Library/Frameworks").getPath(b) },
+            );
+        },
+        else => {},
+    }
 
-        const abi = (std.zig.system.NativeTargetInfo.detect(target) catch unreachable).target.abi;
-        ztracy_c_cpp.linkLibC();
-        if (abi != .msvc)
-            ztracy_c_cpp.linkLibCpp();
+    b.installArtifact(tracy);
 
-        switch (target.getOs().tag) {
-            .windows => {
-                ztracy_c_cpp.linkSystemLibraryName("ws2_32");
-                ztracy_c_cpp.linkSystemLibraryName("dbghelp");
-            },
-            .macos => {
-                ztracy_c_cpp.addFrameworkPath(
-                    .{ .path = thisDir() ++ "/../system-sdk/macos12/System/Library/Frameworks" },
-                );
-            },
-            else => {},
-        }
+    const test_step = b.step("test", "Run ztracy tests");
 
-        break :ztracy_c_cpp ztracy_c_cpp;
-    } else undefined;
+    const tests = b.addTest(.{
+        .name = "ztracy-tests",
+        .root_source_file = .{ .path = "src/ztracy.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    tests.linkLibrary(tracy);
+    b.installArtifact(tests);
 
-    return .{
-        .options = args.options,
-        .ztracy = ztracy,
-        .ztracy_options = ztracy_options,
-        .ztracy_c_cpp = ztracy_c_cpp,
-    };
-}
-
-pub fn build(_: *std.Build) void {}
-
-inline fn thisDir() []const u8 {
-    return comptime std.fs.path.dirname(@src().file) orelse ".";
+    test_step.dependOn(&b.addRunArtifact(tests).step);
 }

@@ -24,9 +24,12 @@ pub fn CreateScheduler(
         var fields: [event_count]Type.StructField = undefined;
         inline for (&fields, events, 0..) |*field, event, i| {
             const default_value = [_]JobId{.none} ** event.system_count;
-            var num_buf: [8]u8 = undefined;
+            var num_buf: [8:0]u8 = undefined;
+            const name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable;
+            num_buf[name.len] = 0;
+
             field.* = Type.StructField{
-                .name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable,
+                .name = name[0.. :0],
                 .type = [event.system_count]JobId,
                 .default_value = @ptrCast(&default_value),
                 .is_comptime = false,
@@ -35,7 +38,7 @@ pub fn CreateScheduler(
         }
 
         break :blk @Type(Type{ .Struct = .{
-            .layout = .Auto,
+            .layout = .auto,
             .fields = &fields,
             .decls = &[0]Type.Declaration{},
             .is_tuple = true,
@@ -117,7 +120,7 @@ pub fn CreateScheduler(
                 self.execution_job_queue.start();
             }
 
-            var event_jobs_in_flight = &self.event_jobs_in_flight[@intFromEnum(event)];
+            const event_jobs_in_flight = &self.event_jobs_in_flight[@intFromEnum(event)];
             const triggered_event = events[@intFromEnum(event)];
 
             // TODO: verify systems and arguments in type initialization
@@ -556,53 +559,54 @@ test "DependOn support structs" {
     }
 }
 
-test "events can be registered through struct or individual function(s)" {
-    const SystemStruct1 = struct {
-        pub fn func1(a: *Testing.Component.A) void {
-            a.value += 1;
-        }
+// https://github.com/Avokadoen/ecez/issues/162
+// test "events can be registered through struct or individual function(s)" {
+//     const SystemStruct1 = struct {
+//         pub fn func1(a: *Testing.Component.A) void {
+//             a.value += 1;
+//         }
 
-        pub fn func2(a: *Testing.Component.A) void {
-            a.value += 1;
-        }
-    };
+//         pub fn func2(a: *Testing.Component.A) void {
+//             a.value += 1;
+//         }
+//     };
 
-    const SystemStruct2 = struct {
-        pub fn func3(a: *Testing.Component.B) void {
-            a.value += 1;
-        }
-    };
+//     const SystemStruct2 = struct {
+//         pub fn func3(a: *Testing.Component.B) void {
+//             a.value += 1;
+//         }
+//     };
 
-    var storage = try StorageStub.init(testing.allocator, .{});
-    defer storage.deinit();
+//     var storage = try StorageStub.init(testing.allocator, .{});
+//     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{
-        Event("onFoo", .{
-            SystemStruct1.func1,
-            DependOn(SystemStruct1.func2, .{SystemStruct1.func1}),
-            SystemStruct2,
-        }, .{}),
-    }).init();
-    defer scheduler.deinit();
+//     var scheduler = CreateScheduler(StorageStub, .{
+//         Event("onFoo", .{
+//             SystemStruct1.func1,
+//             DependOn(SystemStruct1.func2, .{SystemStruct1.func1}),
+//             SystemStruct2,
+//         }, .{}),
+//     }).init();
+//     defer scheduler.deinit();
 
-    const initial_state = Testing.Archetype.AB{
-        .a = Testing.Component.A{ .value = 0 },
-        .b = Testing.Component.B{ .value = 0 },
-    };
-    const entity = try storage.createEntity(initial_state);
+//     const initial_state = Testing.Archetype.AB{
+//         .a = Testing.Component.A{ .value = 0 },
+//         .b = Testing.Component.B{ .value = 0 },
+//     };
+//     const entity = try storage.createEntity(initial_state);
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
-    scheduler.waitEvent(.onFoo);
+//     scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+//     scheduler.waitEvent(.onFoo);
 
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 2 },
-        try storage.getComponent(entity, Testing.Component.A),
-    );
-    try testing.expectEqual(
-        Testing.Component.B{ .value = 1 },
-        try storage.getComponent(entity, Testing.Component.B),
-    );
-}
+//     try testing.expectEqual(
+//         Testing.Component.A{ .value = 2 },
+//         try storage.getComponent(entity, Testing.Component.A),
+//     );
+//     try testing.expectEqual(
+//         Testing.Component.B{ .value = 1 },
+//         try storage.getComponent(entity, Testing.Component.B),
+//     );
+// }
 
 test "events call systems" {
     // define a system type
@@ -615,18 +619,18 @@ test "events call systems" {
         }
     };
 
-    const systemThree = struct {
-        fn func(b: *Testing.Component.A) void {
-            b.value += 1;
+    const SystemThree = struct {
+        pub fn func(a: *Testing.Component.A) void {
+            a.value += 1;
         }
-    }.func;
+    };
 
     var storage = try StorageStub.init(testing.allocator, .{});
     defer storage.deinit();
 
     var scheduler = CreateScheduler(StorageStub, .{
         Event("onFoo", .{SystemType}, .{}),
-        Event("onBar", .{systemThree}, .{}),
+        Event("onBar", .{SystemThree}, .{}),
     }).init();
     defer scheduler.deinit();
 
@@ -739,30 +743,40 @@ test "event can have many shared state" {
     const B = Testing.Component.B;
     const D = struct { value: u8 };
 
-    const SystemStruct = struct {
-        pub fn system1(a: *A, shared: SharedState(A)) void {
+    const SystemStruct1 = struct {
+        pub fn system(a: *A, shared: SharedState(A)) void {
             a.value += @as(u32, @intCast(shared.value));
         }
+    };
 
-        pub fn system2(a: *A, shared: SharedState(B)) void {
+    const SystemStruct2 = struct {
+        pub fn system(a: *A, shared: SharedState(B)) void {
             a.value += @as(u32, @intCast(shared.value));
         }
+    };
 
-        pub fn system3(a: *A, shared: SharedState(D)) void {
+    const SystemStruct3 = struct {
+        pub fn system(a: *A, shared: SharedState(D)) void {
             a.value += @as(u32, @intCast(shared.value));
         }
+    };
 
-        pub fn system4(b: *B, shared_a: SharedState(A), shared_b: SharedState(B)) void {
+    const SystemStruct4 = struct {
+        pub fn system(b: *B, shared_a: SharedState(A), shared_b: SharedState(B)) void {
             b.value += @as(u8, @intCast(shared_a.value));
             b.value += @as(u8, @intCast(shared_b.value));
         }
+    };
 
-        pub fn system5(b: *B, shared_b: SharedState(B), shared_a: SharedState(A)) void {
+    const SystemStruct5 = struct {
+        pub fn system(b: *B, shared_b: SharedState(B), shared_a: SharedState(A)) void {
             b.value += @as(u8, @intCast(shared_a.value));
             b.value += @as(u8, @intCast(shared_b.value));
         }
+    };
 
-        pub fn system6(b: *B, shared_c: SharedState(D), shared_b: SharedState(B), shared_a: SharedState(A)) void {
+    const SystemStruct6 = struct {
+        pub fn system(b: *B, shared_c: SharedState(D), shared_b: SharedState(B), shared_a: SharedState(A)) void {
             b.value += @as(u8, @intCast(shared_a.value));
             b.value += @as(u8, @intCast(shared_b.value));
             b.value += @as(u8, @intCast(shared_c.value));
@@ -788,12 +802,12 @@ test "event can have many shared state" {
     const entity_b = try storage.createEntity(initial_state_b);
 
     var scheduler = CreateScheduler(Storage, .{Event("onFoo", .{
-        SystemStruct.system1,
-        DependOn(SystemStruct.system2, .{SystemStruct.system1}),
-        DependOn(SystemStruct.system3, .{SystemStruct.system2}),
-        SystemStruct.system4,
-        DependOn(SystemStruct.system5, .{SystemStruct.system4}),
-        DependOn(SystemStruct.system6, .{SystemStruct.system5}),
+        SystemStruct1,
+        DependOn(SystemStruct2, .{SystemStruct1}),
+        DependOn(SystemStruct3, .{SystemStruct2}),
+        DependOn(SystemStruct4, .{SystemStruct3}),
+        DependOn(SystemStruct5, .{SystemStruct4}),
+        DependOn(SystemStruct6, .{SystemStruct5}),
     }, .{})}).init();
     defer scheduler.deinit();
 
@@ -815,7 +829,10 @@ test "events can access current entity" {
     var storage = try StorageStub.init(testing.allocator, .{});
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemType}, .{})}).init();
+    var scheduler = CreateScheduler(
+        StorageStub,
+        .{Event("onFoo", .{SystemType}, .{})},
+    ).init();
     defer scheduler.deinit();
 
     var entities: [100]Entity = undefined;
@@ -918,7 +935,7 @@ test "event can mutate event extra argument" {
     var storage = try StorageStub.init(testing.allocator, .{});
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct.eventSystem}, .{Testing.Component.A})}).init();
+    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{Testing.Component.A})}).init();
     defer scheduler.deinit();
 
     const initial_state = AEntityType{
@@ -960,7 +977,7 @@ test "event can request single query with component" {
     var storage = try StorageStub.init(testing.allocator, .{});
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct.eventSystem}, .{})}).init();
+    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init();
     defer scheduler.deinit();
 
     const initial_state = AEntityType{
@@ -993,7 +1010,7 @@ test "event exit system loop" {
     var storage = try StorageStub.init(testing.allocator, .{});
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct.eventSystem}, .{})}).init();
+    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init();
     defer scheduler.deinit();
 
     const entity0 = try storage.createEntity(AEntityType{
@@ -1053,7 +1070,7 @@ test "event can request two queries without components" {
     var storage = try StorageStub.init(testing.allocator, .{});
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct.eventSystem}, .{})}).init();
+    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init();
     defer scheduler.deinit();
 
     const initial_state = AEntityType{
@@ -1080,7 +1097,7 @@ test "event can access invocation number" {
     var storage = try StorageStub.init(testing.allocator, .{});
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct.eventSystem}, .{Testing.Component.A})}).init();
+    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{Testing.Component.A})}).init();
     defer scheduler.deinit();
 
     var entities: [100]Entity = undefined;
@@ -1105,12 +1122,13 @@ test "event can access invocation number" {
 // NOTE: we don't use a cache anymore, but the test can stay for now since it might be good for
 //       detecting potential regressions
 test "event caching works" {
-    const SystemStruct = struct {
-        pub fn event1System(a: *Testing.Component.A) void {
+    const System1 = struct {
+        pub fn system(a: *Testing.Component.A) void {
             a.value += 1;
         }
-
-        pub fn event2System(b: *Testing.Component.B) void {
+    };
+    const System2 = struct {
+        pub fn system(b: *Testing.Component.B) void {
             b.value += 1;
         }
     };
@@ -1119,8 +1137,8 @@ test "event caching works" {
     defer storage.deinit();
 
     var scheduler = CreateScheduler(StorageStub, .{
-        Event("onEvent1", .{SystemStruct.event1System}, .{}),
-        Event("onEvent2", .{SystemStruct.event2System}, .{}),
+        Event("onEvent1", .{System1}, .{}),
+        Event("onEvent2", .{System2}, .{}),
     }).init();
     defer scheduler.deinit();
 
@@ -1194,7 +1212,7 @@ test "Event with no archetypes does not crash" {
     var storage = try StorageStub.init(testing.allocator, .{});
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct.event1System}, .{})}).init();
+    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init();
     defer scheduler.deinit();
 
     for (0..100) |_| {
@@ -1204,23 +1222,29 @@ test "Event with no archetypes does not crash" {
 }
 
 test "DependOn makes a events race free" {
-    const SystemStruct = struct {
-        pub fn addStuff1(a: *Testing.Component.A, b: Testing.Component.B) void {
+    const AddSystem1 = struct {
+        pub fn system(a: *Testing.Component.A, b: Testing.Component.B) void {
             std.time.sleep(std.time.ns_per_us * 3);
             a.value += @as(u32, @intCast(b.value));
         }
+    };
 
-        pub fn multiplyStuff1(a: *Testing.Component.A, b: Testing.Component.B) void {
+    const MultiplySystem2 = struct {
+        pub fn system(a: *Testing.Component.A, b: Testing.Component.B) void {
             std.time.sleep(std.time.ns_per_us * 2);
             a.value *= @as(u32, @intCast(b.value));
         }
+    };
 
-        pub fn addStuff2(a: *Testing.Component.A, b: Testing.Component.B) void {
+    const AddSystem3 = struct {
+        pub fn system(a: *Testing.Component.A, b: Testing.Component.B) void {
             std.time.sleep(std.time.ns_per_us);
             a.value += @as(u32, @intCast(b.value));
         }
+    };
 
-        pub fn multiplyStuff2(a: *Testing.Component.A, b: Testing.Component.B) void {
+    const MultiplySystem4 = struct {
+        pub fn system(a: *Testing.Component.A, b: Testing.Component.B) void {
             a.value *= @as(u32, @intCast(b.value));
         }
     };
@@ -1230,10 +1254,10 @@ test "DependOn makes a events race free" {
 
     var scheduler = CreateScheduler(StorageStub, .{
         Event("onEvent", .{
-            SystemStruct.addStuff1,
-            DependOn(SystemStruct.multiplyStuff1, .{SystemStruct.addStuff1}),
-            DependOn(SystemStruct.addStuff2, .{SystemStruct.multiplyStuff1}),
-            DependOn(SystemStruct.multiplyStuff2, .{SystemStruct.addStuff2}),
+            AddSystem1,
+            DependOn(MultiplySystem2, .{AddSystem1}),
+            DependOn(AddSystem3, .{MultiplySystem2}),
+            DependOn(MultiplySystem4, .{AddSystem3}),
         }, .{}),
     }).init();
     defer scheduler.deinit();
@@ -1266,18 +1290,22 @@ test "DependOn makes a events race free" {
 }
 
 test "event DependOn events can have multiple dependencies" {
-    const SystemStruct = struct {
-        pub fn addStuff1(a: *Testing.Component.A) void {
+    const AddSystem1 = struct {
+        pub fn system(a: *Testing.Component.A) void {
             std.time.sleep(std.time.ns_per_us);
             a.value += 1;
         }
+    };
 
-        pub fn addStuff2(b: *Testing.Component.B) void {
+    const AddSystem2 = struct {
+        pub fn system(b: *Testing.Component.B) void {
             std.time.sleep(std.time.ns_per_us);
             b.value += 1;
         }
+    };
 
-        pub fn multiplyStuff(a: *Testing.Component.A, b: Testing.Component.B) void {
+    const MultiplySystem3 = struct {
+        pub fn system(a: *Testing.Component.A, b: Testing.Component.B) void {
             a.value *= @as(u32, @intCast(b.value));
         }
     };
@@ -1286,9 +1314,9 @@ test "event DependOn events can have multiple dependencies" {
     defer storage.deinit();
 
     var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{
-        SystemStruct.addStuff1,
-        SystemStruct.addStuff2,
-        DependOn(SystemStruct.multiplyStuff, .{ SystemStruct.addStuff1, SystemStruct.addStuff2 }),
+        AddSystem1,
+        AddSystem2,
+        DependOn(MultiplySystem3, .{ AddSystem1, AddSystem2 }),
     }, .{})}).init();
     defer scheduler.deinit();
 
@@ -1325,14 +1353,14 @@ test "reproducer: Dispatcher does not include new components to systems previous
         count: u32,
     };
 
-    const onFooSystem = struct {
+    const OnFooSystem = struct {
         pub fn system(a: *Testing.Component.A, tracker: *SharedState(Tracker)) void {
             tracker.count += a.value;
         }
-    }.system;
+    };
 
     const RepStorage = CreateStorage(Testing.AllComponentsTuple, .{Tracker});
-    const Scheduler = CreateScheduler(RepStorage, .{Event("onFoo", .{onFooSystem}, .{})});
+    const Scheduler = CreateScheduler(RepStorage, .{Event("onFoo", .{OnFooSystem}, .{})});
 
     var storage = try RepStorage.init(testing.allocator, .{Tracker{ .count = 0 }});
     defer storage.deinit();
@@ -1340,15 +1368,17 @@ test "reproducer: Dispatcher does not include new components to systems previous
     var scheduler = Scheduler.init();
     defer scheduler.deinit();
 
-    const a = Testing.Component.A{ .value = 1 };
-    _ = try storage.createEntity(.{a});
-    _ = try storage.createEntity(.{a});
+    const inital_state = AEntityType{
+        .a = .{ .value = 1 },
+    };
+    _ = try storage.createEntity(inital_state);
+    _ = try storage.createEntity(inital_state);
 
     scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
     scheduler.waitEvent(.onFoo);
 
-    _ = try storage.createEntity(.{a});
-    _ = try storage.createEntity(.{a});
+    _ = try storage.createEntity(inital_state);
+    _ = try storage.createEntity(inital_state);
 
     scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
     scheduler.waitEvent(.onFoo);

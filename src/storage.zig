@@ -114,6 +114,12 @@ pub fn CreateStorage(
                     @compileError(@src().fn_name ++ " expect entity_state to be struct/tuple of components");
                 }
 
+                if (state_type_info.Struct.fields.len > 0 and state_type_info.Struct.is_tuple) {
+                    // https://github.com/Avokadoen/ecez/issues/163
+                    // I know this is annoying, but it's less annoying than getting an anon compiler error "exit code 3"...
+                    @compileError("tuple is known to trigger issue in the zig compiler, use a defined struct type instead");
+                }
+
                 var field_types: [state_type_info.Struct.fields.len]type = undefined;
                 for (&field_types, state_type_info.Struct.fields) |*field_type, field| {
                     field_type.* = field.type;

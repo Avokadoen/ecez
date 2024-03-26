@@ -526,7 +526,9 @@ test "serializing then using parseArchChunk produce expected ARCH chunk" {
 
     var entities: [10]Entity = undefined;
     for (&entities) |*entity| {
-        entity.* = try storage.createEntity(.{ a, b });
+        entity.* = try storage.createEntity(
+            Testing.Archetype.AB{ .a = a, .b = b },
+        );
     }
 
     const bytes = try serialize(StorageStub, testing.allocator, storage, .{});
@@ -616,7 +618,7 @@ test "serialize and deserialize is idempotent" {
 
     for (&a_as, &a_entities, 0..) |*a, *entity, index| {
         a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
-        entity.* = try storage.createEntity(.{a.*});
+        entity.* = try storage.createEntity(Testing.Archetype.A{ .a = a.* });
     }
 
     var ab_as: [test_data_count]Testing.Component.A = undefined;
@@ -625,7 +627,9 @@ test "serialize and deserialize is idempotent" {
     for (&ab_as, &ab_bs, &ab_entities, 0..) |*a, *b, *entity, index| {
         a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
         b.* = Testing.Component.B{ .value = @as(u8, @intCast(index)) };
-        entity.* = try storage.createEntity(.{ a.*, b.* });
+        entity.* = try storage.createEntity(
+            Testing.Archetype.AB{ .a = a.*, .b = b.* },
+        );
     }
 
     var ac_as: [test_data_count]Testing.Component.A = undefined;
@@ -634,7 +638,7 @@ test "serialize and deserialize is idempotent" {
     for (&ac_as, &ac_bs, &ac_entities, 0..) |*a, *b, *entity, index| {
         a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
         b.* = Testing.Component.B{ .value = @as(u8, @intCast(index)) };
-        entity.* = try storage.createEntity(.{ a.*, b.* });
+        entity.* = try storage.createEntity(Testing.Archetype.AB{ .a = a.*, .b = b.* });
     }
 
     var abc_as: [test_data_count]Testing.Component.A = undefined;
@@ -644,7 +648,9 @@ test "serialize and deserialize is idempotent" {
     for (&abc_as, &abc_bs, &abc_entities, 0..) |*a, *b, *entity, index| {
         a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
         b.* = Testing.Component.B{ .value = @as(u8, @intCast(index)) };
-        entity.* = try storage.createEntity(.{ a.*, b.*, abc_cs });
+        entity.* = try storage.createEntity(
+            Testing.Archetype.ABC{ .a = a.*, .b = b.*, .c = abc_cs },
+        );
     }
 
     const bytes = try serialize(StorageStub, testing.allocator, storage, .{});
@@ -655,19 +661,19 @@ test "serialize and deserialize is idempotent" {
 
     try deserialize(StorageStub, &storage, bytes);
 
-    inline for (a_as, a_entities) |a, a_entity| {
+    for (a_as, a_entities) |a, a_entity| {
         try testing.expectEqual(a, try storage.getComponent(a_entity, Testing.Component.A));
         try testing.expectError(error.ComponentMissing, storage.getComponent(a_entity, Testing.Component.B));
         try testing.expectError(error.ComponentMissing, storage.getComponent(a_entity, Testing.Component.C));
     }
 
-    inline for (ab_as, ab_bs, ab_entities) |ab_a, ab_b, ab_entity| {
+    for (ab_as, ab_bs, ab_entities) |ab_a, ab_b, ab_entity| {
         try testing.expectEqual(ab_a, try storage.getComponent(ab_entity, Testing.Component.A));
         try testing.expectEqual(ab_b, try storage.getComponent(ab_entity, Testing.Component.B));
         try testing.expectError(error.ComponentMissing, storage.getComponent(ab_entity, Testing.Component.C));
     }
 
-    inline for (abc_as, abc_bs, abc_entities) |abc_a, abc_b, abc_entity| {
+    for (abc_as, abc_bs, abc_entities) |abc_a, abc_b, abc_entity| {
         try testing.expectEqual(abc_a, try storage.getComponent(abc_entity, Testing.Component.A));
         try testing.expectEqual(abc_b, try storage.getComponent(abc_entity, Testing.Component.B));
         try testing.expectEqual(abc_cs, try storage.getComponent(abc_entity, Testing.Component.C));

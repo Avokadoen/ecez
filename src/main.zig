@@ -10,6 +10,7 @@ pub const CreateStorage = @import("storage.zig").CreateStorage;
 
 /// Use this function to create a system scheduler
 pub const CreateScheduler = @import("scheduler.zig").CreateScheduler;
+
 /// A function can return this type in order to exit system execution early
 pub const ReturnCommand = meta.ReturnCommand;
 
@@ -28,6 +29,7 @@ pub const EventArgument = meta.EventArgument;
 /// Mark an event by name, systems to execute and any unique event data the systems need
 pub const Event = meta.Event;
 
+/// Allocator traced by tracy
 pub const tracy_alloc = @import("tracy_alloc.zig");
 
 // Ezby can be used to serialize and deserialize storages

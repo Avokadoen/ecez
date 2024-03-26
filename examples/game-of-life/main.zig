@@ -23,20 +23,26 @@ const CellIter = Storage.Query(
 ).Iter;
 
 const Scheduler = ecez.CreateScheduler(Storage, .{ecez.Event("loop", .{
-    renderCell,
-    renderLine,
-    busyWork,
-    busyWork,
-    busyWork,
-    busyWork,
-    busyWork,
-    busyWork,
-    busyWork,
-    busyWork,
-    busyWork,
-    ecez.DependOn(flushBuffer, .{ renderCell, renderLine }),
-    ecez.DependOn(tickCell, .{flushBuffer}),
+    RenderCellSystem,
+    RenderLineSystem,
+    BusyWorkSystem,
+    BusyWorkSystem,
+    BusyWorkSystem,
+    BusyWorkSystem,
+    BusyWorkSystem,
+    BusyWorkSystem,
+    ecez.DependOn(FlushBufferSystem, .{ RenderCellSystem, RenderLineSystem }),
+    ecez.DependOn(UpdateCellSystem, .{FlushBufferSystem}),
 }, .{})});
+
+const Cell = struct {
+    pos: GridPos,
+    health: Health,
+};
+
+const Line = struct {
+    pos: LinePos,
+};
 
 pub fn main() anyerror!void {
     ztracy.SetThreadName("main thread");
@@ -79,12 +85,12 @@ pub fn main() anyerror!void {
 
         for (0..grid_config.cell_count) |i| {
             const alive = rng.random().float(f32) < spawn_threshold;
-            _ = try storage.createEntity(.{
-                GridPos{
+            _ = try storage.createEntity(Cell{
+                .pos = GridPos{
                     .x = @intCast(i % grid_config.dimension_x),
                     .y = @intCast(i / grid_config.dimension_x),
                 },
-                Health{
+                .health = Health{
                     .alive = [_]bool{ alive, alive },
                     .active_cell_index = 0,
                 },
@@ -98,14 +104,17 @@ pub fn main() anyerror!void {
         defer line_create_zone.End();
 
         for (1..dimension_y + 1) |i| {
-            _ = try storage.createEntity(.{
-                LinePos{ .nth = @intCast(i) },
+            _ = try storage.createEntity(Line{
+                .pos = LinePos{ .nth = @intCast(i) },
             });
         }
     }
 
     // create flush entity
-    _ = try storage.createEntity(.{FlushTag{}});
+    const Flush = struct {
+        tag: FlushTag,
+    };
+    _ = try storage.createEntity(Flush{ .tag = FlushTag{} });
 
     while (true) {
         defer ztracy.FrameMark();
@@ -145,158 +154,168 @@ const LinePos = struct {
 };
 const FlushTag = struct {};
 
-fn renderCell(
-    pos: GridPos,
-    health: Health,
-    render_target: *ecez.SharedState(RenderTarget),
-    grid_config: ecez.SharedState(GridConfig),
-) void {
-    const zone = ztracy.ZoneNC(@src(), "Render Cell", Color.red);
-    defer zone.End();
+const RenderCellSystem = struct {
+    pub fn system(
+        pos: GridPos,
+        health: Health,
+        render_target: *ecez.SharedState(RenderTarget),
+        grid_config: ecez.SharedState(GridConfig),
+    ) void {
+        const zone = ztracy.ZoneNC(@src(), "Render Cell", Color.red);
+        defer zone.End();
 
-    const cell_x: usize = @intCast(pos.x);
-    const cell_y: usize = @intCast(pos.y);
+        const cell_x: usize = @intCast(pos.x);
+        const cell_y: usize = @intCast(pos.y);
 
-    const new_line_count = cell_y;
-    const start: usize = (cell_x + (cell_y * grid_config.dimension_x)) * characters_per_cell + new_line_count;
+        const new_line_count = cell_y;
+        const start: usize = (cell_x + (cell_y * grid_config.dimension_x)) * characters_per_cell + new_line_count;
 
-    const alive = health.alive[health.active_cell_index];
-    if (alive) {
-        const output = "[X]";
-        inline for (output, 0..) |o, i| {
-            render_target.output_buffer[start + i] = o;
-        }
-    } else {
-        const output = "[ ]";
-        inline for (output, 0..) |o, i| {
-            render_target.output_buffer[start + i] = o;
-        }
-    }
-}
-
-fn renderLine(
-    pos: LinePos,
-    render_target: *ecez.SharedState(RenderTarget),
-    grid_config: ecez.SharedState(GridConfig),
-) void {
-    const zone = ztracy.ZoneNC(@src(), "Render newline", Color.turquoise);
-    defer zone.End();
-    const nth: usize = @intCast(pos.nth);
-
-    render_target.output_buffer[nth * grid_config.dimension_x * characters_per_cell + nth - 1] = '\n';
-}
-
-fn busyWork(
-    pos: GridPos,
-) void {
-    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.turquoise);
-    defer zone.End();
-
-    for (0..10_000) |index| {
-        if (index == pos.x and index == pos.y) {
-            break;
-        }
-    }
-}
-
-fn flushBuffer(
-    flush: FlushTag,
-    render_target: ecez.SharedState(RenderTarget),
-) void {
-    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.turquoise);
-    defer zone.End();
-
-    _ = flush;
-    std.log.info("\n{s}\n\n", .{render_target.output_buffer});
-}
-
-fn tickCell(
-    pos: GridPos,
-    health: *Health,
-    cell_iter: *CellIter,
-    invocation_id: ecez.InvocationCount,
-    grid_config: ecez.SharedState(GridConfig),
-) void {
-    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.turquoise);
-    defer zone.End();
-
-    const cell_x: i32 = @intCast(pos.x);
-    const cell_y: i32 = @intCast(pos.y);
-
-    const current_index = cell_x + (cell_y * @as(i32, @intCast(grid_config.dimension_x)));
-    std.debug.assert(invocation_id.number == @as(u64, @intCast(current_index)));
-
-    const up = -@as(i32, @intCast(grid_config.dimension_x));
-    const left = -1;
-    const right = -left;
-    const down = -up;
-
-    const neighbour_index: usize = @intCast((health.active_cell_index + 1) % 2);
-    const write_index: usize = @intCast(health.active_cell_index);
-    defer health.active_cell_index = @intCast(neighbour_index);
-
-    var neighbour_sum: u8 = 0;
-
-    // check left neighbours
-    if (cell_x > 0) {
-        var cursor = current_index + left;
-        for ([_]i32{ down, up, up }) |offset| {
-            cursor += offset;
-            if (cursor >= 0 and cursor < grid_config.cell_count) {
-                cell_iter.skip(@intCast(cursor));
-                defer cell_iter.reset();
-
-                const neighbour_health = cell_iter.next().?.health;
-                const alive = neighbour_health.alive[neighbour_index];
-                if (alive) {
-                    neighbour_sum += 1;
-                }
+        const alive = health.alive[health.active_cell_index];
+        if (alive) {
+            const output = "[X]";
+            inline for (output, 0..) |o, i| {
+                render_target.output_buffer[start + i] = o;
             }
-        }
-    }
-
-    // check right neighbours
-    if (cell_x < grid_config.dimension_x - 1) {
-        var cursor = current_index + right;
-        for ([_]i32{ down, up, up }) |offset| {
-            cursor += offset;
-            if (cursor >= 0 and cursor < grid_config.cell_count) {
-                cell_iter.skip(@intCast(cursor));
-                defer cell_iter.reset();
-
-                const neighbour_health = cell_iter.next().?.health;
-                const alive = neighbour_health.alive[neighbour_index];
-                if (alive) {
-                    neighbour_sum += 1;
-                }
-            }
-        }
-    }
-
-    // check up & down neighbours
-    for ([_]i32{ current_index + up, current_index + down }) |cursor| {
-        if (cursor >= 0 and cursor < grid_config.cell_count) {
-            cell_iter.skip(@intCast(cursor));
-            defer cell_iter.reset();
-
-            const neighbour_health = cell_iter.next().?.health;
-            const alive = neighbour_health.alive[neighbour_index];
-            if (alive) {
-                neighbour_sum += 1;
-            }
-        }
-    }
-
-    health.alive[write_index] = blk: {
-        if (neighbour_sum == 2) {
-            break :blk health.alive[neighbour_index];
-        } else if (neighbour_sum == 3) {
-            break :blk true;
         } else {
-            break :blk false;
+            const output = "[ ]";
+            inline for (output, 0..) |o, i| {
+                render_target.output_buffer[start + i] = o;
+            }
         }
-    };
-}
+    }
+};
+
+const RenderLineSystem = struct {
+    pub fn system(
+        pos: LinePos,
+        render_target: *ecez.SharedState(RenderTarget),
+        grid_config: ecez.SharedState(GridConfig),
+    ) void {
+        const zone = ztracy.ZoneNC(@src(), "Render newline", Color.turquoise);
+        defer zone.End();
+        const nth: usize = @intCast(pos.nth);
+
+        render_target.output_buffer[nth * grid_config.dimension_x * characters_per_cell + nth - 1] = '\n';
+    }
+};
+
+const BusyWorkSystem = struct {
+    pub fn system(
+        pos: GridPos,
+    ) void {
+        const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.turquoise);
+        defer zone.End();
+
+        for (0..10_000) |index| {
+            if (index == pos.x and index == pos.y) {
+                break;
+            }
+        }
+    }
+};
+
+const FlushBufferSystem = struct {
+    pub fn system(
+        flush: FlushTag,
+        render_target: ecez.SharedState(RenderTarget),
+    ) void {
+        const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.turquoise);
+        defer zone.End();
+
+        _ = flush;
+        std.log.info("\n{s}\n\n", .{render_target.output_buffer});
+    }
+};
+
+const UpdateCellSystem = struct {
+    pub fn system(
+        pos: GridPos,
+        health: *Health,
+        cell_iter: *CellIter,
+        invocation_id: ecez.InvocationCount,
+        grid_config: ecez.SharedState(GridConfig),
+    ) void {
+        const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.turquoise);
+        defer zone.End();
+
+        const cell_x: i32 = @intCast(pos.x);
+        const cell_y: i32 = @intCast(pos.y);
+
+        const current_index = cell_x + (cell_y * @as(i32, @intCast(grid_config.dimension_x)));
+        std.debug.assert(invocation_id.number == @as(u64, @intCast(current_index)));
+
+        const up = -@as(i32, @intCast(grid_config.dimension_x));
+        const left = -1;
+        const right = -left;
+        const down = -up;
+
+        const neighbour_index: usize = @intCast((health.active_cell_index + 1) % 2);
+        const write_index: usize = @intCast(health.active_cell_index);
+        defer health.active_cell_index = @intCast(neighbour_index);
+
+        var neighbour_sum: u8 = 0;
+
+        // check left neighbours
+        if (cell_x > 0) {
+            var cursor = current_index + left;
+            for ([_]i32{ down, up, up }) |offset| {
+                cursor += offset;
+                if (cursor >= 0 and cursor < grid_config.cell_count) {
+                    cell_iter.skip(@intCast(cursor));
+                    defer cell_iter.reset();
+
+                    const neighbour_health = cell_iter.next().?.health;
+                    const alive = neighbour_health.alive[neighbour_index];
+                    if (alive) {
+                        neighbour_sum += 1;
+                    }
+                }
+            }
+        }
+
+        // check right neighbours
+        if (cell_x < grid_config.dimension_x - 1) {
+            var cursor = current_index + right;
+            for ([_]i32{ down, up, up }) |offset| {
+                cursor += offset;
+                if (cursor >= 0 and cursor < grid_config.cell_count) {
+                    cell_iter.skip(@intCast(cursor));
+                    defer cell_iter.reset();
+
+                    const neighbour_health = cell_iter.next().?.health;
+                    const alive = neighbour_health.alive[neighbour_index];
+                    if (alive) {
+                        neighbour_sum += 1;
+                    }
+                }
+            }
+        }
+
+        // check up & down neighbours
+        for ([_]i32{ current_index + up, current_index + down }) |cursor| {
+            if (cursor >= 0 and cursor < grid_config.cell_count) {
+                cell_iter.skip(@intCast(cursor));
+                defer cell_iter.reset();
+
+                const neighbour_health = cell_iter.next().?.health;
+                const alive = neighbour_health.alive[neighbour_index];
+                if (alive) {
+                    neighbour_sum += 1;
+                }
+            }
+        }
+
+        health.alive[write_index] = blk: {
+            if (neighbour_sum == 2) {
+                break :blk health.alive[neighbour_index];
+            } else if (neighbour_sum == 3) {
+                break :blk true;
+            } else {
+                break :blk false;
+            }
+        };
+    }
+};
 
 test "systems produce expected 3x3 grid state" {
     var output_buffer: [3 * 3 * characters_per_cell + 3]u8 = undefined;
@@ -324,12 +343,12 @@ test "systems produce expected 3x3 grid state" {
             true,  true,  false,
             false, false, false,
         }, &cell_entities, 0..) |alive, *entity, i| {
-            entity.* = try storage.createEntity(.{
-                GridPos{
+            entity.* = try storage.createEntity(Cell{
+                .pos = GridPos{
                     .x = @intCast(i % grid_config.dimension_x),
                     .y = @intCast(i / grid_config.dimension_x),
                 },
-                Health{
+                .health = Health{
                     .alive = [_]bool{ alive, alive },
                     .active_cell_index = 0,
                 },
