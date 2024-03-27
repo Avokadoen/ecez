@@ -54,7 +54,6 @@ pub fn doc(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builti
         .install_dir = .prefix,
         .install_subdir = "doc/ecez",
     });
-    b.getInstallStep().dependOn(&install_docs.step);
 
     const docs_step = b.step("docs", "Build and install documentation");
     docs_step.dependOn(&install_docs.step);
