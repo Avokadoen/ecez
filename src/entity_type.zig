@@ -1,9 +1,13 @@
+/// Entity ID type
 pub const EntityId = u64;
+
+/// An opaque representation of a entity which can be used to interact with it
 pub const Entity = packed struct {
+    /// Unique ID of the entity
     id: EntityId,
 };
 
-/// used to retrieve a specific entity
+/// Used to retrieve the archetype of a specific entity
 pub const EntityRef = u16;
 
 pub const MapContext = struct {

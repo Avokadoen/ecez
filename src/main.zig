@@ -32,7 +32,7 @@ pub const Event = meta.Event;
 /// Allocator traced by tracy
 pub const tracy_alloc = @import("tracy_alloc.zig");
 
-// Ezby can be used to serialize and deserialize storages
+/// Ezby can be used to serialize and deserialize storages
 pub const ezby = @import("ezby.zig");
 
 test {

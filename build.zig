@@ -20,7 +20,7 @@ pub fn link(
             break :fetch_or_create_blk module;
         } else {
             break :fetch_or_create_blk b.addModule("ecez", std.Build.Module.CreateOptions{
-                .root_source_file = .{ .path = thisDir() ++ "/src/main.zig" },
+                .root_source_file = .{ .path = "src/main.zig" },
                 .imports = &[_]std.Build.Module.Import{ .{
                     .name = "ztracy",
                     .module = ztracy.module("root"),
@@ -39,6 +39,25 @@ pub fn link(
         exe.root_module.addImport("ztracy", ztracy.module("root"));
         exe.linkLibrary(ztracy.artifact("tracy"));
     }
+}
+
+/// Generate documentation if the user requests it
+pub fn doc(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
+    const autodoc_test = b.addObject(.{
+        .name = "ecez",
+        .root_source_file = .{ .path = "src/main.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    const install_docs = b.addInstallDirectory(.{
+        .source_dir = autodoc_test.getEmittedDocs(),
+        .install_dir = .prefix,
+        .install_subdir = "doc/ecez",
+    });
+    b.getInstallStep().dependOn(&install_docs.step);
+
+    const docs_step = b.step("docs", "Build and install documentation");
+    docs_step.dependOn(&install_docs.step);
 }
 
 /// Builds the project for testing and to run simple examples
@@ -69,6 +88,9 @@ pub fn build(b: *std.Build) void {
 
         b.installArtifact(main_tests);
     }
+
+    // generate documentation on demand
+    doc(b, target, optimize);
 
     // add library tests to the main tests
     const main_tests = b.addTest(.{
@@ -120,8 +142,4 @@ pub fn build(b: *std.Build) void {
         const example_test_run = b.addRunArtifact(example_tests);
         test_step.dependOn(&example_test_run.step);
     }
-}
-
-inline fn thisDir() []const u8 {
-    return comptime std.fs.path.dirname(@src().file) orelse ".";
 }

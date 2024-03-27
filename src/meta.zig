@@ -402,7 +402,7 @@ pub fn Event(comptime event_name: []const u8, comptime systems: anytype, comptim
         pub const system_count = system_count_blk: {
             const count = countAndVerifySystems(systems);
             if (count == 0) {
-                @compileError("event " ++ event_name ++ " has 0 systems");
+                @compileError("event " ++ event_name ++ " has 0 systems"); // keep in mind: non public functions will not be visible!
             }
             break :system_count_blk count;
         };
