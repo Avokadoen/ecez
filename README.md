@@ -48,11 +48,10 @@ Zig's comptime feature is utilized to perform static reflection on the usage of 
             ecez.Event("update_loop", .{
                 // Here AttackSystems is a struct with multiple functions which will be registered
                 AttackSystems,
-                // moveSystem is a single function that will be registered 
-                moveSystem,
+                MoveSystem,
                 // ...
             }, .{}),
-            ecez.Event("on_mouse_click", .{fireWandSystem}, .{MouseArg}),
+            ecez.Event("on_mouse_click", .{FireWandSystem}, .{MouseArg}),
         },
     )
 
@@ -66,7 +65,7 @@ Zig's comptime feature is utilized to perform static reflection on the usage of 
 
     // Dispatch event can take event "scoped" arguments, like here where we include a mouse event.
     // Events can also exclude components when executing systems. In this example we will not call
-    // "fireWandSystem" on any entity components if the entity has a MonsterTag component.
+    // "FireWandSystem" on any entity components if the entity has a MonsterTag component.
     scheduler.dispatchEvent(&storage, .on_mouse_click, .{@as(MouseArg, mouse)}, .{ MonsterTag });
 
     // Events/Systems execute asynchronously
@@ -264,18 +263,18 @@ You can use the ``DependOn`` function to communicate order of system execution.
         Storage,
         .{
             ecez.Event("update_loop", .{
-                // here we see that 'calculateDamage', 'printHelloWorld' and 'applyDrag'
+                // here we see that 'CalculateDamage', 'PrintHelloWorld' and 'ApplyDrag'
                 // can be executed in parallel
-                Systems.calculateDamage,
-                Systems.printHelloWorld,
+                CalculateDamage,
+                PrintHelloWorld,
                 // Apply drag reduce velocity over time
-                Systems.applyDrag,
+                ApplyDrag,
                 // Move moves all entities with a Postion and Velocity component. 
                 // We need to make sure any drag has been applied 
                 // to a velocity before applying velocity to the position. 
                 // We also have to make sure that a new "hello world" is visible in the 
                 // terminal as well because why not :)                       
-                ecez.DependOn(Systems.move, .{Systems.applyDrag, Systems.printHelloWorld}),
+                ecez.DependOn(Move, .{ApplyDrag, PrintHelloWorld}),
             }, .{}),
         },
     );
@@ -289,8 +288,8 @@ You can use the ``DependOn`` function to communicate order of system execution.
                 CombatSystemsStruct,
                 // Submit all physics systems in a single struct
                 PhysicsSystemsStruct,
-                // Submit all AI systems, wait for Physics and Combat.attack to complete
-                ecez.DependOn(AiSystemsStruct, .{PhysicsSystemsStruct, CombatSystemsStruct.attack}),
+                // Submit all AI systems, wait for Physics and Combat to complete
+                ecez.DependOn(AiSystemsStruct, .{PhysicsSystemsStruct, CombatSystemsStruct}),
             }, .{}),
         },
     );
