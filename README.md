@@ -22,6 +22,15 @@ zig build run-game-of-life
 
 ```
 
+## Zig documentation
+
+You can generate the ecez API documentation using `zig build docs`. This will produce some web resources in `zig-out/doc/ecez`. 
+You will need a local server to serve the documentation since browsers will block resources loaded by the index.html. 
+The simplest solution to this is just using a basic python server:
+```bash
+python -m http.server 8000 -d ecez/zig-out/doc/ecez # you can then access the documentation at http://localhost:8000/#ecez.main 
+```
+
 ## Features
 
 As mentioned, the current state of the API is very much Work in Progress (WIP). The framework is to some degree functional and can be played with. Current *implemented* features are:
