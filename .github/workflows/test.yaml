@@ -29,6 +29,9 @@ jobs:
 
       - name: Download zig
         run: sudo snap install zig --classic --edge
+      
+      - name: Log zig version
+        run: zig version
 
       # build examples to test for compile issues
       - name: Build examples 

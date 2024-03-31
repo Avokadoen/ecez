@@ -106,10 +106,9 @@ pub const CommonSystem = struct {
         shared_state_value,
     };
 
-    fn_info: FnInfo,
-    component_params_count: usize,
-    param_category_buffer: [max_params]ParamCategory,
+    params: []const FnInfo.Param,
     param_categories: []const ParamCategory,
+    component_params_count: usize,
     has_entity_argument: bool,
     has_invocation_count_argument: bool,
     returns_system_command: bool,
@@ -161,16 +160,17 @@ pub const CommonSystem = struct {
             break :param_type_unroll_blk types;
         };
 
-        var param_category_buffer: [32]ParamCategory = undefined;
-        const param_categories = param_category_buffer[0..fn_info.params.len];
-
-        const parse_result = parseParams(function_name, param_categories, &param_types);
+        const parse_result = parseParams(function_name, &param_types);
 
         return CommonSystem{
-            .fn_info = fn_info,
+            .params = fn_info.params,
+            .param_categories = param_cat_blk: {
+                var tmp: [parse_result.param_categories.len]ParamCategory = undefined;
+                @memcpy(&tmp, parse_result.param_categories);
+                const const_local = tmp;
+                break :param_cat_blk &const_local;
+            },
             .component_params_count = parse_result.component_params_count,
-            .param_category_buffer = param_category_buffer,
-            .param_categories = param_categories,
             .has_entity_argument = parse_result.has_entity_argument,
             .has_invocation_count_argument = parse_result.has_invocation_count_argument,
             .returns_system_command = returns_system_command,
@@ -184,7 +184,7 @@ pub const CommonSystem = struct {
         const end_index = self.component_params_count + start_index;
 
         comptime var params: [self.component_params_count]type = undefined;
-        inline for (&params, self.fn_info.params[start_index..end_index]) |*param, arg| {
+        inline for (&params, self.params[start_index..end_index]) |*param, arg| {
             switch (@typeInfo(arg.type.?)) {
                 .Pointer => |p| {
                     param.* = p.child;
@@ -200,8 +200,8 @@ pub const CommonSystem = struct {
     /// Get the argument types as requested
     /// This function will include pointer types
     pub fn paramArgTypes(comptime self: CommonSystem) [self.param_categories.len]type {
-        comptime var params: [self.fn_info.params.len]type = undefined;
-        inline for (self.fn_info.params, &params) |arg, *param| {
+        comptime var params: [self.params.len]type = undefined;
+        inline for (self.params, &params) |arg, *param| {
             param.* = arg.type.?;
         }
         return params;
@@ -211,10 +211,10 @@ pub const CommonSystem = struct {
         component_params_count: usize,
         has_entity_argument: bool,
         has_invocation_count_argument: bool,
+        param_categories: []const ParamCategory,
     };
     fn parseParams(
         comptime function_name: [:0]const u8,
-        comptime param_categories: []ParamCategory,
         comptime param_types: []const type,
     ) ParseParamResult {
         const ParsingState = enum {
@@ -227,14 +227,16 @@ pub const CommonSystem = struct {
             type: type,
         };
 
+        var param_categories: [param_types.len]ParamCategory = undefined;
         var result = ParseParamResult{
             .component_params_count = 0,
             .has_entity_argument = false,
             .has_invocation_count_argument = false,
+            .param_categories = &param_categories,
         };
 
         var parsing_state: ParsingState = .component_parsing;
-        inline for (param_categories, param_types, 0..) |*param, T, i| {
+        inline for (&param_categories, param_types, 0..) |*param, T, i| {
             if (i == 0 and T == Entity) {
                 param.* = ParamCategory.entity;
                 result.has_entity_argument = true;
@@ -489,9 +491,11 @@ pub fn countAndVerifyEvents(comptime events: anytype) comptime_int {
 
 pub fn GenerateEventsEnum(comptime event_count: comptime_int, comptime events: anytype) type {
     var enum_fields: [event_count]Type.EnumField = undefined;
+    const zero = [_]u8{0};
     inline for (&enum_fields, 0..) |*enum_field, i| {
+        const name = events[i].name ++ zero;
         enum_field.* = Type.EnumField{
-            .name = @ptrCast(events[i].name ++ [_]u8{0}),
+            .name = name[0..events[i].name.len :0],
             .value = i,
         };
     }
@@ -659,18 +663,14 @@ pub fn getNthSystem(comptime systems: anytype, comptime n: comptime_int) type {
     return systems_count;
 }
 
-fn SystemInfo(comptime system_count: comptime_int) type {
-    return struct {
-        const Self = @This();
-
-        // TODO: make size configurable
-        depend_on_indices_used: usize,
-        depend_on_index_pool: [system_count * system_count]u32,
-        metadata: [system_count]SystemMetadata,
-        function_types: [system_count]type,
-        functions: [system_count]*const anyopaque,
-    };
-}
+pub const SystemInfo = struct {
+    // TODO: make size configurable
+    depend_on_indices_used: usize,
+    depend_on_index_pool: []const u32,
+    metadata: []const SystemMetadata,
+    function_types: []const type,
+    functions: []const *const anyopaque,
+};
 
 /// Specifiy a dependency where a system depends on one or more systems
 /// Parameters:
@@ -685,21 +685,24 @@ pub fn DependOn(comptime system: anytype, comptime depend_on_systems: anytype) t
 }
 
 /// perform compile-time reflection on systems to extrapolate information about registered systems
-pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: anytype) SystemInfo(system_count) {
+pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: anytype) SystemInfo {
     const SystemsType = @TypeOf(systems);
     const systems_type_info = @typeInfo(SystemsType);
     const fields_info = systems_type_info.Struct.fields;
-    var systems_info: SystemInfo(system_count) = undefined;
 
-    systems_info.depend_on_indices_used = 0;
+    comptime var depend_on_indices_used: usize = 0;
+    comptime var depend_on_index_pool: [system_count * system_count]u32 = undefined;
+    comptime var metadata: [system_count]SystemMetadata = undefined;
+    comptime var function_types: [system_count]type = undefined;
+    comptime var functions: [system_count]*const anyopaque = undefined;
     {
         comptime var i: usize = 0;
         inline for (fields_info, 0..) |field_info, j| {
             switch (@typeInfo(field_info.type)) {
                 .Fn => |func| {
-                    systems_info.metadata[i] = SystemMetadata{ .common = CommonSystem.init(field_info.type, func) };
-                    systems_info.function_types[i] = field_info.type;
-                    systems_info.functions[i] = field_info.default_value.?;
+                    metadata[i] = SystemMetadata{ .common = CommonSystem.init(field_info.type, func) };
+                    function_types[i] = field_info.type;
+                    functions[i] = field_info.default_value.?;
                     i += 1;
                 },
                 .Type => {
@@ -711,10 +714,10 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                     const system_depend_on_count = countAndVerifySystems(dependency_functions);
 
                                     const depend_on_range = blk: {
-                                        const from = systems_info.depend_on_indices_used;
+                                        const from = depend_on_indices_used;
 
                                         var outer_field_index = 0;
-                                        inline while (systems_info.depend_on_indices_used - from < system_depend_on_count) {
+                                        inline while (depend_on_indices_used - from < system_depend_on_count) {
                                             switch (@typeInfo(@TypeOf(dependency_functions[outer_field_index]))) {
                                                 .Fn => |_| {
                                                     const dependency_function = dependency_functions[outer_field_index];
@@ -725,8 +728,8 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                                         );
                                                         @compileError(err_msg);
                                                     };
-                                                    systems_info.depend_on_index_pool[systems_info.depend_on_indices_used] = previous_system_info_index;
-                                                    systems_info.depend_on_indices_used += 1;
+                                                    depend_on_index_pool[depend_on_indices_used] = previous_system_info_index;
+                                                    depend_on_indices_used += 1;
 
                                                     outer_field_index += 1;
                                                 },
@@ -743,8 +746,8 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                                                     );
                                                                     @compileError(err_msg);
                                                                 };
-                                                                systems_info.depend_on_index_pool[systems_info.depend_on_indices_used] = previous_system_info_index;
-                                                                systems_info.depend_on_indices_used += 1;
+                                                                depend_on_index_pool[depend_on_indices_used] = previous_system_info_index;
+                                                                depend_on_indices_used += 1;
                                                             }
 
                                                             outer_field_index += 1;
@@ -755,8 +758,8 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                                 else => @compileError("DependOn dependencies must be function or struct"),
                                             }
                                         }
-                                        std.debug.assert(systems_info.depend_on_indices_used - from == system_depend_on_count);
-                                        const to = systems_info.depend_on_indices_used;
+                                        std.debug.assert(depend_on_indices_used - from == system_depend_on_count);
+                                        const to = depend_on_indices_used;
 
                                         break :blk DependOnSystem.Range{ .from = from, .to = to };
                                     };
@@ -767,11 +770,11 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
 
                                     switch (dep_system_decl_info) {
                                         .Fn => {
-                                            systems_info.metadata[i] = SystemMetadata{
+                                            metadata[i] = SystemMetadata{
                                                 .depend_on = DependOnSystem.init(depend_on_range, DepSystemDeclType, dep_system_decl_info.Fn),
                                             };
-                                            systems_info.function_types[i] = DepSystemDeclType;
-                                            systems_info.functions[i] = &dep_on_function;
+                                            function_types[i] = DepSystemDeclType;
+                                            functions[i] = &dep_on_function;
                                             i += 1;
                                         },
                                         .Type => {
@@ -783,11 +786,11 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                                         const decl_info = @typeInfo(DeclType);
                                                         switch (decl_info) {
                                                             .Fn => |fn_info| {
-                                                                systems_info.metadata[i] = SystemMetadata{
+                                                                metadata[i] = SystemMetadata{
                                                                     .depend_on = DependOnSystem.init(depend_on_range, DepSystemDeclType, fn_info),
                                                                 };
-                                                                systems_info.function_types[i] = DeclType;
-                                                                systems_info.functions[i] = &function;
+                                                                function_types[i] = DeclType;
+                                                                functions[i] = &function;
                                                                 i += 1;
                                                             },
                                                             else => {
@@ -812,9 +815,9 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                         const decl_info = @typeInfo(DeclType);
                                         switch (decl_info) {
                                             .Fn => |func| {
-                                                systems_info.metadata[i] = SystemMetadata{ .common = CommonSystem.init(DeclType, func) };
-                                                systems_info.function_types[i] = DeclType;
-                                                systems_info.functions[i] = &function;
+                                                metadata[i] = SystemMetadata{ .common = CommonSystem.init(DeclType, func) };
+                                                function_types[i] = DeclType;
+                                                functions[i] = &function;
                                                 i += 1;
                                             },
                                             else => {
@@ -841,7 +844,14 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
             }
         }
     }
-    return systems_info;
+
+    return SystemInfo{
+        .depend_on_indices_used = depend_on_indices_used,
+        .depend_on_index_pool = &globalArrayVariableRefWorkaround(depend_on_index_pool),
+        .metadata = &globalArrayVariableRefWorkaround(metadata),
+        .function_types = &globalArrayVariableRefWorkaround(function_types),
+        .functions = &globalArrayVariableRefWorkaround(functions),
+    };
 }
 
 /// Look for the index of a given function in a tuple of functions and structs of functions
@@ -1266,6 +1276,23 @@ pub inline fn comptimeOnlyFn() void {
     }
 }
 
+// Workaround for zig issue 19460:
+// https://github.com/ziglang/zig/issues/19460
+fn globalArrayVariableRefWorkaround(array: anytype) @TypeOf(array) {
+    const ArrayType = @TypeOf(array);
+    const arr_info = @typeInfo(ArrayType);
+
+    var tmp: ArrayType = undefined;
+    switch (arr_info) {
+        .Array => {
+            @memcpy(&tmp, &array);
+        },
+        else => @compileError("ecez bug: invalid " ++ @src().fn_name ++ " array type" ++ @typeName(ArrayType)),
+    }
+    const const_local = tmp;
+    return const_local;
+}
+
 test "CommonSystem componentQueryArgTypes results in queryable types" {
     const A = struct {};
     const B = struct {};
@@ -1294,7 +1321,7 @@ test "CommonSystem componentQueryArgTypes results in queryable types" {
     };
 
     inline for (metadatas) |metadata| {
-        const params = metadata.componentQueryArgTypes();
+        const params = comptime metadata.componentQueryArgTypes();
 
         try testing.expectEqual(params.len, 2);
         try testing.expectEqual(A, params[0]);
@@ -1330,17 +1357,17 @@ test "CommonSystem paramArgTypes results in pointer types" {
     };
 
     {
-        const params = metadatas[0].paramArgTypes();
+        const params = comptime metadatas[0].paramArgTypes();
         try testing.expectEqual(A, params[0]);
         try testing.expectEqual(B, params[1]);
     }
     {
-        const params = metadatas[1].paramArgTypes();
+        const params = comptime metadatas[1].paramArgTypes();
         try testing.expectEqual(*A, params[0]);
         try testing.expectEqual(B, params[1]);
     }
     {
-        const params = metadatas[2].paramArgTypes();
+        const params = comptime metadatas[2].paramArgTypes();
         try testing.expectEqual(A, params[0]);
         try testing.expectEqual(*B, params[1]);
     }
