@@ -3,7 +3,6 @@ const FnInfo = std.builtin.Type.Fn;
 const Type = std.builtin.Type;
 
 const testing = std.testing;
-
 const Entity = @import("entity_type.zig").Entity;
 
 const secret_field = "secret_field";
@@ -23,11 +22,13 @@ pub const ArgType = enum {
     query,
     query_iter,
     shared_state,
+    storage_edit_queue,
 };
 
 pub const SystemType = enum {
     common,
     depend_on,
+    flush_storage_edit_queue,
     event,
 };
 
@@ -37,27 +38,32 @@ pub const SystemMetadata = union(SystemType) {
     common: CommonSystem,
     /// A system that will be blocked until the tagged systems finish executing
     depend_on: DependOnSystem,
+    /// A system defined by ecez which *only* has the storage edit queue as an argument.
+    /// This system simply flushes the storage after all systems called before it are done executing
+    flush_storage_edit_queue: CommonSystem,
     /// Metadata for any event is a collection of the other types
     event: void,
 
     /// Get the argument types as proper component types
     /// This function will extrapolate inner types from pointers
     pub fn componentQueryArgTypes(comptime self: SystemMetadata) []const type {
-        switch (self) {
-            .common => |common| return &common.componentQueryArgTypes(),
-            .depend_on => |depend_on| return &depend_on.common.componentQueryArgTypes(),
+        return switch (self) {
+            .common => |common| &common.componentQueryArgTypes(),
+            .depend_on => |depend_on| &depend_on.common.componentQueryArgTypes(),
             .event => @compileError("ecez library bug, please file a issue if you hit this error"),
-        }
+            .flush_storage_edit_queue => &[0]type{}, // mock component query, we will never use this data, but it needs atleast 1 element
+        };
     }
 
     /// Get the argument types as requested
     /// This function will include pointer types
     pub fn paramArgTypes(comptime self: SystemMetadata) []const type {
-        switch (self) {
-            .common => |common| return &common.paramArgTypes(),
-            .depend_on => |depend_on| return &depend_on.common.paramArgTypes(),
+        return switch (self) {
+            .common => |common| &common.paramArgTypes(),
+            .depend_on => |depend_on| &depend_on.common.paramArgTypes(),
             .event => @compileError("ecez library bug, please file a issue if you hit this error"),
-        }
+            .flush_storage_edit_queue => |flush_storage_edit_queue| &flush_storage_edit_queue.paramArgTypes(),
+        };
     }
 
     pub fn paramCategories(comptime self: SystemMetadata) []const CommonSystem.ParamCategory {
@@ -65,31 +71,35 @@ pub const SystemMetadata = union(SystemType) {
             .common => |common| common.param_categories,
             .depend_on => |depend_on| depend_on.common.param_categories,
             .event => @compileError("ecez library bug, please file a issue if you hit this error"),
+            .flush_storage_edit_queue => |flush_storage_edit_queue| flush_storage_edit_queue.param_categories,
         };
     }
 
     pub fn hasEntityArgument(comptime self: SystemMetadata) bool {
-        switch (self) {
-            .common => |common| return common.has_entity_argument,
-            .depend_on => |depend_on| return depend_on.common.has_entity_argument,
+        return switch (self) {
+            .common => |common| common.has_entity_argument,
+            .depend_on => |depend_on| depend_on.common.has_entity_argument,
             .event => @compileError("ecez library bug, please file a issue if you hit this error"),
-        }
+            .flush_storage_edit_queue => |_| false,
+        };
     }
 
     pub fn hasInvocationCount(comptime self: SystemMetadata) bool {
-        switch (self) {
-            .common => |common| return common.has_invocation_count_argument,
-            .depend_on => |depend_on| return depend_on.common.has_invocation_count_argument,
+        return switch (self) {
+            .common => |common| common.has_invocation_count_argument,
+            .depend_on => |depend_on| depend_on.common.has_invocation_count_argument,
             .event => @compileError("ecez library bug, please file a issue if you hit this error"),
-        }
+            .flush_storage_edit_queue => false,
+        };
     }
 
     pub fn returnSystemCommand(comptime self: SystemMetadata) bool {
-        switch (self) {
-            .common => |common| return common.returns_system_command,
-            .depend_on => |depend_on| return depend_on.common.returns_system_command,
+        return switch (self) {
+            .common => |common| common.returns_system_command,
+            .depend_on => |depend_on| depend_on.common.returns_system_command,
             .event => @compileError("ecez library bug, please file a issue if you hit this error"),
-        }
+            .flush_storage_edit_queue => false,
+        };
     }
 };
 
@@ -104,6 +114,7 @@ pub const CommonSystem = struct {
         query_ptr,
         shared_state_ptr,
         shared_state_value,
+        storage_edit_queue,
     };
 
     params: []const FnInfo.Param,
@@ -297,7 +308,6 @@ pub const CommonSystem = struct {
                     },
                     .invocation_number => {
                         if (parse_set_states.set == .ptr) {
-                            // TODO: should this be allowed?
                             @compileError("invocation number can't be mutated by system");
                         }
 
@@ -315,6 +325,15 @@ pub const CommonSystem = struct {
                         parsing_state = .special_arguments;
                         break :special_parse_blk true;
                     },
+                    .storage_edit_queue => {
+                        if (parse_set_states.set == .value) {
+                            @compileError("StorageEditQueue must be mutable (hint: use pointer '*')");
+                        }
+
+                        param.* = ParamCategory.storage_edit_queue;
+                        parsing_state = .special_arguments;
+                        break :special_parse_blk true;
+                    },
                     .query => @compileError("Query is not legal, use Query.Iter instead"),
                     .presumed_component => break :special_parse_blk false,
                 }
@@ -325,13 +344,16 @@ pub const CommonSystem = struct {
                 if (parsing_state == .special_arguments) {
                     const pre_arg_str = switch (param_categories[i - 1]) {
                         .component_ptr, .component_value => unreachable,
-                        .event_argument_value => "event",
+                        .event_argument_ptr, .event_argument_value => "event",
                         .shared_state_ptr, .shared_state_value => "shared state",
-                        else => {},
+                        .storage_edit_queue => "storage edit queue",
+                        .entity => "entity",
+                        .invocation_number_value => "invocation number",
+                        .query_ptr => "query",
                     };
                     const err_msg = std.fmt.comptimePrint("system {s} argument {d} is a component but comes after {s}", .{
                         function_name,
-                        i,
+                        i + 1,
                         pre_arg_str,
                     });
                     @compileError(err_msg);
@@ -556,18 +578,13 @@ pub fn countAndVerifySystems(comptime systems: anytype) comptime_int {
                                     else => @compileError("DependOn's system must be a function, or struct type of functions"),
                                 }
                             },
-                            .common => {
+                            .common, .flush_storage_edit_queue => {
                                 // it's not a DependOn, or Zip struct, check each member of the struct to find functions
                                 inline for (stru.decls) |decl| {
                                     const DeclType = @TypeOf(@field(systems[i], decl.name));
                                     switch (@typeInfo(DeclType)) {
                                         .Fn => systems_count += 1,
-                                        else => {
-                                            const err_msg = std.fmt.comptimePrint("CreateScheduler expected type of functions, got member {s}", .{
-                                                @typeName(DeclType),
-                                            });
-                                            @compileError(err_msg);
-                                        },
+                                        else => {},
                                     }
                                 }
                             },
@@ -620,8 +637,8 @@ pub fn getNthSystem(comptime systems: anytype, comptime n: comptime_int) type {
                             .depend_on => {
                                 @compileError("illegal use of DependOn");
                             },
-                            .common => {
-                                // it's not a DependOn, or Zip struct, check each member of the struct to find functions
+                            .common, .flush_storage_edit_queue => {
+                                // it's not a DependOncheck each member of the struct to find functions
                                 inline for (stru.decls) |decl| {
                                     const DeclType = @TypeOf(@field(systems[i], decl.name));
                                     switch (@typeInfo(DeclType)) {
@@ -631,12 +648,7 @@ pub fn getNthSystem(comptime systems: anytype, comptime n: comptime_int) type {
                                             }
                                             systems_count += 1;
                                         },
-                                        else => {
-                                            const err_msg = std.fmt.comptimePrint("CreateScheduler expected type of functions, got member {s}", .{
-                                                @typeName(DeclType),
-                                            });
-                                            @compileError(err_msg);
-                                        },
+                                        else => {},
                                     }
                                 }
                             },
@@ -665,8 +677,8 @@ pub fn getNthSystem(comptime systems: anytype, comptime n: comptime_int) type {
 
 pub const SystemInfo = struct {
     // TODO: make size configurable
-    depend_on_indices_used: usize,
     depend_on_index_pool: []const u32,
+    flush_indices: []const u32,
     metadata: []const SystemMetadata,
     function_types: []const type,
     functions: []const *const anyopaque,
@@ -684,6 +696,19 @@ pub fn DependOn(comptime system: anytype, comptime depend_on_systems: anytype) t
     };
 }
 
+/// Specifiy storage edit queue flush in a schedule pipeline
+/// Parameters:
+///     - Storage: the storage type
+pub fn FlushEditQueue(Storage: type) type {
+    return struct {
+        pub const secret_field = SystemType.flush_storage_edit_queue;
+
+        pub fn flush(storage: *Storage) void {
+            storage.flushStorageQueue() catch unreachable;
+        }
+    };
+}
+
 /// perform compile-time reflection on systems to extrapolate information about registered systems
 pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: anytype) SystemInfo {
     const SystemsType = @TypeOf(systems);
@@ -692,6 +717,8 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
 
     comptime var depend_on_indices_used: usize = 0;
     comptime var depend_on_index_pool: [system_count * system_count]u32 = undefined;
+    comptime var flush_count: usize = 0;
+    comptime var flush_indices: [system_count]u32 = undefined;
     comptime var metadata: [system_count]SystemMetadata = undefined;
     comptime var function_types: [system_count]type = undefined;
     comptime var functions: [system_count]*const anyopaque = undefined;
@@ -830,6 +857,24 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                     }
                                 },
                                 .event => @compileError("nested events are not allowed"),
+                                .flush_storage_edit_queue => {
+                                    inline for (stru.decls) |decl| {
+                                        const function = @field(systems[j], decl.name);
+                                        const DeclType = @TypeOf(function);
+                                        const decl_info = @typeInfo(DeclType);
+                                        switch (decl_info) {
+                                            .Fn => |func| {
+                                                metadata[i] = SystemMetadata{ .flush_storage_edit_queue = CommonSystem.init(DeclType, func) };
+                                                function_types[i] = DeclType;
+                                                functions[i] = &function;
+                                                flush_indices[flush_count] = i;
+                                                flush_count += 1;
+                                                i += 1;
+                                            },
+                                            else => {},
+                                        }
+                                    }
+                                },
                             }
                         },
                         else => {
@@ -846,8 +891,8 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
     }
 
     return SystemInfo{
-        .depend_on_indices_used = depend_on_indices_used,
-        .depend_on_index_pool = &globalArrayVariableRefWorkaround(depend_on_index_pool),
+        .depend_on_index_pool = globalArrayVariableRefWorkaround(depend_on_index_pool)[0..depend_on_indices_used],
+        .flush_indices = globalArrayVariableRefWorkaround(flush_indices)[0..flush_count],
         .metadata = &globalArrayVariableRefWorkaround(metadata),
         .function_types = &globalArrayVariableRefWorkaround(function_types),
         .functions = &globalArrayVariableRefWorkaround(functions),

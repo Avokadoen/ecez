@@ -10,6 +10,7 @@ const archetype_container = @import("archetype_container.zig");
 const opaque_archetype = @import("opaque_archetype.zig");
 const Entity = @import("entity_type.zig").Entity;
 const iterator = @import("iterator.zig");
+const storage_edit_queue = @import("storage_edit_queue.zig");
 
 pub fn CreateStorage(
     comptime components: anytype,
@@ -41,12 +42,14 @@ pub fn CreateStorage(
         pub const Container = archetype_container.FromComponents(&component_type_array, ComponentMask);
         pub const OpaqueArchetype = opaque_archetype.FromComponentMask(ComponentMask);
         pub const SharedStateStorage = meta.SharedStateStorage(shared_state_types);
+        pub const StorageEditQueue = storage_edit_queue.StorageEditQueue(&component_type_array);
 
         const Storage = @This();
 
         allocator: Allocator,
         container: Container,
         shared_state: SharedStateStorage,
+        storage_queue: StorageEditQueue,
 
         /// intialize the storage structure
         /// Parameters:
@@ -82,6 +85,7 @@ pub fn CreateStorage(
                 .allocator = allocator,
                 .container = container,
                 .shared_state = actual_shared_state,
+                .storage_queue = .{ .allocator = allocator },
             };
         }
 
@@ -90,6 +94,7 @@ pub fn CreateStorage(
             defer zone.End();
 
             self.container.deinit();
+            self.storage_queue.clearAndFree();
         }
 
         /// Clear storage memory for reuse. **All entities will become invalid**.
@@ -469,6 +474,26 @@ pub fn CreateStorage(
                             @compileError(error_message);
                         }
                     }
+                }
+            }
+        }
+
+        /// Apply all queued work onto the storage
+        pub fn flushStorageQueue(self: *Storage) error{ EntityMissing, OutOfMemory }!void {
+            inline for (components) |Component| {
+                var queue = &@field(self.storage_queue.queues, @typeName(Component));
+                defer queue.clearRetainingCapacity();
+
+                for (queue.create_entity_queue.items) |create_entity_job| {
+                    _ = try self.createEntity(create_entity_job);
+                }
+
+                for (queue.set_component_queue.items) |set_component_job| {
+                    _ = try self.setComponent(set_component_job.entity, set_component_job.component);
+                }
+
+                for (queue.remove_component_queue.items) |remove_component_job| {
+                    _ = try self.removeComponent(remove_component_job.entity, Component);
                 }
             }
         }
@@ -1088,6 +1113,62 @@ test "query with entity and include and exclude only works" {
             index += 1;
         }
     }
+}
+
+test "StorageEditQueue flushStorageQueue applies all queued changes" {
+    // Create storage
+    var storage = try StorageStub.init(testing.allocator, .{});
+    defer storage.deinit();
+
+    // populate storage with a entity with component A, and one with component B
+    const entity1 = blk: {
+        const initial_state = AEntityType{
+            .a = Testing.Component.A{ .value = 0 },
+        };
+        break :blk try storage.createEntity(initial_state);
+    };
+
+    const entity2 = blk: {
+        const initial_state = BEntityType{
+            .b = Testing.Component.B{ .value = 0 },
+        };
+        break :blk try storage.createEntity(initial_state);
+    };
+
+    // queue update component A with new value
+    const a_component = Testing.Component.A{ .value = 42 };
+    {
+        try storage.storage_queue.queueSetComponent(entity1, a_component);
+    }
+
+    // queue create 2 new entities
+    {
+        try storage.storage_queue.queueCreateEntity(Testing.Component.A{});
+        try storage.storage_queue.queueCreateEntity(Testing.Component.A{});
+    }
+
+    // queue removal of component B from entity2
+    {
+        try storage.storage_queue.queueRemoveComponent(entity2, Testing.Component.B);
+    }
+
+    // flush storage_queue
+    try storage.flushStorageQueue();
+
+    // flush a few more times to make sure changes are only applied once
+    try storage.flushStorageQueue();
+    try storage.flushStorageQueue();
+    try storage.flushStorageQueue();
+
+    // expect set component to have updated component value of entity1
+    const stored_a = try storage.getComponent(entity1, Testing.Component.A);
+    try testing.expectEqual(a_component, stored_a);
+
+    // expect storage to have a total of 4 (2 directly made, 2 made by the queue flush) entities
+    try testing.expectEqual(@as(usize, 4), storage.container.entity_references.items.len);
+
+    // expect entity2 to not have B anymore
+    try testing.expectEqual(false, storage.hasComponent(entity2, Testing.Component.B));
 }
 
 // this reproducer never had an issue filed, so no issue number

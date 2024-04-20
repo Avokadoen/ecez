@@ -29,6 +29,11 @@ pub const EventArgument = meta.EventArgument;
 /// Mark an event by name, systems to execute and any unique event data the systems need
 pub const Event = meta.Event;
 
+/// A builtin system that flushes any queued storage edits
+/// This incurs a "pipeline bubble" as any system before this system must complete,
+/// and any system after the FlushEditQueue must wait on this flush.
+pub const FlushEditQueue = meta.FlushEditQueue;
+
 /// Allocator traced by tracy
 pub const tracy_alloc = @import("tracy_alloc.zig");
 
@@ -44,4 +49,5 @@ test {
     _ = @import("storage.zig");
     _ = @import("scheduler.zig");
     _ = @import("meta.zig");
+    _ = @import("storage_edit_queue.zig");
 }
