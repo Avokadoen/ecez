@@ -94,6 +94,7 @@ Systems can have arguments that have a unique semantical meaning:
  * SharedState - data that is global to the world instance
  * Queries - the same queries described [below](#queries)
  * InvocationCount - how many times the system has been executed for the current dispatch
+ * Storage.StorageEditQueue - Any storage type has a StorageEditQueue which can be included as a system argument pointer allowing storage edits
 
  ##### Examples 
 
@@ -138,7 +139,7 @@ Example of SharedState
         .{
             KillCounter,
         }
-    )
+    );
     const Scheduler = ecez.CreateScheduler(
         Storage,
         .{
@@ -231,6 +232,33 @@ Example of InvocationCount
     };
 ```
 
+Example of Storage.StorageEditQueue
+```zig
+const Storage = ecez.CreateStorage(
+    .{
+        // ... Components
+    },
+    .{}
+);
+const System = struct {
+    // Keep in mind it *must* be a pointer
+    pub fn system(entity: Entity, health: HealthComponent, storage_edit: *Storage.StorageEditQueue) void {
+        if (health.value <= 0) {
+            storage_edit.queueSetComponent(entity, RagdollComponent);
+        }
+    }
+};
+
+const Scheduler = ecez.CreateScheduler(
+    Storage,
+    .{
+        ecez.Event("onUpdate", .{
+            System,
+            ecez.FlushEditQueue, // FlushEditQueue will ensure any queued storage work will start & finish 
+        }, .{}),
+    }
+);
+```
 
 You can have multiple queries in a single system, and have systems with only query parameters.
 

@@ -173,15 +173,54 @@ pub fn CreateScheduler(
                     switch (metadata) {
                         .depend_on => |depend_on_metadata| {
                             const indices = comptime depend_on_metadata.getIndexRange(triggered_event);
-                            var jobs: [indices.len]JobId = undefined;
+                            var jobs: [triggered_event.systems_info.metadata.len]JobId = undefined;
                             inline for (indices, 0..) |index, i| {
                                 jobs[i] = event_jobs_in_flight[index];
                             }
 
-                            break :job_dep_blk self.execution_job_queue.combine(&jobs) catch JobId.none;
+                            comptime var prev_flush_count: u32 = 0;
+                            if (triggered_event.systems_info.flush_indices.len > 0) {
+                                const flush_from = triggered_event.systems_info.flush_indices.len;
+                                const flush_to = flush_from + indices.len;
+                                flush_loop: inline for (jobs[flush_from..flush_to], triggered_event.systems_info.flush_indices) |*job, flush_index| {
+                                    if (flush_index >= system_index) {
+                                        break :flush_loop;
+                                    }
+
+                                    job.* = event_jobs_in_flight[flush_index + indices.len];
+                                    prev_flush_count += 1;
+                                }
+                            }
+
+                            break :job_dep_blk self.execution_job_queue.combine(jobs[0 .. indices.len + prev_flush_count]) catch std.debug.panic("ecez bug: depend on failed to combine jobs", .{});
                         },
-                        .common => break :job_dep_blk JobId.none,
-                        .event => break :job_dep_blk JobId.none,
+                        .flush_storage_edit_queue => {
+                            var jobs: [triggered_event.systems_info.metadata.len]JobId = undefined;
+                            for (&jobs, event_jobs_in_flight[0 .. system_index + 1]) |*job, job_in_flight| {
+                                job.* = job_in_flight;
+                            }
+
+                            break :job_dep_blk self.execution_job_queue.combine(jobs[0 .. system_index + 1]) catch std.debug.panic("ecez bug: failed to combine previous jobs in flush", .{});
+                        },
+                        .common, .event => {
+                            if (triggered_event.systems_info.flush_indices.len == 0) {
+                                break :job_dep_blk JobId.none;
+                            }
+
+                            // depend on all previous jobs if we have a flush
+                            var jobs: [triggered_event.systems_info.flush_indices.len]JobId = undefined;
+                            comptime var prev_flush_count: u32 = 0;
+                            flush_loop: inline for (&jobs, triggered_event.systems_info.flush_indices) |*job, flush_index| {
+                                if (flush_index >= system_index) {
+                                    break :flush_loop;
+                                }
+
+                                job.* = event_jobs_in_flight[flush_index];
+                                prev_flush_count += 1;
+                            }
+
+                            break :job_dep_blk self.execution_job_queue.combine(jobs[0..prev_flush_count]) catch std.debug.panic("ecez bug: failed to combine flush jobs", .{});
+                        },
                     }
                 };
 
@@ -241,6 +280,16 @@ pub fn CreateScheduler(
                 pub fn exec(self_job: *@This()) void {
                     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
                     defer zone.End();
+
+                    if (metadata == .flush_storage_edit_queue) {
+                        // if this is a debug build we do not want inline (to get better error messages), otherwise inline systems for performance
+                        const system_call_modidifer: std.builtin.CallModifier = if (@import("builtin").mode == .Debug) .never_inline else .always_inline;
+
+                        const system_ptr: FuncType = @ptrCast(func);
+                        @call(system_call_modidifer, system_ptr.*, .{self_job.storage});
+
+                        return;
+                    }
 
                     const param_types = comptime metadata.paramArgTypes();
                     var arguments: std.meta.Tuple(param_types) = undefined;
@@ -312,6 +361,7 @@ pub fn CreateScheduler(
                                     .event_argument_ptr => arguments[nth_argument] = @as(*meta.EventArgument(extra_argument_child_type), @ptrCast(self_job.extra_argument)),
                                     .shared_state_value => arguments[nth_argument] = self_job.storage.getSharedStateWithOuterType(Param),
                                     .shared_state_ptr => arguments[nth_argument] = self_job.storage.getSharedStatePtrWithSharedStateType(Param),
+                                    .storage_edit_queue => arguments[nth_argument] = &self_job.storage.storage_queue,
                                 }
                             }
 
@@ -678,7 +728,7 @@ test "events call systems" {
     );
 }
 
-test "events can access shared state" {
+test "systems can access shared state" {
     const A = Testing.Component.A;
     // define a system type
     const SystemType = struct {
@@ -710,7 +760,7 @@ test "events can access shared state" {
     try testing.expectEqual(shared_a, try storage.getComponent(entity, A));
 }
 
-test "events can mutate shared state" {
+test "systems can mutate shared state" {
     const A = struct { value: u8 };
     // define a system type
     const SystemType = struct {
@@ -738,7 +788,7 @@ test "events can mutate shared state" {
     try testing.expectEqual(@as(u8, 2), storage.shared_state[0].value);
 }
 
-test "event can have many shared state" {
+test "systems can have many shared state" {
     const A = Testing.Component.A;
     const B = Testing.Component.B;
     const D = struct { value: u8 };
@@ -818,7 +868,52 @@ test "event can have many shared state" {
     try testing.expectEqual(B{ .value = 12 }, try storage.getComponent(entity_b, B));
 }
 
-test "events can access current entity" {
+test "systems can access edit queue" {
+    const A = Testing.Component.A;
+    const B = Testing.Component.B;
+
+    // define a system type
+    const SystemType1 = struct {
+        // foreach entity with A
+        pub fn system(entity: Entity, a: A, edit_queue: *StorageStub.StorageEditQueue) void {
+            // remove A
+            edit_queue.queueRemoveComponent(entity, A) catch unreachable;
+            // add B with a.value + 1
+            edit_queue.queueSetComponent(entity, B{ .value = @intCast(a.value + 1) }) catch unreachable;
+        }
+    };
+
+    var storage = try StorageStub.init(
+        testing.allocator,
+        .{},
+    );
+    defer storage.deinit();
+
+    const OnFooEvent = Event("onFoo", .{
+        SystemType1,
+        meta.FlushEditQueue(StorageStub),
+    }, .{});
+    var scheduler = CreateScheduler(StorageStub, .{OnFooEvent}).init();
+    defer scheduler.deinit();
+
+    var entities: [128]Entity = undefined;
+    for (&entities, 0..) |*entity, index| {
+        const initial_state = AEntityType{
+            .a = A{ .value = @intCast(index) },
+        };
+        entity.* = try storage.createEntity(initial_state);
+    }
+
+    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.waitEvent(.onFoo);
+
+    for (entities, 0..) |entity, index| {
+        try testing.expect(storage.hasComponent(entity, Testing.Component.A) == false);
+        try testing.expectEqual(B{ .value = @intCast(index + 1) }, try storage.getComponent(entity, Testing.Component.B));
+    }
+}
+
+test "systems can access current entity" {
     // define a system type
     const SystemType = struct {
         pub fn systemOne(entity: Entity, a: *Testing.Component.A) void {
@@ -854,7 +949,7 @@ test "events can access current entity" {
     }
 }
 
-test "events entity access remain correct after single removeComponent" {
+test "systems entity access remain correct after single removeComponent" {
     // define a system type
     const SystemType = struct {
         pub fn systemOne(entity: Entity, a: *Testing.Component.A) void {
@@ -893,7 +988,7 @@ test "events entity access remain correct after single removeComponent" {
     }
 }
 
-test "events can accepts event related data" {
+test "systems can accepts event related data" {
     const MouseInput = struct {
         x: u32,
         y: u32,
