@@ -298,6 +298,8 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             // remove entity from entity map
             const moving_kv = self.entities.fetchSwapRemove(entity) orelse return error.EntityMissing;
 
+            const entity_count = self.entities.count();
+
             var bitmask = self.component_bitmask;
             var cursor: u32 = 0;
             for (self.component_storage) |*storage| {
@@ -313,22 +315,21 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
                     continue;
                 }
 
-                // copy data to buffer
-                const remove_bytes = remove_slice_calc_blk: {
-                    const remove_from_bytes = moving_kv.value * component_size;
-                    const remove_to_bytes = remove_from_bytes + component_size;
-                    const bytes = storage.items[remove_from_bytes..remove_to_bytes];
-                    break :remove_slice_calc_blk bytes;
-                };
-
-                const entity_count = self.entities.count();
-                if (entity_count > 0) {
+                const not_last_entry_in_storage = moving_kv.value != entity_count;
+                if (entity_count > 0 and not_last_entry_in_storage) {
+                    const remove_bytes = remove_slice_calc_blk: {
+                        const remove_from_bytes = moving_kv.value * component_size;
+                        const remove_to_bytes = remove_from_bytes + component_size;
+                        const bytes = storage.items[remove_from_bytes..remove_to_bytes];
+                        break :remove_slice_calc_blk bytes;
+                    };
                     // remove data from storage, by overwriting it with the swapped entity bytes
                     const moved_bytes = slice_calc_blk: {
                         const moved_from_bytes = entity_count * component_size;
                         const moved_to_bytes = moved_from_bytes + component_size;
                         break :slice_calc_blk storage.items[moved_from_bytes..moved_to_bytes];
                     };
+
                     @memcpy(remove_bytes, moved_bytes);
                 }
 
