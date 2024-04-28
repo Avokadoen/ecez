@@ -65,7 +65,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // initialize tracy
-    const enable_tracy = b.option(bool, "enable-tracy", "Enable Tracy profiler") orelse false;
+    const enable_tracy = b.option(bool, "enable_tracy", "Enable Tracy profiler") orelse false;
 
     const ztracy = b.dependency("ztracy", .{
         .enable_ztracy = enable_tracy,
