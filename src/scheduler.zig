@@ -38,7 +38,7 @@ pub fn CreateScheduler(
         }
 
         break :blk @Type(Type{ .Struct = .{
-            .layout = .auto,
+            .layout = .Auto,
             .fields = &fields,
             .decls = &[0]Type.Declaration{},
             .is_tuple = true,

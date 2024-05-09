@@ -1011,7 +1011,7 @@ pub fn ComponentStorage(comptime types: []const type) type {
         };
     }
     const RtrTypeInfo = Type{ .Struct = .{
-        .layout = .auto,
+        .layout = .Auto,
         .fields = &struct_fields,
         .decls = &[0]Type.Declaration{},
         .is_tuple = true,
@@ -1032,7 +1032,7 @@ pub fn ComponentStruct(comptime field_names: []const []const u8, comptime types:
         };
     }
     const RtrTypeInfo = Type{ .Struct = .{
-        .layout = .auto,
+        .layout = .Auto,
         .fields = &struct_fields,
         .decls = &[0]Type.Declaration{},
         .is_tuple = false,
@@ -1211,7 +1211,7 @@ pub fn SharedStateStorage(comptime shared_state: anytype) type {
     }
 
     return @Type(Type{ .Struct = .{
-        .layout = .auto,
+        .layout = .Auto,
         .fields = &storage_fields,
         .decls = &[0]Type.Declaration{},
         .is_tuple = true,
@@ -1258,7 +1258,7 @@ pub fn SharedState(comptime State: type) type {
             }, shared_state_tag_field };
 
             return @Type(Type{ .Struct = .{
-                .layout = .auto,
+                .layout = .Auto,
                 .fields = &shared_state_fields,
                 .decls = &[0]Type.Declaration{},
                 .is_tuple = false,

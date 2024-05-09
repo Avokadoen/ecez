@@ -28,7 +28,7 @@ pub fn StorageEditQueue(comptime components: []const type) type {
         }
 
         const struct_type = std.builtin.Type.Struct{
-            .layout = .auto,
+            .layout = .Auto,
             .fields = &fields,
             .decls = &[0]std.builtin.Type.Declaration{},
             .is_tuple = false,
