@@ -12,10 +12,7 @@ const Entity = @import("entity_type.zig").Entity;
 const iterator = @import("iterator.zig");
 const storage_edit_queue = @import("storage_edit_queue.zig");
 
-pub fn CreateStorage(
-    comptime components: anytype,
-    comptime shared_state_types: anytype,
-) type {
+pub fn CreateStorage(comptime components: anytype) type {
     return struct {
         // a flat array of the type of each field in the components tuple
         pub const component_type_array = verify_and_extract_field_types_blk: {
@@ -37,45 +34,24 @@ pub fn CreateStorage(
             }
             break :verify_and_extract_field_types_blk field_types;
         };
+
         pub const ComponentMask = meta.BitMaskFromComponents(&component_type_array);
         pub const Container = archetype_container.FromComponents(&component_type_array, ComponentMask);
         pub const OpaqueArchetype = opaque_archetype.FromComponentMask(ComponentMask);
-        pub const SharedStateStorage = meta.SharedStateStorage(shared_state_types);
         pub const StorageEditQueue = storage_edit_queue.StorageEditQueue(&component_type_array);
 
         const Storage = @This();
 
         allocator: Allocator,
         container: Container,
-        shared_state: SharedStateStorage,
         storage_queue: StorageEditQueue,
 
         /// intialize the storage structure
         /// Parameters:
         ///     - allocator: allocator used when initiating entities
-        ///     - shared_state: a tuple with an initial state for ALL shared state data declared when constructing storage type
-        pub fn init(allocator: Allocator, shared_state: anytype) error{OutOfMemory}!Storage {
+        pub fn init(allocator: Allocator) error{OutOfMemory}!Storage {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
-
-            var actual_shared_state: SharedStateStorage = undefined;
-            const shared_state_map = meta.typeMap(shared_state_types, @TypeOf(shared_state));
-            inline for (shared_state_map, 0..) |index, i| {
-                const shared_info = @typeInfo(@TypeOf(shared_state[index]));
-
-                switch (shared_info) {
-                    .Struct => |struct_info| {
-                        // copy all data except the added magic field
-                        inline for (struct_info.fields) |field| {
-                            @field(actual_shared_state[i], field.name) = @field(shared_state[index], field.name);
-                        }
-                    },
-                    .Pointer => |_| {
-                        actual_shared_state[i].ptr = shared_state[index];
-                    },
-                    else => unreachable,
-                }
-            }
 
             const container = try Container.init(allocator);
             errdefer container.deinit();
@@ -83,7 +59,6 @@ pub fn CreateStorage(
             return Storage{
                 .allocator = allocator,
                 .container = container,
-                .shared_state = actual_shared_state,
                 .storage_queue = .{ .allocator = allocator },
             };
         }
@@ -236,45 +211,6 @@ pub fn CreateStorage(
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
             return self.container.getComponent(entity, Component);
-        }
-
-        /// get a shared state using the inner type
-        pub fn getSharedStateInnerType(self: Storage, comptime InnerType: type) meta.SharedState(InnerType) {
-            return self.getSharedStateWithOuterType(meta.SharedState(InnerType));
-        }
-
-        /// get a shared state using ecez.SharedState(InnerType) retrieve it's current value
-        pub fn getSharedStateWithOuterType(self: Storage, comptime T: type) T {
-            const index = indexOfSharedType(T);
-            return self.shared_state[index];
-        }
-
-        /// set a shared state using the shared state's inner type
-        pub fn setSharedState(self: *Storage, state: anytype) void {
-            const ActualType = meta.SharedState(@TypeOf(state));
-            const index = indexOfSharedType(ActualType);
-            self.shared_state[index] = @as(*const ActualType, @ptrCast(&state)).*;
-        }
-
-        /// given a shared state type T retrieve it's pointer
-        pub fn getSharedStatePtrWithSharedStateType(self: *Storage, comptime PtrT: type) PtrT {
-            // figure out which type we are looking for in the storage
-            const QueryT = blk: {
-                const info = @typeInfo(PtrT);
-                if (info != .Pointer) {
-                    @compileError("PtrT '" ++ @typeName(PtrT) ++ "' is not a pointer type, this is a ecez bug. please file an issue!");
-                }
-                const ptr_info = info.Pointer;
-
-                const child_info = @typeInfo(ptr_info.child);
-                if (child_info != .Struct) {
-                    @compileError("PtrT child '" ++ @typeName(ptr_info.child) ++ " is not a struct type, this is a ecez bug. please file an issue!");
-                }
-                break :blk ptr_info.child;
-            };
-
-            const index = indexOfSharedType(QueryT);
-            return &self.shared_state[index];
         }
 
         /// Query components which can be iterated upon.
@@ -496,25 +432,13 @@ pub fn CreateStorage(
                 }
             }
         }
-
-        fn indexOfSharedType(comptime Shared: type) comptime_int {
-            meta.comptimeOnlyFn();
-
-            const shared_storage_fields = @typeInfo(SharedStateStorage).Struct.fields;
-            inline for (shared_storage_fields, 0..) |field, i| {
-                if (field.type == Shared) {
-                    return i;
-                }
-            }
-            @compileError(@typeName(Shared) ++ " is not a shared state");
-        }
     };
 }
 
 const Testing = @import("Testing.zig");
 const testing = std.testing;
 
-const StorageStub = CreateStorage(Testing.AllComponentsTuple, .{});
+const StorageStub = CreateStorage(Testing.AllComponentsTuple);
 
 // TODO: we cant use tuples here because of https://github.com/ziglang/zig/issues/12963
 const AEntityType = Testing.Archetype.A;
@@ -525,7 +449,7 @@ const BcEntityType = Testing.Archetype.BC;
 const AbcEntityType = Testing.Archetype.ABC;
 
 test "init() + deinit() is idempotent" {
-    var storage = try StorageStub.init(testing.allocator, .{});
+    var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
     const initial_state = AEntityType{
@@ -538,7 +462,7 @@ test "init() + deinit() is idempotent" {
 }
 
 test "createEntity() can create empty entities" {
-    var storage = try StorageStub.init(testing.allocator, .{});
+    var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
     const entity = try storage.createEntity(.{});
@@ -559,7 +483,7 @@ test "createEntity() can create empty entities" {
 }
 
 test "setComponent() component moves entity to correct archetype" {
-    var storage = try StorageStub.init(testing.allocator, .{});
+    var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
     const entity1 = blk: {
@@ -584,7 +508,7 @@ test "setComponent() component moves entity to correct archetype" {
 }
 
 test "setComponent() update entities component state" {
-    var storage = try StorageStub.init(testing.allocator, .{});
+    var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
     const initial_state = AbEntityType{
@@ -601,7 +525,7 @@ test "setComponent() update entities component state" {
 }
 
 test "setComponent() with empty component moves entity" {
-    var storage = try StorageStub.init(testing.allocator, .{});
+    var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
     const initial_state = AbEntityType{
@@ -617,7 +541,7 @@ test "setComponent() with empty component moves entity" {
 }
 
 test "setComponents() can reassign multiple components" {
-    var storage = try StorageStub.init(testing.allocator, .{});
+    var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
     const initial_state = AbEntityType{
@@ -641,7 +565,7 @@ test "setComponents() can reassign multiple components" {
 }
 
 test "setComponents() can add new components to entity" {
-    var storage = try StorageStub.init(testing.allocator, .{});
+    var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
     const entity = try storage.createEntity(.{});
@@ -661,7 +585,7 @@ test "setComponents() can add new components to entity" {
 }
 
 test "removeComponent() removes the component as expected" {
-    var storage = try StorageStub.init(testing.allocator, .{});
+    var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
     const initial_state = BcEntityType{
@@ -683,7 +607,7 @@ test "removeComponent() removes the component as expected" {
 }
 
 test "removeComponent() removes all components from entity" {
-    var storage = try StorageStub.init(testing.allocator, .{});
+    var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
     const initial_state = AEntityType{
@@ -696,7 +620,7 @@ test "removeComponent() removes all components from entity" {
 }
 
 test "removeComponents() removes multiple components" {
-    var storage = try StorageStub.init(testing.allocator, .{});
+    var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
     const initial_state = Testing.Archetype.ABC{};
@@ -710,7 +634,7 @@ test "removeComponents() removes multiple components" {
 }
 
 test "hasComponent() responds as expected" {
-    var storage = try StorageStub.init(testing.allocator, .{});
+    var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
     const initial_state = AcEntityType{
@@ -724,7 +648,7 @@ test "hasComponent() responds as expected" {
 }
 
 test "getComponent() retrieve component value" {
-    var storage = try StorageStub.init(testing.allocator, .{});
+    var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
     var initial_state = AEntityType{
@@ -752,7 +676,7 @@ test "getComponent() retrieve component value" {
 }
 
 test "getComponent() can mutate component value with ptr" {
-    var storage = try StorageStub.init(testing.allocator, .{});
+    var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
     const initial_state = AEntityType{
@@ -772,7 +696,7 @@ test "getComponent() can mutate component value with ptr" {
 }
 
 test "clearRetainingCapacity() allow storage reuse" {
-    var storage = try StorageStub.init(testing.allocator, .{});
+    var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
     var first_entity: Entity = undefined;
@@ -811,60 +735,8 @@ test "clearRetainingCapacity() allow storage reuse" {
     try testing.expectEqual(entity_initial_state.a, entity_a);
 }
 
-test "getSharedState retrieve state" {
-    var storage = try CreateStorage(
-        Testing.AllComponentsTuple,
-        .{ Testing.Component.A, Testing.Component.B },
-    ).init(testing.allocator, .{
-        Testing.Component.A{ .value = 4 },
-        Testing.Component.B{ .value = 2 },
-    });
-    defer storage.deinit();
-
-    try testing.expectEqual(@as(u32, 4), storage.getSharedStateInnerType(Testing.Component.A).value);
-    try testing.expectEqual(@as(u8, 2), storage.getSharedStateInnerType(Testing.Component.B).value);
-}
-
-test "shared state can be pointer type" {
-    var a = Testing.Component.A{ .value = 0 };
-
-    var storage = try CreateStorage(
-        Testing.AllComponentsTuple,
-        .{*Testing.Component.A},
-    ).init(testing.allocator, .{
-        &a,
-    });
-    defer storage.deinit();
-
-    {
-        var a_ptr = storage.getSharedStateInnerType(*Testing.Component.A).ptr;
-        a_ptr.value = 69;
-    }
-
-    try testing.expectEqual(@as(u32, 69), a.value);
-}
-
-test "setSharedState retrieve state" {
-    var storage = try CreateStorage(
-        Testing.AllComponentsTuple,
-        .{ Testing.Component.A, Testing.Component.B },
-    ).init(testing.allocator, .{
-        Testing.Component.A{ .value = 0 },
-        Testing.Component.B{ .value = 0 },
-    });
-    defer storage.deinit();
-
-    const new_shared_a = Testing.Component.A{ .value = 42 };
-    storage.setSharedState(new_shared_a);
-
-    try testing.expectEqual(
-        new_shared_a,
-        @as(*Testing.Component.A, @ptrCast(storage.getSharedStatePtrWithSharedStateType(*meta.SharedState(Testing.Component.A)))).*,
-    );
-}
-
 test "query with single include type works" {
-    var storage = try StorageStub.init(std.testing.allocator, .{});
+    var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
     for (0..100) |index| {
@@ -892,7 +764,7 @@ test "query with single include type works" {
 }
 
 test "query with multiple include type works" {
-    var storage = try StorageStub.init(std.testing.allocator, .{});
+    var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
     for (0..100) |index| {
@@ -927,7 +799,7 @@ test "query with multiple include type works" {
 }
 
 test "query with single ptr include type works" {
-    var storage = try StorageStub.init(std.testing.allocator, .{});
+    var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
     for (0..100) |index| {
@@ -968,7 +840,7 @@ test "query with single ptr include type works" {
 }
 
 test "query with single include type and single exclude works" {
-    var storage = try StorageStub.init(std.testing.allocator, .{});
+    var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
     for (0..100) |index| {
@@ -1002,7 +874,7 @@ test "query with single include type and single exclude works" {
 }
 
 test "query with single include type and multiple exclude works" {
-    var storage = try StorageStub.init(std.testing.allocator, .{});
+    var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
     for (0..100) |index| {
@@ -1044,7 +916,7 @@ test "query with single include type and multiple exclude works" {
 }
 
 test "query with entity only works" {
-    var storage = try StorageStub.init(std.testing.allocator, .{});
+    var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
     var entities: [200]Entity = undefined;
@@ -1078,7 +950,7 @@ test "query with entity only works" {
 }
 
 test "query with entity and include and exclude only works" {
-    var storage = try StorageStub.init(std.testing.allocator, .{});
+    var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
     var entities: [200]Entity = undefined;
@@ -1116,7 +988,7 @@ test "query with entity and include and exclude only works" {
 
 test "StorageEditQueue flushStorageQueue applies all queued changes" {
     // Create storage
-    var storage = try StorageStub.init(testing.allocator, .{});
+    var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
     // populate storage with a entity with component A, and one with component B
@@ -1188,9 +1060,9 @@ test "reproducer: component data is mangled by adding additional components to e
         };
     };
 
-    const RepStorage = CreateStorage(.{ Editor.InstanceHandle, RenderContext.ObjectMetadata }, .{});
+    const RepStorage = CreateStorage(.{ Editor.InstanceHandle, RenderContext.ObjectMetadata });
 
-    var storage = try RepStorage.init(testing.allocator, .{});
+    var storage = try RepStorage.init(testing.allocator);
     defer storage.deinit();
 
     const entity = try storage.createEntity(.{});
@@ -1233,9 +1105,9 @@ test "reproducer: component data is mangled by having more than one entity" {
         };
     };
 
-    const RepStorage = CreateStorage(.{ Editor.InstanceHandle, RenderContext.ObjectMetadata }, .{});
+    const RepStorage = CreateStorage(.{ Editor.InstanceHandle, RenderContext.ObjectMetadata });
 
-    var storage = try RepStorage.init(testing.allocator, .{});
+    var storage = try RepStorage.init(testing.allocator);
     defer storage.deinit();
 
     {
@@ -1314,9 +1186,9 @@ test "reproducer: Removing component cause storage to become in invalid state" {
         Rotation,
         Scale,
         InstanceHandle,
-    }, .{});
+    });
 
-    var storage = try RepStorage.init(testing.allocator, .{});
+    var storage = try RepStorage.init(testing.allocator);
     defer storage.deinit();
 
     const instance_handle = InstanceHandle{ .a = 3, .b = 3, .c = 3 };
@@ -1392,14 +1264,14 @@ test "reproducer: MineSweeper index out of bound caused by incorrect mapping of 
         a: u256 = 0,
     };
 
-    const Storage = CreateStorage(.{
+    const RepStorage = CreateStorage(.{
         transform.Position,
         transform.Rotation,
         transform.Scale,
         transform.WorldTransform,
         Parent,
         Children,
-    }, .{});
+    });
 
     const QueryItem = struct {
         position: transform.Position,
@@ -1408,12 +1280,12 @@ test "reproducer: MineSweeper index out of bound caused by incorrect mapping of 
         world_transform: *transform.WorldTransform,
         children: Children,
     };
-    const Query = Storage.Query(
+    const Query = RepStorage.Query(
         QueryItem,
         // exclude type
         .{Parent},
     );
-    var storage = try Storage.init(testing.allocator, .{});
+    var storage = try RepStorage.init(testing.allocator);
     defer storage.deinit();
 
     const Node = struct {

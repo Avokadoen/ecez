@@ -91,7 +91,6 @@ Zig's comptime feature is utilized to perform static reflection on the usage of 
 Systems can have arguments that have a unique semantical meaning:
  * Entity - give the system access to the current entity
  * EventArgument - data that is relevant to an triggered event
- * SharedState - data that is global to the world instance
  * Queries - the same queries described [below](#queries)
  * InvocationCount - how many times the system has been executed for the current dispatch
  * Storage.StorageEditQueue - Any storage type has a StorageEditQueue which can be included as a system argument pointer allowing storage edits
@@ -122,64 +121,6 @@ Example of EventArgument
     scheduler.dispatchEvent(&storage, .onMouseMove, MouseMove{ .x = 40, .y = 2 }, .{});
 ```
 
-Example of SharedState
-```zig
-    const OnKill = struct {
-        pub fn system(health: Health, kill_counter: *ecez.SharedState(KillCounter)) void {
-            health = 0;
-            kill_counter.count += 1;
-        }
-    };
-
-    const Storage = ecez.CreateStorage(
-        .{
-            // ... Components
-        },
-        .{
-            KillCounter,
-        }
-    );
-    const Scheduler = ecez.CreateScheduler(
-        Storage,
-        .{
-            ecez.Event("onKill", .{OnKill}, .{}),
-        }
-    );
-
-    var storage = try Storage.init(allocator, .{KillCounter{ .value = 0 }});
-```
-
-shared state can also be pointers:
-
-```zig
-    const OnKill = struct {
-        pub fn system(health: Health, kill_counter: ecez.SharedState(*KillCounter)) void {
-            health = 0;
-            // notice special variable to access pointer
-            kill_counter.ptr.count += 1;
-        }
-    };
-
-    const Storage = ecez.CreateStorage(
-        .{
-            // ... Components
-        },
-        .{
-            *KillCounter,
-        }
-    )
-    const Scheduler = ecez.CreateScheduler(
-        Storage,
-        .{
-            ecez.Event("onKill", .{OnKill}, .{}),
-        }
-    );
-
-    var counter = KillCounter{ .value = 0 };
-    var storage = try Storage.init(allocator, .{&counter});
-
-    // ..
-```
 Example of Entity
 ```zig
     const System = struct {
@@ -261,7 +202,7 @@ const Scheduler = ecez.CreateScheduler(
 
 You can have multiple queries in a single system, and have systems with only query parameters.
 
-Both SharedState and EventArgument can be mutable by using a pointer
+EventArgument can be mutable by using a pointer
 
 ### System return values
 
@@ -285,8 +226,8 @@ pub const ReturnCommand = enum {
 
 There are some restrictions to how you can define systems:
  * If the system takes the current entity argument, then the **entity must be the first argument**
- * **Components must come before special arguments** (event data and shared data, but not entity)
-    * Event data and shared data must come *after* any component or entity argument
+ * **Components must come before special arguments** (event data, but not entity)
+    * Event data must come *after* any component or entity argument
 
 ### Implicit multithreading of systems
 

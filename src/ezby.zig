@@ -408,7 +408,7 @@ fn pow2Align(comptime T: type, num: T, @"align": T) T {
 const Testing = @import("Testing.zig");
 const testing = std.testing;
 
-const StorageStub = @import("storage.zig").CreateStorage(Testing.AllComponentsTuple, .{});
+const StorageStub = @import("storage.zig").CreateStorage(Testing.AllComponentsTuple);
 
 test "pow2Align return value aligned with 8" {
     try testing.expectEqual(@as(usize, 0), pow2Align(usize, 0, 8));
@@ -427,7 +427,7 @@ test "pow2Align return value aligned with 8" {
 }
 
 test "serializing then using parseEzbyChunk produce expected EZBY chunk" {
-    var storage = try StorageStub.init(testing.allocator, .{});
+    var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
     const bytes = try serialize(StorageStub, testing.allocator, storage, .{});
@@ -444,7 +444,7 @@ test "serializing then using parseEzbyChunk produce expected EZBY chunk" {
 }
 
 test "serializing then using parseCompChunk produce expected COMP chunk" {
-    var storage = try StorageStub.init(testing.allocator, .{});
+    var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
     const bytes = try serialize(StorageStub, testing.allocator, storage, .{});
@@ -518,7 +518,7 @@ test "serializing then using parseCompChunk produce expected COMP chunk" {
 }
 
 test "serializing then using parseArchChunk produce expected ARCH chunk" {
-    var storage = try StorageStub.init(testing.allocator, .{});
+    var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
     const a = Testing.Component.A{};
@@ -609,7 +609,7 @@ test "serializing then using parseArchChunk produce expected ARCH chunk" {
 }
 
 test "serialize and deserialize is idempotent" {
-    var storage = try StorageStub.init(testing.allocator, .{});
+    var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
     const test_data_count = 128;
