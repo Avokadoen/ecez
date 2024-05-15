@@ -108,8 +108,9 @@ pub const CommonSystem = struct {
         component_ptr,
         component_value,
         entity,
-        event_argument_ptr,
-        event_argument_value,
+        // Event argument can be ptr, or value.
+        // This is just passed onwards from event dispatch caller
+        event_argument,
         invocation_number_value,
         query_ptr,
         shared_state_ptr,
@@ -126,6 +127,7 @@ pub const CommonSystem = struct {
 
     /// initalize metadata for a system using a supplied function type info
     pub fn init(
+        comptime EventArgument: type,
         comptime function_type: type,
         comptime fn_info: FnInfo,
     ) CommonSystem {
@@ -171,7 +173,7 @@ pub const CommonSystem = struct {
             break :param_type_unroll_blk types;
         };
 
-        const parse_result = parseParams(function_name, &param_types);
+        const parse_result = parseParams(EventArgument, function_name, &param_types);
 
         return CommonSystem{
             .params = fn_info.params,
@@ -199,11 +201,9 @@ pub const CommonSystem = struct {
             switch (@typeInfo(arg.type.?)) {
                 .Pointer => |p| {
                     param.* = p.child;
-                    continue;
                 },
-                else => {},
+                else => param.* = arg.type.?,
             }
-            param.* = arg.type.?;
         }
         return params;
     }
@@ -225,6 +225,7 @@ pub const CommonSystem = struct {
         param_categories: []const ParamCategory,
     };
     fn parseParams(
+        comptime EventArgument: type,
         comptime function_name: [:0]const u8,
         comptime param_types: []const type,
     ) ParseParamResult {
@@ -287,7 +288,7 @@ pub const CommonSystem = struct {
 
             // check if we are currently parsing a special argument and register any
             const assigned_special_argument = comptime special_parse_blk: {
-                switch (getSepcialArgument(parse_set_states.type)) {
+                switch (getSpecialArgument(EventArgument, parse_set_states.type)) {
                     .shared_state => {
                         param.* = if (parse_set_states.set == .value)
                             .shared_state_value
@@ -298,10 +299,7 @@ pub const CommonSystem = struct {
                         break :special_parse_blk true;
                     },
                     .event => {
-                        param.* = if (parse_set_states.set == .value)
-                            .event_argument_value
-                        else
-                            .event_argument_ptr;
+                        param.* = .event_argument;
 
                         parsing_state = .special_arguments;
                         break :special_parse_blk true;
@@ -382,12 +380,13 @@ pub const DependOnSystem = struct {
 
     /// initalize metadata for a system using a supplied function type info
     pub fn init(
+        comptime EventArgumentType: type,
         comptime depend_on_indices_range: Range,
         comptime function_type: type,
         comptime fn_info: FnInfo,
     ) DependOnSystem {
         return DependOnSystem{
-            .common = CommonSystem.init(function_type, fn_info),
+            .common = CommonSystem.init(EventArgumentType, function_type, fn_info),
             .depend_on_indices_range = depend_on_indices_range,
         };
     }
@@ -414,6 +413,9 @@ pub fn Event(comptime event_name: []const u8, comptime systems: anytype, comptim
             break :blk event_argument_type;
         }
         if (info == .Struct) {
+            if (info.Struct.fields.len != 0) {
+                @compileError("Event argument can either be a single struct type, or a empty struct indicating none");
+            }
             break :blk @TypeOf(event_argument_type);
         }
         @compileError("expected event_argument_type to be type or struct type");
@@ -430,12 +432,18 @@ pub fn Event(comptime event_name: []const u8, comptime systems: anytype, comptim
             }
             break :system_count_blk count;
         };
-        pub const systems_info = createSystemInfo(system_count, systems);
+        pub const systems_info = createSystemInfo(EventArgumentType, system_count, systems);
         pub const EventArgument = EventArgumentType;
     };
 }
 
-pub fn getSepcialArgument(comptime T: type) ArgType {
+/// Extract the argument "catergory" given the argument type T
+pub fn getSpecialArgument(comptime EventArgument: type, comptime T: type) ArgType {
+    // TODO: should we verify that type is not identified as another special argument?
+    if (T == EventArgument) {
+        return ArgType.event;
+    }
+
     const info = @typeInfo(T);
     if (info == .Struct) {
         for (info.Struct.fields) |field| {
@@ -447,10 +455,6 @@ pub fn getSepcialArgument(comptime T: type) ArgType {
         }
     }
     return .presumed_component;
-}
-
-pub fn isSpecialArgument(comptime arg_type: ArgType, comptime T: type) bool {
-    return getSepcialArgument(T) == arg_type;
 }
 
 pub fn getSystemType(comptime T: type) SystemType {
@@ -710,7 +714,7 @@ pub fn FlushEditQueue(Storage: type) type {
 }
 
 /// perform compile-time reflection on systems to extrapolate information about registered systems
-pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: anytype) SystemInfo {
+pub fn createSystemInfo(comptime EventArgumentType: type, comptime system_count: comptime_int, comptime systems: anytype) SystemInfo {
     const SystemsType = @TypeOf(systems);
     const systems_type_info = @typeInfo(SystemsType);
     const fields_info = systems_type_info.Struct.fields;
@@ -727,7 +731,7 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
         inline for (fields_info, 0..) |field_info, j| {
             switch (@typeInfo(field_info.type)) {
                 .Fn => |func| {
-                    metadata[i] = SystemMetadata{ .common = CommonSystem.init(field_info.type, func) };
+                    metadata[i] = SystemMetadata{ .common = CommonSystem.init(EventArgumentType, field_info.type, func) };
                     function_types[i] = field_info.type;
                     functions[i] = field_info.default_value.?;
                     i += 1;
@@ -798,7 +802,7 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                     switch (dep_system_decl_info) {
                                         .Fn => {
                                             metadata[i] = SystemMetadata{
-                                                .depend_on = DependOnSystem.init(depend_on_range, DepSystemDeclType, dep_system_decl_info.Fn),
+                                                .depend_on = DependOnSystem.init(EventArgumentType, depend_on_range, DepSystemDeclType, dep_system_decl_info.Fn),
                                             };
                                             function_types[i] = DepSystemDeclType;
                                             functions[i] = &dep_on_function;
@@ -814,7 +818,7 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                                         switch (decl_info) {
                                                             .Fn => |fn_info| {
                                                                 metadata[i] = SystemMetadata{
-                                                                    .depend_on = DependOnSystem.init(depend_on_range, DepSystemDeclType, fn_info),
+                                                                    .depend_on = DependOnSystem.init(EventArgumentType, depend_on_range, DepSystemDeclType, fn_info),
                                                                 };
                                                                 function_types[i] = DeclType;
                                                                 functions[i] = &function;
@@ -842,7 +846,7 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                         const decl_info = @typeInfo(DeclType);
                                         switch (decl_info) {
                                             .Fn => |func| {
-                                                metadata[i] = SystemMetadata{ .common = CommonSystem.init(DeclType, func) };
+                                                metadata[i] = SystemMetadata{ .common = CommonSystem.init(EventArgumentType, DeclType, func) };
                                                 function_types[i] = DeclType;
                                                 functions[i] = &function;
                                                 i += 1;
@@ -864,7 +868,7 @@ pub fn createSystemInfo(comptime system_count: comptime_int, comptime systems: a
                                         const decl_info = @typeInfo(DeclType);
                                         switch (decl_info) {
                                             .Fn => |func| {
-                                                metadata[i] = SystemMetadata{ .flush_storage_edit_queue = CommonSystem.init(DeclType, func) };
+                                                metadata[i] = SystemMetadata{ .flush_storage_edit_queue = CommonSystem.init(EventArgumentType, DeclType, func) };
                                                 function_types[i] = DeclType;
                                                 functions[i] = &function;
                                                 flush_indices[flush_count] = i;
@@ -1275,38 +1279,6 @@ pub const InvocationCount = struct {
     number: u64,
 };
 
-/// This function will mark a type as event data
-pub fn EventArgument(comptime Argument: type) type {
-    const argument_info = blk: {
-        const info = @typeInfo(Argument);
-        if (info != .Struct) {
-            @compileError("event argument must be of type struct");
-        }
-        break :blk info.Struct;
-    };
-
-    var event_fields: [argument_info.fields.len + 1]Type.StructField = undefined;
-    inline for (argument_info.fields, 0..) |field, i| {
-        event_fields[i] = field;
-    }
-
-    const default_value = ArgType.event;
-    event_fields[argument_info.fields.len] = Type.StructField{
-        .name = secret_field,
-        .type = ArgType,
-        .default_value = @ptrCast(&default_value),
-        .is_comptime = true,
-        .alignment = 0,
-    };
-
-    return @Type(Type{ .Struct = .{
-        .layout = argument_info.layout,
-        .fields = &event_fields,
-        .decls = argument_info.decls,
-        .is_tuple = argument_info.is_tuple,
-    } });
-}
-
 const hashfn: fn (str: []const u8) u64 = std.hash.Fnv1a_64.hash;
 pub fn hashType(comptime T: type) u64 {
     comptimeOnlyFn();
@@ -1318,6 +1290,16 @@ pub fn hashType(comptime T: type) u64 {
 pub inline fn comptimeOnlyFn() void {
     if (@inComptime() == false) {
         @compileError(@src().fn_name ++ " can only be called in comptime");
+    }
+}
+
+/// Verifies that event argument is not a component type
+pub fn disallowEventArgAsComponent(comptime EventArgument: type, comptime components: []const type) void {
+    for (components) |component| {
+        if (component == EventArgument) {
+            const error_msg = std.fmt.comptimePrint("Event argument type {s} can not be a registered component type", .{@typeName(EventArgument)});
+            @compileError(error_msg);
+        }
     }
 }
 
@@ -1360,9 +1342,9 @@ test "CommonSystem componentQueryArgTypes results in queryable types" {
     const Func2Type = @TypeOf(TestSystems.func2);
     const Func3Type = @TypeOf(TestSystems.func3);
     const metadatas = comptime [3]CommonSystem{
-        CommonSystem.init(Func1Type, @typeInfo(Func1Type).Fn),
-        CommonSystem.init(Func2Type, @typeInfo(Func2Type).Fn),
-        CommonSystem.init(Func3Type, @typeInfo(Func3Type).Fn),
+        CommonSystem.init(u64, Func1Type, @typeInfo(Func1Type).Fn),
+        CommonSystem.init(u64, Func2Type, @typeInfo(Func2Type).Fn),
+        CommonSystem.init(u64, Func3Type, @typeInfo(Func3Type).Fn),
     };
 
     inline for (metadatas) |metadata| {
@@ -1396,9 +1378,9 @@ test "CommonSystem paramArgTypes results in pointer types" {
     const Func2Type = @TypeOf(TestSystems.func2);
     const Func3Type = @TypeOf(TestSystems.func3);
     const metadatas = comptime [_]CommonSystem{
-        CommonSystem.init(Func1Type, @typeInfo(Func1Type).Fn),
-        CommonSystem.init(Func2Type, @typeInfo(Func2Type).Fn),
-        CommonSystem.init(Func3Type, @typeInfo(Func3Type).Fn),
+        CommonSystem.init(u64, Func1Type, @typeInfo(Func1Type).Fn),
+        CommonSystem.init(u64, Func2Type, @typeInfo(Func2Type).Fn),
+        CommonSystem.init(u64, Func3Type, @typeInfo(Func3Type).Fn),
     };
 
     {
@@ -1416,18 +1398,6 @@ test "CommonSystem paramArgTypes results in pointer types" {
         try testing.expectEqual(A, params[0]);
         try testing.expectEqual(*B, params[1]);
     }
-}
-
-test "isSpecialArgument correctly identify event types" {
-    const A = struct {};
-    try testing.expectEqual(false, comptime isSpecialArgument(.event, A));
-    try testing.expectEqual(true, comptime isSpecialArgument(.event, EventArgument(A)));
-}
-
-test "isSpecialArgument correctly identify shared state types" {
-    const A = struct {};
-    try testing.expectEqual(false, comptime isSpecialArgument(.shared_state, A));
-    try testing.expectEqual(true, comptime isSpecialArgument(.shared_state, SharedState(A)));
 }
 
 test "isSystemType correctly identify event types" {
@@ -1497,7 +1467,7 @@ test "createSystemInfo generate accurate system information" {
             _ = b;
         }
     };
-    const info = createSystemInfo(3, .{ testFn, TestSystems });
+    const info = createSystemInfo(u64, 3, .{ testFn, TestSystems });
 
     try testing.expectEqual(3, info.functions.len);
     try testing.expectEqual(3, info.metadata.len);
