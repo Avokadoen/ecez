@@ -23,9 +23,6 @@ pub const DependOn = meta.DependOn;
 /// Mark a parameter as a shared state that exist in the storage instance
 pub const SharedState = meta.SharedState;
 
-/// Mark argument as data that is supplied to sytems on event dispatch
-pub const EventArgument = meta.EventArgument;
-
 /// Mark an event by name, systems to execute and any unique event data the systems need
 pub const Event = meta.Event;
 

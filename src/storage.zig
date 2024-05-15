@@ -16,28 +16,27 @@ pub fn CreateStorage(
     comptime components: anytype,
     comptime shared_state_types: anytype,
 ) type {
-    // a flat array of the type of each field in the components tuple
-    const component_type_array = verify_and_extract_field_types_blk: {
-        const components_info = @typeInfo(@TypeOf(components));
-        if (components_info != .Struct) {
-            @compileError("components was not a tuple of types");
-        }
-
-        var field_types: [components_info.Struct.fields.len]type = undefined;
-        for (&field_types, components_info.Struct.fields, 0..) |*field_type, field, component_index| {
-            if (@typeInfo(field.type) != .Type) {
-                @compileError("components must be a struct of types, field '" ++ field.name ++ "' was " ++ @typeName(field.type));
-            }
-
-            if (@typeInfo(components[component_index]) != .Struct) {
-                @compileError("component types must be a struct, field '" ++ field.name ++ "' was '" ++ @typeName(components[component_index]));
-            }
-            field_type.* = components[component_index];
-        }
-        break :verify_and_extract_field_types_blk field_types;
-    };
-
     return struct {
+        // a flat array of the type of each field in the components tuple
+        pub const component_type_array = verify_and_extract_field_types_blk: {
+            const components_info = @typeInfo(@TypeOf(components));
+            if (components_info != .Struct) {
+                @compileError("components was not a tuple of types");
+            }
+
+            var field_types: [components_info.Struct.fields.len]type = undefined;
+            for (&field_types, components_info.Struct.fields, 0..) |*field_type, field, component_index| {
+                if (@typeInfo(field.type) != .Type) {
+                    @compileError("components must be a struct of types, field '" ++ field.name ++ "' was " ++ @typeName(field.type));
+                }
+
+                if (@typeInfo(components[component_index]) != .Struct) {
+                    @compileError("component types must be a struct, field '" ++ field.name ++ "' was '" ++ @typeName(components[component_index]));
+                }
+                field_type.* = components[component_index];
+            }
+            break :verify_and_extract_field_types_blk field_types;
+        };
         pub const ComponentMask = meta.BitMaskFromComponents(&component_type_array);
         pub const Container = archetype_container.FromComponents(&component_type_array, ComponentMask);
         pub const OpaqueArchetype = opaque_archetype.FromComponentMask(ComponentMask);

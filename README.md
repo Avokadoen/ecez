@@ -102,9 +102,8 @@ Example of EventArgument
 ```zig
     const MouseMove = struct { x: u32, y: u32,  };
     const OnMouseMove = struct {
-        // We see the argument annotated by EventArgument 
-        // which hints ecez that this will be supplied on dispatch
-        pub fn system(thing: *ThingThatCares, mouse: ecez.EventArgument(MouseMove)) void {
+        // system that procces "thing" components by reading event argument "mouse"
+        pub fn system(thing: *ThingThatCares, mouse: MouseMove) void {
             thing.value = mouse.x + mouse.y;
         }
     };

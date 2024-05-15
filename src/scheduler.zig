@@ -71,22 +71,22 @@ pub fn CreateScheduler(
         /// Trigger an event asynchronously. The caller must make sure to call waitEvent with matching enum identifier
         /// Before relying on the result of a trigger.
         /// Parameters:
-        ///     - event:                The event enum identifier. When registering an event on Wolrd creation a identifier is
-        ///                             submitted.
-        ///     - event_extra_argument: An event specific argument. Keep in mind that if you submit a pointer as argument data
-        ///                             then the lifetime of the argument must ourlive the execution of the event.
-        ///     - exclude_types:        A struct of component types to exclude from the event dispatch. Meaning entities with these
-        ///                             components will be ignored even though they have all components listed in the arguments of the
-        ///                             system
+        ///     - event:            The event enum identifier. When registering an event on Wolrd creation a identifier is
+        ///                         submitted.
+        ///     - event_argument:   An event specific argument. Keep in mind that if you submit a pointer as argument data
+        ///                         then the lifetime of the argument must ourlive the execution of the event.
+        ///     - exclude_types:    A struct of component types to exclude from the event dispatch. Meaning entities with these
+        ///                         components will be ignored even though they have all components listed in the arguments of the
+        ///                         system
         ///
         /// Example:
         /// ```
-        /// const Scheduler = ecez.CreateScheduler(Storage, .{ecez.Event("onMouse", .{onMouseSystem}, .{MouseArg})})
+        /// const Scheduler = ecez.CreateScheduler(Storage, .{ecez.Event("onMouse", .{onMouseSystem}, MouseArg)})
         /// // ... storage creation etc ...
-        /// // trigger mouse handle, exclude any entity with the RatComponent from this event >:)
-        /// scheduler.dispatchEvent(.onMouse, @as(MouseArg, mouse), .{RatComponent});
+        /// // trigger mouse handle, exclude any entity with the RatComponent from this event
+        /// scheduler.dispatchEvent(&storage, .onMouse, @as(MouseArg, mouse), .{RatComponent});
         /// ```
-        pub fn dispatchEvent(self: *Scheduler, storage: *Storage, comptime event: EventsEnum, event_extra_argument: anytype, comptime exclude_types: anytype) void {
+        pub fn dispatchEvent(self: *Scheduler, storage: *Storage, comptime event: EventsEnum, event_argument: anytype, comptime exclude_types: anytype) void {
             const tracy_zone_name = comptime std.fmt.comptimePrint("dispatchEvent {s}", .{@tagName(event)});
             const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.scheduler);
             defer zone.End();
@@ -123,16 +123,7 @@ pub fn CreateScheduler(
             const event_jobs_in_flight = &self.event_jobs_in_flight[@intFromEnum(event)];
             const triggered_event = events[@intFromEnum(event)];
 
-            // TODO: verify systems and arguments in type initialization
-            const EventExtraArgument = @TypeOf(event_extra_argument);
-            if (@sizeOf(triggered_event.EventArgument) > 0) {
-                if (comptime meta.isSpecialArgument(.event, EventExtraArgument)) {
-                    @compileError("event arguments should not be wrapped in EventArgument type when triggering an event");
-                }
-                if (EventExtraArgument != triggered_event.EventArgument) {
-                    @compileError("event " ++ @tagName(event) ++ " was declared to accept " ++ @typeName(triggered_event.EventArgument) ++ " got " ++ @typeName(EventExtraArgument));
-                }
-            }
+            comptime meta.disallowEventArgAsComponent(triggered_event.EventArgument, &Storage.component_type_array);
 
             inline for (triggered_event.systems_info.metadata, 0..) |metadata, system_index| {
                 const component_query_types = comptime metadata.componentQueryArgTypes();
@@ -156,13 +147,13 @@ pub fn CreateScheduler(
                     include_bitmask,
                     exclude_bitmask,
                     component_query_types,
-                    @TypeOf(event_extra_argument),
+                    @TypeOf(event_argument),
                 );
 
                 // initialized the system job
                 const system_job = DispatchJob{
                     .storage = storage,
-                    .extra_argument = event_extra_argument,
+                    .event_argument = event_argument,
                 };
 
                 // TODO: should dispatchEvent be synchronous? (move wait until the end of the dispatch function)
@@ -262,20 +253,11 @@ pub fn CreateScheduler(
             comptime include_bitmask: Storage.ComponentMask.Bits,
             comptime exclude_bitmask: Storage.ComponentMask.Bits,
             comptime component_query_types: []const type,
-            comptime ExtraArgumentType: type,
+            comptime EventArgument: type,
         ) type {
-            // in the case where the extra argument is a pointer we get the pointer child type
-            const extra_argument_child_type = blk: {
-                const extra_argument_info = @typeInfo(ExtraArgumentType);
-                if (extra_argument_info == .Pointer) {
-                    break :blk extra_argument_info.Pointer.child;
-                }
-                break :blk ExtraArgumentType;
-            };
-
             return struct {
                 storage: *Storage,
-                extra_argument: ExtraArgumentType,
+                event_argument: EventArgument,
 
                 pub fn exec(self_job: *@This()) void {
                     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
@@ -357,8 +339,7 @@ pub fn CreateScheduler(
                                         arguments[nth_argument] = &iter;
                                     },
                                     .invocation_number_value => arguments[nth_argument] = system_invocation_count,
-                                    .event_argument_value => arguments[nth_argument] = @as(*meta.EventArgument(ExtraArgumentType), @ptrCast(&self_job.extra_argument)).*,
-                                    .event_argument_ptr => arguments[nth_argument] = @as(*meta.EventArgument(extra_argument_child_type), @ptrCast(self_job.extra_argument)),
+                                    .event_argument => arguments[nth_argument] = self_job.event_argument,
                                     .shared_state_value => arguments[nth_argument] = self_job.storage.getSharedStateWithOuterType(Param),
                                     .shared_state_ptr => arguments[nth_argument] = self_job.storage.getSharedStatePtrWithSharedStateType(Param),
                                     .storage_edit_queue => arguments[nth_argument] = &self_job.storage.storage_queue,
@@ -396,7 +377,6 @@ const Entity = @import("entity_type.zig").Entity;
 const Event = meta.Event;
 const SharedState = meta.SharedState;
 const DependOn = meta.DependOn;
-const EventArgument = meta.EventArgument;
 const InvocationCount = meta.InvocationCount;
 
 // TODO: we cant use tuples here because of https://github.com/ziglang/zig/issues/12963
@@ -995,7 +975,7 @@ test "systems can accepts event related data" {
     };
     // define a system type
     const SystemType = struct {
-        pub fn systemOne(a: *Testing.Component.A, mouse: EventArgument(MouseInput)) void {
+        pub fn systemOne(a: *Testing.Component.A, mouse: MouseInput) void {
             a.value = mouse.x + mouse.y;
         }
     };
@@ -1021,16 +1001,19 @@ test "systems can accepts event related data" {
 }
 
 test "event can mutate event extra argument" {
+    const MouseEvent = struct {
+        value: u32,
+    };
     const SystemStruct = struct {
-        pub fn eventSystem(a: *Testing.Component.A, a_value: *EventArgument(Testing.Component.A)) void {
-            a_value.value = a.value;
+        pub fn eventSystem(a: *Testing.Component.A, mouse_event: *MouseEvent) void {
+            mouse_event.value = a.value;
         }
     };
 
     var storage = try StorageStub.init(testing.allocator, .{});
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{Testing.Component.A})}).init();
+    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, MouseEvent)}).init();
     defer scheduler.deinit();
 
     const initial_state = AEntityType{
@@ -1038,15 +1021,15 @@ test "event can mutate event extra argument" {
     };
     _ = try storage.createEntity(initial_state);
 
-    var event_a = Testing.Component.A{ .value = 0 };
+    var mouse_event = MouseEvent{ .value = 0 };
 
     // make sure test is not modified in an illegal manner
-    try testing.expect(initial_state.a.value != event_a.value);
+    try testing.expect(initial_state.a.value != mouse_event.value);
 
-    scheduler.dispatchEvent(&storage, .onFoo, &event_a, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, &mouse_event, .{});
     scheduler.waitEvent(.onFoo);
 
-    try testing.expectEqual(initial_state.a, event_a);
+    try testing.expectEqual(initial_state.a.value, mouse_event.value);
 }
 
 test "event can request single query with component" {
@@ -1192,7 +1175,7 @@ test "event can access invocation number" {
     var storage = try StorageStub.init(testing.allocator, .{});
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{Testing.Component.A})}).init();
+    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init();
     defer scheduler.deinit();
 
     var entities: [100]Entity = undefined;
