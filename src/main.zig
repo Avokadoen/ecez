@@ -20,9 +20,6 @@ pub const InvocationCount = meta.InvocationCount;
 /// Mark a system as depending on another system in the same event
 pub const DependOn = meta.DependOn;
 
-/// Mark a parameter as a shared state that exist in the storage instance
-pub const SharedState = meta.SharedState;
-
 /// Mark an event by name, systems to execute and any unique event data the systems need
 pub const Event = meta.Event;
 

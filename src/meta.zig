@@ -21,7 +21,6 @@ pub const ArgType = enum {
     presumed_component,
     query,
     query_iter,
-    shared_state,
     storage_edit_queue,
 };
 
@@ -113,8 +112,6 @@ pub const CommonSystem = struct {
         event_argument,
         invocation_number_value,
         query_ptr,
-        shared_state_ptr,
-        shared_state_value,
         storage_edit_queue,
     };
 
@@ -289,15 +286,6 @@ pub const CommonSystem = struct {
             // check if we are currently parsing a special argument and register any
             const assigned_special_argument = comptime special_parse_blk: {
                 switch (getSpecialArgument(EventArgument, parse_set_states.type)) {
-                    .shared_state => {
-                        param.* = if (parse_set_states.set == .value)
-                            .shared_state_value
-                        else
-                            .shared_state_ptr;
-
-                        parsing_state = .special_arguments;
-                        break :special_parse_blk true;
-                    },
                     .event => {
                         param.* = .event_argument;
 
@@ -343,7 +331,6 @@ pub const CommonSystem = struct {
                     const pre_arg_str = switch (param_categories[i - 1]) {
                         .component_ptr, .component_value => unreachable,
                         .event_argument_ptr, .event_argument_value => "event",
-                        .shared_state_ptr, .shared_state_value => "shared state",
                         .storage_edit_queue => "storage edit queue",
                         .entity => "entity",
                         .invocation_number_value => "invocation number",
@@ -1178,100 +1165,6 @@ pub fn typeMap(comptime type_tuple: anytype, comptime runtime_tuple_type: type) 
     return map;
 }
 
-pub fn SharedStateStorage(comptime shared_state: anytype) type {
-    const shared_info = blk: {
-        const info = @typeInfo(@TypeOf(shared_state));
-        if (info != .Struct) {
-            @compileError("submitted invalid shared state type, must be a tuple of types");
-        }
-        break :blk info.Struct;
-    };
-
-    // var used_types: [shared_info.fields.len]type = undefined;
-    var storage_fields: [shared_info.fields.len]Type.StructField = undefined;
-    inline for (shared_info.fields, 0..) |field, i| {
-        // // TODO: uncomment this when it does not crash compiler :)
-        // for (used_types[0..i]) |used_type| {
-        //     if (used_type == shared_state[i]) {
-        //         @compileError("duplicate types are not allowed in shared state");
-        //     }
-        // }
-
-        var num_buf: [8]u8 = undefined;
-        const str_i = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable;
-
-        if (@typeInfo(field.type) != .Type) {
-            @compileError("expected shared state field " ++ str_i ++ " to be a type, was " ++ @typeName(shared_state[i]));
-        }
-        const ActualStoredSharedState = SharedState(shared_state[i]);
-        storage_fields[i] = Type.StructField{
-            .name = @ptrCast(str_i ++ [_]u8{0}),
-            .type = ActualStoredSharedState,
-            .default_value = null,
-            .is_comptime = false,
-            .alignment = @alignOf(ActualStoredSharedState),
-        };
-        // used_types[i] = shared_state[i];
-    }
-
-    return @Type(Type{ .Struct = .{
-        .layout = .Auto,
-        .fields = &storage_fields,
-        .decls = &[0]Type.Declaration{},
-        .is_tuple = true,
-    } });
-}
-
-/// This function will generate a type that is sufficient to mark a parameter as a shared state type
-pub fn SharedState(comptime State: type) type {
-    const info = @typeInfo(State);
-
-    const shared_state_tag_field_default_value = ArgType.shared_state;
-    const shared_state_tag_field = Type.StructField{
-        .name = secret_field,
-        .type = ArgType,
-        .default_value = @ptrCast(&shared_state_tag_field_default_value),
-        .is_comptime = true,
-        .alignment = 0,
-    };
-
-    switch (info) {
-        .Struct => |state_info| {
-            var shared_state_fields: [state_info.fields.len + 1]Type.StructField = undefined;
-            inline for (state_info.fields, 0..) |field, i| {
-                shared_state_fields[i] = field;
-            }
-
-            shared_state_fields[state_info.fields.len] = shared_state_tag_field;
-
-            return @Type(Type{ .Struct = .{
-                .layout = state_info.layout,
-                .fields = &shared_state_fields,
-                .decls = &[0]Type.Declaration{},
-                .is_tuple = state_info.is_tuple,
-            } });
-        },
-        .Pointer => |state_info| {
-            _ = state_info;
-            const shared_state_fields = [2]Type.StructField{ Type.StructField{
-                .name = "ptr",
-                .type = State,
-                .default_value = null,
-                .is_comptime = false,
-                .alignment = @alignOf(State),
-            }, shared_state_tag_field };
-
-            return @Type(Type{ .Struct = .{
-                .layout = .Auto,
-                .fields = &shared_state_fields,
-                .decls = &[0]Type.Declaration{},
-                .is_tuple = false,
-            } });
-        },
-        else => @compileError("shared state must be of type struct or pointer"),
-    }
-}
-
 /// Special system argument that tells the system how many times the
 /// system has been invoced before in current dispatch
 pub const InvocationCount = struct {
@@ -1549,20 +1442,6 @@ test "typeMap maps a type tuple to a value tuple" {
     try testing.expectEqual(2, type_map[0]);
     try testing.expectEqual(1, type_map[1]);
     try testing.expectEqual(0, type_map[2]);
-}
-
-test "SharedStateStorage generate suitable storage tuple" {
-    const A = struct { value: u64 };
-    const B = struct { value1: i32, value2: u8 };
-    const C = struct { value: u8 };
-
-    // generate type at compile time and let the compiler verify that the type is correct
-    const Storage = SharedStateStorage(.{ A, B, C });
-    var storage: Storage = undefined;
-    storage[0].value = std.math.maxInt(u64);
-    storage[1].value1 = 2;
-    storage[1].value1 = 2;
-    storage[2].value = 4;
 }
 
 test "ComponentStorage generate suitable storage tuple" {

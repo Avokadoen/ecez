@@ -165,7 +165,7 @@ fn ComponentQueue(Component: type) type {
 const Testing = @import("Testing.zig");
 const testing = std.testing;
 
-const StorageStub = @import("storage.zig").CreateStorage(Testing.AllComponentsTuple, .{});
+const StorageStub = @import("storage.zig").CreateStorage(Testing.AllComponentsTuple);
 
 // TODO: we cant use tuples here because of https://github.com/ziglang/zig/issues/12963
 const AEntityType = Testing.Archetype.A;
