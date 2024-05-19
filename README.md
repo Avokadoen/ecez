@@ -8,7 +8,9 @@ This is a opinionated WIP ECS (Entity Component System) API for Zig.
 
 ### Requirements
 
-The [master branch zig compiler](https://ziglang.org/download/)
+The [zig compiler 0.12.0-dev.3180+83e578a18](https://ziglang.org)
+
+You can use zigup to easily get this specific version
 
 ### Steps
 Run the following commands
