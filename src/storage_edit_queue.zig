@@ -47,7 +47,7 @@ pub fn StorageEditQueue(comptime components: []const type) type {
         queues: Queues = .{},
 
         /// Queue create entity operation
-        pub fn queueCreateEntity(self: *Self, component: anytype) Allocator.Error!void {
+        pub inline fn queueCreateEntity(self: *Self, component: anytype) Allocator.Error!void {
             const Component = @TypeOf(component);
             comptime verifyComponent(Component);
 
@@ -56,7 +56,7 @@ pub fn StorageEditQueue(comptime components: []const type) type {
         }
 
         /// Queue set component operation
-        pub fn queueSetComponent(self: *Self, entity: Entity, component: anytype) Allocator.Error!void {
+        pub inline fn queueSetComponent(self: *Self, entity: Entity, component: anytype) Allocator.Error!void {
             const Component = @TypeOf(component);
             comptime verifyComponent(Component);
 
@@ -65,7 +65,7 @@ pub fn StorageEditQueue(comptime components: []const type) type {
         }
 
         /// Queue remove component operation
-        pub fn queueRemoveComponent(self: *Self, entity: Entity, Component: type) Allocator.Error!void {
+        pub inline fn queueRemoveComponent(self: *Self, entity: Entity, Component: type) Allocator.Error!void {
             comptime verifyComponent(Component);
 
             var queue = &@field(self.queues, @typeName(Component));

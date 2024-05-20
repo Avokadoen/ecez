@@ -28,6 +28,7 @@ zig build run-game-of-life
 
 You can generate the ecez API documentation using `zig build docs`. This will produce some web resources in `zig-out/doc/ecez`. 
 You will need a local server to serve the documentation since browsers will block resources loaded by the index.html. 
+
 The simplest solution to this is just using a basic python server:
 ```bash
 python -m http.server 8000 -d ecez/zig-out/doc/ecez # you can then access the documentation at http://localhost:8000/#ecez.main 
@@ -357,6 +358,13 @@ if (happy_healhy_monster_iter.next()) |fifth_happy_monster| {
 }
 
 ```
+
+### Thead safe queuing of storage edits
+
+You can queue edits of the storage from multiple threads, while iterating or as previously mentioned in systems by queuing the edits.
+
+This is done through the storage functions with the `queue*Op*` naming scheme. These functions are thread safe, but the operations queued 
+have to be triggered manually with `flushStorageQueue`, unless done through systems in which case the scheduler will do it for you on event completion.
 
 ### Serialization through the ezby format
 

@@ -413,7 +413,22 @@ pub fn CreateStorage(comptime components: anytype) type {
             }
         }
 
-        /// Apply all queued work onto the storage
+        /// *Queue* create entity operation, this function **is** thread afe
+        pub fn queueCreateEntity(self: *Storage, component: anytype) Allocator.Error!void {
+            try self.storage_queue.queueCreateEntity(component);
+        }
+
+        /// *Queue* set component operation, this function **is** thread safe
+        pub fn queueSetComponent(self: *Storage, entity: Entity, component: anytype) Allocator.Error!void {
+            try self.storage_queue.queueSetComponent(entity, component);
+        }
+
+        /// *Queue* remove component operation, this function **is** thread safe
+        pub fn queueRemoveComponent(self: *Storage, entity: Entity, Component: type) Allocator.Error!void {
+            try self.storage_queue.queueRemoveComponent(entity, Component);
+        }
+
+        /// Apply all queued work onto the storage, this function is **NOT** thread safe
         pub fn flushStorageQueue(self: *Storage) error{ EntityMissing, OutOfMemory }!void {
             inline for (components) |Component| {
                 var queue = &@field(self.storage_queue.queues, @typeName(Component));
