@@ -32,9 +32,6 @@ const Scheduler = ecez.CreateScheduler(Storage, .{ecez.Event("loop", .{
     BusyWorkSystem,
     BusyWorkSystem,
     BusyWorkSystem,
-    BusyWorkSystem,
-    BusyWorkSystem,
-    BusyWorkSystem,
     ecez.DependOn(FlushBufferSystem, .{ RenderCellSystem, RenderLineSystem }),
     ecez.DependOn(UpdateCellSystem, .{FlushBufferSystem}),
 }, EventArg)});
