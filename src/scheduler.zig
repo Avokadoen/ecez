@@ -2,14 +2,18 @@ const std = @import("std");
 
 const ztracy = @import("ztracy");
 
-const traced_zjobs = @import("traced_job_queue.zig");
-const JobQueue = traced_zjobs.TracedJobQueue(.{});
-const JobId = traced_zjobs.JobId;
+const ThreadPool = @import("StdThreadPool.zig");
+const TracedStdThreadPool = @import("TracedStdThreadPool.zig");
+const ResetEvent = std.Thread.ResetEvent;
 
 const meta = @import("meta.zig");
 const SystemMetadata = meta.SystemMetadata;
 
 const Color = @import("misc.zig").Color;
+
+pub const Config = struct {
+    thread_count: ?u32 = null,
+};
 
 /// Allow the user to attach systems to a storage. The user can then trigger events on the scheduler to execute
 /// the systems in a multithreaded environment
@@ -18,22 +22,24 @@ pub fn CreateScheduler(
     comptime events: anytype,
 ) type {
     const event_count = meta.countAndVerifyEvents(events);
-    const EventJobsInFlight = blk: {
+
+    // Store each individual WaitGroup
+    const EventsInFlight = blk: {
         // TODO: move to meta
         const Type = std.builtin.Type;
         var fields: [event_count]Type.StructField = undefined;
         inline for (&fields, events, 0..) |*field, event, i| {
-            const default_value = [_]JobId{.none} ** event.system_count;
+            const default_value = [_]ResetEvent{.{}} ** event.system_count;
             var num_buf: [8:0]u8 = undefined;
             const name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable;
             num_buf[name.len] = 0;
 
             field.* = Type.StructField{
                 .name = name[0.. :0],
-                .type = [event.system_count]JobId,
+                .type = [event.system_count]ResetEvent,
                 .default_value = @ptrCast(&default_value),
                 .is_comptime = false,
-                .alignment = @alignOf([event.system_count]JobId),
+                .alignment = @alignOf([event.system_count]ResetEvent),
             };
         }
 
@@ -45,27 +51,97 @@ pub fn CreateScheduler(
         } });
     };
 
+    // Access the dependencies of a system [event_index][system_index] => array
+    const DependencyRelations = blk: {
+        const Type = std.builtin.Type;
+        var fields: [event_count]Type.StructField = undefined;
+        inline for (&fields, events, 0..) |*field, event, event_index| {
+            var system_fields: [event.system_count]Type.StructField = undefined;
+            inline for (&system_fields, 0..) |*system_field, system_index| {
+                var num_buf: [8:0]u8 = undefined;
+                const name = std.fmt.bufPrint(&num_buf, "{d}", .{system_index}) catch unreachable;
+                num_buf[name.len] = 0;
+
+                const default_value = event.systems_info.getDependencySubIndices(system_index);
+                const field_type = @TypeOf(default_value);
+                system_field.* = Type.StructField{
+                    .name = name[0.. :0],
+                    .type = field_type,
+                    .default_value = @ptrCast(&default_value),
+                    .is_comptime = true,
+                    .alignment = @alignOf(field_type),
+                };
+            }
+
+            var num_buf: [8:0]u8 = undefined;
+            const name = std.fmt.bufPrint(&num_buf, "{d}", .{event_index}) catch unreachable;
+            num_buf[name.len] = 0;
+
+            // For each system in event, create an array of dependency indices
+            const EventSystemDepField = @Type(Type{ .Struct = .{
+                .layout = .Auto,
+                .fields = &system_fields,
+                .decls = &[0]Type.Declaration{},
+                .is_tuple = true,
+            } });
+            const default_value = EventSystemDepField{};
+            field.* = Type.StructField{
+                .name = name[0.. :0],
+                .type = EventSystemDepField,
+                .default_value = @ptrCast(&default_value),
+                .is_comptime = true,
+                .alignment = @alignOf(EventSystemDepField),
+            };
+        }
+
+        break :blk @Type(Type{ .Struct = .{
+            .layout = .Auto,
+            .fields = &fields,
+            .decls = &[0]Type.Declaration{},
+            .is_tuple = true,
+        } });
+    };
+
+    const dependency_tracker: DependencyRelations = DependencyRelations{};
+
     return struct {
         const Scheduler = @This();
 
         pub const EventsEnum = meta.GenerateEventsEnum(event_count, events);
 
-        execution_job_queue: JobQueue,
-        event_jobs_in_flight: EventJobsInFlight,
+        thread_pool: *ThreadPool,
+        events_in_flight: EventsInFlight,
 
         /// Initialized the system scheduler. User must make sure to call deinit
-        pub fn init() Scheduler {
+        pub fn init(pool_allocator: std.mem.Allocator, config: Config) !Scheduler {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.scheduler);
             defer zone.End();
 
+            const thread_pool = try pool_allocator.create(ThreadPool);
+            errdefer pool_allocator.destroy(thread_pool);
+
+            try TracedStdThreadPool.init(thread_pool, .{
+                .allocator = pool_allocator,
+                .n_jobs = config.thread_count,
+            });
+
+            var events_in_flight = EventsInFlight{};
+            inline for (0..event_count) |event_index| {
+                for (&events_in_flight[event_index]) |*system_in_flight| {
+                    system_in_flight.set();
+                }
+            }
+
             return Scheduler{
-                .execution_job_queue = JobQueue.init(),
-                .event_jobs_in_flight = EventJobsInFlight{},
+                .thread_pool = thread_pool,
+                .events_in_flight = events_in_flight,
             };
         }
 
         pub fn deinit(self: *Scheduler) void {
-            self.execution_job_queue.deinit();
+            TracedStdThreadPool.deinit(self.thread_pool);
+            const allocator = self.thread_pool.allocator;
+            allocator.destroy(self.thread_pool);
         }
 
         /// Trigger an event asynchronously. The caller must make sure to call waitEvent with matching enum identifier
@@ -115,13 +191,10 @@ pub fn CreateScheduler(
                 break :include_bit_blk bitmask;
             };
 
-            // initiate job executions for dispatch
-            if (self.execution_job_queue.isStarted() == false) {
-                self.execution_job_queue.start();
-            }
-
-            const event_jobs_in_flight = &self.event_jobs_in_flight[@intFromEnum(event)];
-            const triggered_event = events[@intFromEnum(event)];
+            const event_index = @intFromEnum(event);
+            const event_in_flight = &self.events_in_flight[event_index];
+            const triggered_event = events[event_index];
+            const event_systems_dependencies = dependency_tracker[event_index];
 
             comptime meta.disallowEventArgAsComponent(triggered_event.EventArgument, &Storage.component_type_array);
 
@@ -156,83 +229,33 @@ pub fn CreateScheduler(
                     .event_argument = event_argument,
                 };
 
-                // TODO: should dispatchEvent be synchronous? (move wait until the end of the dispatch function)
-                // wait for previous dispatch to finish
-                self.execution_job_queue.wait(event_jobs_in_flight[system_index]);
+                // Assert current system is not executing
+                std.debug.assert(event_in_flight[system_index].isSet());
 
-                const job_dependency = job_dep_blk: {
-                    switch (metadata) {
-                        .depend_on => |depend_on_metadata| {
-                            const indices = comptime depend_on_metadata.getIndexRange(triggered_event);
-                            var jobs: [triggered_event.systems_info.metadata.len]JobId = undefined;
-                            inline for (indices, 0..) |index, i| {
-                                jobs[i] = event_jobs_in_flight[index];
-                            }
+                // NOTE: Work around compiler crash: dont use reference to empty structs
+                const dependencies = comptime if (event_systems_dependencies[system_index].len == 0) [0]u32{} else event_systems_dependencies[system_index];
 
-                            comptime var prev_flush_count: u32 = 0;
-                            if (triggered_event.systems_info.flush_indices.len > 0) {
-                                const flush_from = triggered_event.systems_info.flush_indices.len;
-                                const flush_to = flush_from + indices.len;
-                                flush_loop: inline for (jobs[flush_from..flush_to], triggered_event.systems_info.flush_indices) |*job, flush_index| {
-                                    if (flush_index >= system_index) {
-                                        break :flush_loop;
-                                    }
-
-                                    job.* = event_jobs_in_flight[flush_index + indices.len];
-                                    prev_flush_count += 1;
-                                }
-                            }
-
-                            break :job_dep_blk self.execution_job_queue.combine(jobs[0 .. indices.len + prev_flush_count]) catch std.debug.panic("ecez bug: depend on failed to combine jobs", .{});
-                        },
-                        .flush_storage_edit_queue => {
-                            var jobs: [triggered_event.systems_info.metadata.len]JobId = undefined;
-                            for (&jobs, event_jobs_in_flight[0 .. system_index + 1]) |*job, job_in_flight| {
-                                job.* = job_in_flight;
-                            }
-
-                            break :job_dep_blk self.execution_job_queue.combine(jobs[0 .. system_index + 1]) catch std.debug.panic("ecez bug: failed to combine previous jobs in flush", .{});
-                        },
-                        .common, .event => {
-                            if (triggered_event.systems_info.flush_indices.len == 0) {
-                                break :job_dep_blk JobId.none;
-                            }
-
-                            // depend on all previous jobs if we have a flush
-                            var jobs: [triggered_event.systems_info.flush_indices.len]JobId = undefined;
-                            comptime var prev_flush_count: u32 = 0;
-                            flush_loop: inline for (&jobs, triggered_event.systems_info.flush_indices) |*job, flush_index| {
-                                if (flush_index >= system_index) {
-                                    break :flush_loop;
-                                }
-
-                                job.* = event_jobs_in_flight[flush_index];
-                                prev_flush_count += 1;
-                            }
-
-                            break :job_dep_blk self.execution_job_queue.combine(jobs[0..prev_flush_count]) catch std.debug.panic("ecez bug: failed to combine flush jobs", .{});
-                        },
-                    }
-                };
-
-                event_jobs_in_flight[system_index] = self.execution_job_queue.schedule(job_dependency, system_job) catch |err| {
-                    switch (err) {
-                        error.Uninitialized => unreachable, // schedule can fail on "Uninitialized" which does not happen since you must init storage
-                        error.Stopped => return,
-                    }
-                };
+                TracedStdThreadPool.spawnRe(
+                    self.thread_pool,
+                    &dependencies,
+                    event_in_flight,
+                    &event_in_flight[system_index],
+                    DispatchJob.exec,
+                    .{system_job},
+                );
             }
         }
 
         /// Wait for all jobs from a dispatchEvent to finish by blocking the calling thread
         /// should only be called from the dispatchEvent thread
         pub fn waitEvent(self: *Scheduler, comptime event: EventsEnum) void {
-            const tracy_zone_name = comptime std.fmt.comptimePrint("Storage wait event {s}", .{@tagName(event)});
+            const tracy_zone_name = comptime std.fmt.comptimePrint("{s}: event {s}", .{ @src().fn_name, @tagName(event) });
             const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.scheduler);
             defer zone.End();
 
-            for (self.event_jobs_in_flight[@intFromEnum(event)]) |job_in_flight| {
-                self.execution_job_queue.wait(job_in_flight);
+            const event_in_flight = &self.events_in_flight[@intFromEnum(event)];
+            for (event_in_flight) |*system_event| {
+                system_event.wait();
             }
         }
 
@@ -256,10 +279,12 @@ pub fn CreateScheduler(
             comptime EventArgument: type,
         ) type {
             return struct {
+                const DispatchJob = @This();
+
                 storage: *Storage,
                 event_argument: EventArgument,
 
-                pub fn exec(self_job: *@This()) void {
+                pub fn exec(self_job: DispatchJob) void {
                     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
                     defer zone.End();
 
@@ -392,11 +417,10 @@ test "event can have no entities or even archetype to work with" {
             a.value += @as(u32, @intCast(b.value));
         }
     };
-
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init();
+    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
     scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
@@ -413,7 +437,7 @@ test "event can mutate components" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init();
+    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
     const initial_state = AbEntityType{
@@ -441,10 +465,10 @@ test "event exclude types exclude entities" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(
+    var scheduler = try CreateScheduler(
         StorageStub,
         .{Event("onFoo", .{SystemStruct}, .{})},
-    ).init();
+    ).init(testing.allocator, .{});
     defer scheduler.deinit();
 
     const a_entity = try storage.createEntity(AEntityType{
@@ -539,13 +563,13 @@ test "DependOn support structs" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{
+    var scheduler = try CreateScheduler(StorageStub, .{
         Event("onFoo", .{
             SystemStruct1,
             DependOn(SystemStruct2, .{SystemStruct1}),
             DependOn(SystemStruct3, .{SystemStruct2}),
         }, .{}),
-    }).init();
+    }).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
     const initial_state = Testing.Archetype.AB{
@@ -607,13 +631,13 @@ test "DependOn support structs" {
 //     var storage = try StorageStub.init(testing.allocator);
 //     defer storage.deinit();
 
-//     var scheduler = CreateScheduler(StorageStub, .{
+//     var scheduler = try CreateScheduler(StorageStub, .{
 //         Event("onFoo", .{
 //             SystemStruct1.func1,
 //             DependOn(SystemStruct1.func2, .{SystemStruct1.func1}),
 //             SystemStruct2,
 //         }, .{}),
-//     }).init();
+//     }).init(std.testing.allocator, .{});
 //     defer scheduler.deinit();
 
 //     const initial_state = Testing.Archetype.AB{
@@ -655,10 +679,10 @@ test "events call systems" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{
+    var scheduler = try CreateScheduler(StorageStub, .{
         Event("onFoo", .{SystemType}, .{}),
         Event("onBar", .{SystemThree}, .{}),
-    }).init();
+    }).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
     const entity1 = blk: {
@@ -727,7 +751,7 @@ test "systems can access edit queue" {
         SystemType1,
         meta.FlushEditQueue(StorageStub),
     }, .{});
-    var scheduler = CreateScheduler(StorageStub, .{OnFooEvent}).init();
+    var scheduler = try CreateScheduler(StorageStub, .{OnFooEvent}).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
     var entities: [128]Entity = undefined;
@@ -758,10 +782,10 @@ test "systems can access current entity" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(
+    var scheduler = try CreateScheduler(
         StorageStub,
         .{Event("onFoo", .{SystemType}, .{})},
-    ).init();
+    ).init(testing.allocator, .{});
     defer scheduler.deinit();
 
     var entities: [100]Entity = undefined;
@@ -794,7 +818,7 @@ test "systems entity access remain correct after single removeComponent" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemType}, .{})}).init();
+    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemType}, .{})}).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
     var entities: [100]Entity = undefined;
@@ -837,7 +861,7 @@ test "systems can accepts event related data" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemType}, MouseInput)}).init();
+    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemType}, MouseInput)}).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
     const initial_state = AEntityType{
@@ -867,7 +891,7 @@ test "event can mutate event extra argument" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, MouseEvent)}).init();
+    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, MouseEvent)}).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
     const initial_state = AEntityType{
@@ -909,7 +933,7 @@ test "event can request single query with component" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init();
+    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
     const initial_state = AEntityType{
@@ -942,7 +966,7 @@ test "event exit system loop" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init();
+    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
     const entity0 = try storage.createEntity(AEntityType{
@@ -1002,7 +1026,7 @@ test "event can request two queries without components" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init();
+    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
     const initial_state = AEntityType{
@@ -1029,7 +1053,7 @@ test "event can access invocation number" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init();
+    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
     var entities: [100]Entity = undefined;
@@ -1068,10 +1092,10 @@ test "event caching works" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{
+    var scheduler = try CreateScheduler(StorageStub, .{
         Event("onEvent1", .{System1}, .{}),
         Event("onEvent2", .{System2}, .{}),
-    }).init();
+    }).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
     const entity1 = blk: {
@@ -1144,7 +1168,7 @@ test "Event with no archetypes does not crash" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init();
+    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
     for (0..100) |_| {
@@ -1184,14 +1208,14 @@ test "DependOn makes a events race free" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{
+    var scheduler = try CreateScheduler(StorageStub, .{
         Event("onEvent", .{
             AddSystem1,
             DependOn(MultiplySystem2, .{AddSystem1}),
             DependOn(AddSystem3, .{MultiplySystem2}),
             DependOn(MultiplySystem4, .{AddSystem3}),
         }, .{}),
-    }).init();
+    }).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
     const entity_count = 10_000;
@@ -1245,11 +1269,11 @@ test "event DependOn events can have multiple dependencies" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = CreateScheduler(StorageStub, .{Event("onFoo", .{
+    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{
         AddSystem1,
         AddSystem2,
         DependOn(MultiplySystem3, .{ AddSystem1, AddSystem2 }),
-    }, .{})}).init();
+    }, .{})}).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
     const entity_count = 100;
@@ -1297,7 +1321,7 @@ test "reproducer: Dispatcher does not include new components to systems previous
     var storage = try RepStorage.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = Scheduler.init();
+    var scheduler = try Scheduler.init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
     const inital_state = AEntityType{
