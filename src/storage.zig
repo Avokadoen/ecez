@@ -227,7 +227,7 @@ pub fn CreateStorage(comptime components: anytype) type {
         /// defer a_iter.deinit();
         ///
         /// while (a_iter.next()) |item| {
-        ///    std.debug.print("{any}", .{item.entity});
+        ///    std.debug.print("{d}", .{item.entity});
         ///    std.debug.print("{any}", .{item.a});
         /// }
         /// ```

@@ -378,9 +378,9 @@ pub const DependOnSystem = struct {
         };
     }
 
-    pub fn getIndexRange(comptime self: DependOnSystem, comptime triggered_event: anytype) []const u32 {
+    pub fn getIndexRange(comptime self: DependOnSystem, comptime systems_info: SystemsInfo) []const u32 {
         const range = self.depend_on_indices_range;
-        return triggered_event.systems_info.depend_on_index_pool[range.from..range.to];
+        return systems_info.depend_on_index_pool[range.from..range.to];
     }
 };
 
@@ -666,13 +666,83 @@ pub fn getNthSystem(comptime systems: anytype, comptime n: comptime_int) type {
     return systems_count;
 }
 
-pub const SystemInfo = struct {
+pub const SystemsInfo = struct {
     // TODO: make size configurable
     depend_on_index_pool: []const u32,
     flush_indices: []const u32,
     metadata: []const SystemMetadata,
     function_types: []const type,
     functions: []const *const anyopaque,
+
+    pub fn getDependencySubCount(comptime self: SystemsInfo, comptime system_index: u32) u32 {
+        switch (self.metadata[system_index]) {
+            .common, .event => {
+                if (self.flush_indices.len == 0) {
+                    return 0;
+                }
+
+                // depend on all previous flush jobs if we have a flush
+                comptime var prev_flush_count: u32 = 0;
+                flush_range_loop: for (self.flush_indices) |flush_index| {
+                    if (flush_index >= system_index) break :flush_range_loop;
+                    prev_flush_count += 1;
+                }
+
+                return prev_flush_count;
+            },
+            .depend_on => |depend_on| {
+                const explicit_dependency_count = depend_on.getIndexRange(self).len;
+
+                // depend on all previous flush jobs if we have a flush
+                comptime var prev_flush_count: u32 = 0;
+                flush_range_loop: for (self.flush_indices) |flush_index| {
+                    if (flush_index >= system_index) break :flush_range_loop;
+                    prev_flush_count += 1;
+                }
+
+                return explicit_dependency_count + prev_flush_count;
+            },
+            // TODO: should stop at last flush: flush1 -> task3 -> task4 -> flush2, flush2 should only wait on task3 and task4, nothing else.
+            .flush_storage_edit_queue => return system_index,
+        }
+    }
+
+    pub fn getDependencySubIndices(comptime self: SystemsInfo, comptime system_index: u32) [self.getDependencySubCount(system_index)]u32 {
+        const dependency_count = self.getDependencySubCount(system_index);
+        if (dependency_count == 0) return [0]u32{};
+
+        comptime var depend_on_indices: [dependency_count]u32 = undefined;
+        switch (self.metadata[system_index]) {
+            .common, .event => {
+                flush_range_loop: for (&depend_on_indices, self.flush_indices) |*depency_index, flush_index| {
+                    if (flush_index >= system_index) break :flush_range_loop;
+
+                    depency_index.* = flush_index;
+                }
+            },
+            .depend_on => |depend_on| {
+                const index_range = depend_on.getIndexRange(self);
+                @memcpy(depend_on_indices[0..index_range.len], index_range);
+
+                // depend on all previous flush jobs if we have a flush
+                const rem_from = index_range.len;
+                const rem_to = rem_from + self.flush_indices.len;
+                flush_range_loop: for (depend_on_indices[rem_from..rem_to], self.flush_indices) |*depend_on_index, flush_index| {
+                    if (flush_index >= system_index) break :flush_range_loop;
+
+                    depend_on_index.* = flush_index;
+                }
+            },
+            // TODO: should stop at last flush: flush1 -> task3 -> task4 -> flush2, flush2 should only wait on task3 and task4, nothing else.
+            .flush_storage_edit_queue => {
+                for (&depend_on_indices, 0..) |*depend_on_index, prev_system_index| {
+                    depend_on_index.* = prev_system_index;
+                }
+            },
+        }
+
+        return depend_on_indices;
+    }
 };
 
 /// Specifiy a dependency where a system depends on one or more systems
@@ -701,7 +771,7 @@ pub fn FlushEditQueue(Storage: type) type {
 }
 
 /// perform compile-time reflection on systems to extrapolate information about registered systems
-pub fn createSystemInfo(comptime EventArgumentType: type, comptime system_count: comptime_int, comptime systems: anytype) SystemInfo {
+pub fn createSystemInfo(comptime EventArgumentType: type, comptime system_count: comptime_int, comptime systems: anytype) SystemsInfo {
     const SystemsType = @TypeOf(systems);
     const systems_type_info = @typeInfo(SystemsType);
     const fields_info = systems_type_info.Struct.fields;
@@ -881,7 +951,7 @@ pub fn createSystemInfo(comptime EventArgumentType: type, comptime system_count:
         }
     }
 
-    return SystemInfo{
+    return SystemsInfo{
         .depend_on_index_pool = globalArrayVariableRefWorkaround(depend_on_index_pool)[0..depend_on_indices_used],
         .flush_indices = globalArrayVariableRefWorkaround(flush_indices)[0..flush_count],
         .metadata = &globalArrayVariableRefWorkaround(metadata),

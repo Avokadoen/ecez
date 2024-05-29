@@ -73,7 +73,7 @@ pub fn main() anyerror!void {
     var storage = try Storage.init(allocator);
     defer storage.deinit();
 
-    var scheduler = Scheduler.init();
+    var scheduler = try Scheduler.init(allocator, .{});
     defer scheduler.deinit();
 
     const init_seed: u64 = @intCast(std.time.timestamp());
@@ -327,7 +327,7 @@ test "systems produce expected 3x3 grid state" {
     var storage = try Storage.init(std.testing.allocator);
     defer storage.deinit();
 
-    var scheduler = Scheduler.init();
+    var scheduler = try Scheduler.init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
     var cell_entities: [3 * 3]ecez.Entity = undefined;
