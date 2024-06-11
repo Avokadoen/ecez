@@ -3,6 +3,9 @@ const builtin = @import("builtin");
 const Pool = @This();
 const ResetEvent = std.Thread.ResetEvent;
 
+const ztracy = @import("ztracy");
+const Color = @import("misc.zig").Color;
+
 // Copy of zig master Thread.Pool
 
 mutex: std.Thread.Mutex = .{},
@@ -25,6 +28,9 @@ pub const Options = struct {
 };
 
 pub fn init(pool: *Pool, options: Options) !void {
+    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.job_queue);
+    defer zone.End();
+
     const allocator = options.allocator;
 
     pool.* = .{
@@ -50,6 +56,9 @@ pub fn init(pool: *Pool, options: Options) !void {
 }
 
 pub fn deinit(pool: *Pool) void {
+    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.job_queue);
+    defer zone.End();
+
     pool.join(pool.threads.len); // kill and join all threads.
 
     // TODO: we dont free the allocated thread due to some segfaul, set as undefined instead for now
@@ -57,6 +66,9 @@ pub fn deinit(pool: *Pool) void {
 }
 
 fn join(pool: *Pool, spawned: usize) void {
+    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.job_queue);
+    defer zone.End();
+
     if (builtin.single_threaded) {
         return;
     }
@@ -85,6 +97,9 @@ fn join(pool: *Pool, spawned: usize) void {
 /// In the case that queuing the function call fails to allocate memory, or the
 /// target is single-threaded, the function is called directly.
 pub fn spawnRe(pool: *Pool, comptime event_dependency_indices: []const u32, event_collection: []ResetEvent, this_reset_event: *ResetEvent, comptime func: anytype, args: anytype) void {
+    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.job_queue);
+    defer zone.End();
+
     this_reset_event.reset();
 
     if (builtin.single_threaded) {
@@ -103,6 +118,9 @@ pub fn spawnRe(pool: *Pool, comptime event_dependency_indices: []const u32, even
         event_collection: []ResetEvent,
 
         fn runFn(runnable: *Runnable) void {
+            const thread_zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.job_queue);
+            defer thread_zone.End();
+
             const run_node: *RunQueue.Node = @fieldParentPtr(RunQueue.Node, "data", runnable);
             const closure: *@This() = @alignCast(@fieldParentPtr(@This(), "run_node", run_node));
 
@@ -147,6 +165,9 @@ pub fn spawnRe(pool: *Pool, comptime event_dependency_indices: []const u32, even
 }
 
 pub fn spawn(pool: *Pool, comptime func: anytype, args: anytype) !void {
+    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.job_queue);
+    defer zone.End();
+
     if (builtin.single_threaded) {
         @call(.auto, func, args);
         return;
@@ -190,6 +211,9 @@ pub fn spawn(pool: *Pool, comptime func: anytype, args: anytype) !void {
 }
 
 fn worker(pool: *Pool) void {
+    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.job_queue);
+    defer zone.End();
+
     pool.mutex.lock();
     defer pool.mutex.unlock();
 
