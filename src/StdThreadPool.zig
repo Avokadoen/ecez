@@ -51,6 +51,9 @@ pub fn init(pool: *Pool, options: Options) !void {
 
 pub fn deinit(pool: *Pool) void {
     pool.join(pool.threads.len); // kill and join all threads.
+
+    // TODO: we dont free the allocated thread due to some segfaul, set as undefined instead for now
+    pool.threads = undefined;
 }
 
 fn join(pool: *Pool, spawned: usize) void {
