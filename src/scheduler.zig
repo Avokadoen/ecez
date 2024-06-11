@@ -3,7 +3,6 @@ const std = @import("std");
 const ztracy = @import("ztracy");
 
 const ThreadPool = @import("StdThreadPool.zig");
-const TracedStdThreadPool = @import("TracedStdThreadPool.zig");
 const ResetEvent = std.Thread.ResetEvent;
 
 const meta = @import("meta.zig");
@@ -120,7 +119,7 @@ pub fn CreateScheduler(
             const thread_pool = try pool_allocator.create(ThreadPool);
             errdefer pool_allocator.destroy(thread_pool);
 
-            try TracedStdThreadPool.init(thread_pool, .{
+            try ThreadPool.init(thread_pool, .{
                 .allocator = pool_allocator,
                 .n_jobs = config.thread_count,
             });
@@ -139,7 +138,7 @@ pub fn CreateScheduler(
         }
 
         pub fn deinit(self: *Scheduler) void {
-            TracedStdThreadPool.deinit(self.thread_pool);
+            self.thread_pool.deinit();
             const allocator = self.thread_pool.allocator;
             allocator.destroy(self.thread_pool);
         }
@@ -235,8 +234,7 @@ pub fn CreateScheduler(
                 // NOTE: Work around compiler crash: dont use reference to empty structs
                 const dependencies = comptime if (event_systems_dependencies[system_index].len == 0) [0]u32{} else event_systems_dependencies[system_index];
 
-                TracedStdThreadPool.spawnRe(
-                    self.thread_pool,
+                self.thread_pool.spawnRe(
                     &dependencies,
                     event_in_flight,
                     &event_in_flight[system_index],
