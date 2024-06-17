@@ -277,7 +277,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
                         inline for (&new_indices, fields) |*index, field| {
                             // calculate mask that filters out most significant bits
                             const new_after_bits_mask = comptime @as(BitMask.Bits, (1 << componentIndex(field.type)) - 1);
-                            index.* = @popCount(immediate_bits & new_after_bits_mask);
+                            index.* = @intCast(@popCount(immediate_bits & new_after_bits_mask));
                             immediate_bits |= (@as(BitMask.Bits, 1) << index.*);
                         }
 
