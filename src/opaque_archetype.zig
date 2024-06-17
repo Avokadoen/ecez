@@ -458,7 +458,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             var current_offset: ComponentMask.Shift = 0;
             const iter_count = self.getComponentCount();
             for (0..iter_count) |index| {
-                const bit_offset = @ctz(bitmask);
+                const bit_offset: ComponentMask.Shift = @intCast(@ctz(bitmask));
                 bitmask >>= bit_offset;
                 bitmask &= ~@as(ComponentMask.Bits, 1);
 
