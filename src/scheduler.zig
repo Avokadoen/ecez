@@ -43,7 +43,7 @@ pub fn CreateScheduler(
         }
 
         break :blk @Type(Type{ .Struct = .{
-            .layout = .Auto,
+            .layout = .auto,
             .fields = &fields,
             .decls = &[0]Type.Declaration{},
             .is_tuple = true,
@@ -78,7 +78,7 @@ pub fn CreateScheduler(
 
             // For each system in event, create an array of dependency indices
             const EventSystemDepField = @Type(Type{ .Struct = .{
-                .layout = .Auto,
+                .layout = .auto,
                 .fields = &system_fields,
                 .decls = &[0]Type.Declaration{},
                 .is_tuple = true,
@@ -94,7 +94,7 @@ pub fn CreateScheduler(
         }
 
         break :blk @Type(Type{ .Struct = .{
-            .layout = .Auto,
+            .layout = .auto,
             .fields = &fields,
             .decls = &[0]Type.Declaration{},
             .is_tuple = true,
