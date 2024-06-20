@@ -120,11 +120,13 @@ pub fn spawnRe(pool: *Pool, comptime event_dependency_indices: []const u32, even
         fn runFn(runnable: *Runnable) void {
             const thread_zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.job_queue);
             defer thread_zone.End();
-
             const run_node: *RunQueue.Node = @fieldParentPtr("data", runnable);
             const closure: *@This() = @alignCast(@fieldParentPtr("run_node", run_node));
 
-            for (closure.event_dependency_indices) |dependency_index| closure.event_collection[dependency_index].wait();
+            // wait for system dependencies to complete
+            for (closure.event_dependency_indices) |dependency_index| {
+                closure.event_collection[dependency_index].wait();
+            }
 
             @call(.auto, func, closure.arguments);
             closure.this_reset_event.set();
@@ -141,7 +143,7 @@ pub fn spawnRe(pool: *Pool, comptime event_dependency_indices: []const u32, even
     {
         pool.mutex.lock();
 
-        // TODO: avoid constant alloc, pool previous allocs
+        // TODO: avoid constant alloc, pool previous allocs, or use a more fitting allocator for the pool
         const closure = pool.allocator.create(Closure) catch {
             pool.mutex.unlock();
             @call(.auto, func, args);
