@@ -8,7 +8,7 @@ This is a opinionated WIP ECS (Entity Component System) API for Zig.
 
 ### Requirements
 
-The [zig compiler 0.12.0-dev.3180+83e578a18](https://ziglang.org)
+The [zig compiler 0.13.0-dev.351+64ef45eb0](https://ziglang.org)
 
 You can use zigup to easily get this specific version
 

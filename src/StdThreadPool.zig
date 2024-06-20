@@ -121,8 +121,8 @@ pub fn spawnRe(pool: *Pool, comptime event_dependency_indices: []const u32, even
             const thread_zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.job_queue);
             defer thread_zone.End();
 
-            const run_node: *RunQueue.Node = @fieldParentPtr(RunQueue.Node, "data", runnable);
-            const closure: *@This() = @alignCast(@fieldParentPtr(@This(), "run_node", run_node));
+            const run_node: *RunQueue.Node = @fieldParentPtr("data", runnable);
+            const closure: *@This() = @alignCast(@fieldParentPtr("run_node", run_node));
 
             for (closure.event_dependency_indices) |dependency_index| closure.event_collection[dependency_index].wait();
 
@@ -180,8 +180,8 @@ pub fn spawn(pool: *Pool, comptime func: anytype, args: anytype) !void {
         run_node: RunQueue.Node = .{ .data = .{ .runFn = runFn } },
 
         fn runFn(runnable: *Runnable) void {
-            const run_node: *RunQueue.Node = @fieldParentPtr(RunQueue.Node, "data", runnable);
-            const closure: *@This() = @alignCast(@fieldParentPtr(@This(), "run_node", run_node));
+            const run_node: *RunQueue.Node = @fieldParentPtr("data", runnable);
+            const closure: *@This() = @alignCast(@fieldParentPtr("run_node", run_node));
             @call(.auto, func, closure.arguments);
 
             // The thread pool's allocator is protected by the mutex.

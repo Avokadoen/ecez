@@ -4,7 +4,7 @@ const std = @import("std");
 pub fn doc(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
     const autodoc_test = b.addObject(.{
         .name = "ecez",
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -38,8 +38,9 @@ pub fn build(b: *std.Build) void {
         },
     };
 
+    const main_path = b.path("src/main.zig");
     const ecez = b.addModule("ecez", std.Build.Module.CreateOptions{
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = main_path,
         .imports = &imports,
     });
 
@@ -47,7 +48,7 @@ pub fn build(b: *std.Build) void {
     {
         const main_tests = b.addTest(.{
             .name = "main_tests",
-            .root_source_file = .{ .path = "src/main.zig" },
+            .root_source_file = main_path,
             .optimize = optimize,
         });
 
@@ -62,7 +63,7 @@ pub fn build(b: *std.Build) void {
 
     // add library tests to the main tests
     const main_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = main_path,
         .optimize = optimize,
     });
 
@@ -80,10 +81,10 @@ pub fn build(b: *std.Build) void {
     inline for ([_]Example{.{
         .name = "game-of-life",
     }}) |example| {
-        const path = "examples/" ++ example.name ++ "/main.zig";
+        const path = b.path("examples/" ++ example.name ++ "/main.zig");
         const exe = b.addExecutable(.{
             .name = example.name,
-            .root_source_file = .{ .path = path },
+            .root_source_file = path,
             .target = target,
             .optimize = optimize,
         });
@@ -101,7 +102,7 @@ pub fn build(b: *std.Build) void {
 
         // add any tests that are define inside each example
         const example_tests = b.addTest(.{
-            .root_source_file = .{ .path = path },
+            .root_source_file = path,
             .optimize = optimize,
         });
 

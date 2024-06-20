@@ -1072,7 +1072,7 @@ pub fn ComponentStorage(comptime types: []const type) type {
         };
     }
     const RtrTypeInfo = Type{ .Struct = .{
-        .layout = .Auto,
+        .layout = .auto,
         .fields = &struct_fields,
         .decls = &[0]Type.Declaration{},
         .is_tuple = true,
@@ -1093,7 +1093,7 @@ pub fn ComponentStruct(comptime field_names: []const []const u8, comptime types:
         };
     }
     const RtrTypeInfo = Type{ .Struct = .{
-        .layout = .Auto,
+        .layout = .auto,
         .fields = &struct_fields,
         .decls = &[0]Type.Declaration{},
         .is_tuple = false,
