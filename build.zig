@@ -26,6 +26,11 @@ pub fn build(b: *std.Build) void {
     // initialize tracy
     const enable_tracy = b.option(bool, "enable_tracy", "Enable Tracy profiler") orelse false;
 
+    // skip scheduler testing (temporarily needed due to some deadlock in CI)
+    const scheduler_testing = b.option(bool, "scheduler_testing", "Test scheduler") orelse true;
+    const options_step = b.addOptions();
+    options_step.addOption(bool, "scheduler_testing", scheduler_testing);
+
     const ztracy = b.dependency("ztracy", .{
         .enable_ztracy = enable_tracy,
         .enable_fibers = true,
@@ -54,6 +59,7 @@ pub fn build(b: *std.Build) void {
 
         main_tests.root_module.addImport("ecez", ecez);
         main_tests.root_module.addImport("ztracy", ztracy.module("root"));
+        main_tests.root_module.addOptions("ecez_options", options_step);
 
         b.installArtifact(main_tests);
     }
@@ -69,6 +75,7 @@ pub fn build(b: *std.Build) void {
 
     main_tests.root_module.addImport("ecez", ecez);
     main_tests.root_module.addImport("ztracy", ztracy.module("root"));
+    main_tests.root_module.addOptions("ecez_options", options_step);
 
     const test_step = b.step("test", "Run all tests");
     const main_tests_run = b.addRunArtifact(main_tests);

@@ -207,7 +207,7 @@ pub fn CreateStorage(comptime components: anytype) type {
         /// Parameters:
         ///     - entity:    the entity to retrieve Component from
         ///     - Component: the type of the component to retrieve
-        pub fn getComponent(self: *Storage, entity: Entity, comptime Component: type) error{ ComponentMissing, EntityMissing }!Component {
+        pub fn getComponent(self: Storage, entity: Entity, comptime Component: type) error{ ComponentMissing, EntityMissing }!Component {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
             return self.container.getComponent(entity, Component);

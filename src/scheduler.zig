@@ -149,7 +149,7 @@ pub fn CreateScheduler(
         ///     - event:            The event enum identifier. When registering an event on Wolrd creation a identifier is
         ///                         submitted.
         ///     - event_argument:   An event specific argument. Keep in mind that if you submit a pointer as argument data
-        ///                         then the lifetime of the argument must ourlive the execution of the event.
+        ///                         then the lifetime of the argument must out live the execution of the event.
         ///     - exclude_types:    A struct of component types to exclude from the event dispatch. Meaning entities with these
         ///                         components will be ignored even though they have all components listed in the arguments of the
         ///                         system
