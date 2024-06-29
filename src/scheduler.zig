@@ -233,13 +233,14 @@ pub fn CreateScheduler(
 
                 // NOTE: Work around compiler crash: dont use reference to empty structs
                 const dependencies = comptime if (event_systems_dependencies[system_index].len == 0) [0]u32{} else event_systems_dependencies[system_index];
-
+                const is_last_system = comptime (triggered_event.systems_info.metadata.len - 1) == system_index;
                 self.thread_pool.spawnRe(
                     &dependencies,
                     event_in_flight,
                     &event_in_flight[system_index],
                     DispatchJob.exec,
                     .{system_job},
+                    is_last_system,
                 );
             }
         }

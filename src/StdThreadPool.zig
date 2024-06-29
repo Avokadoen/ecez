@@ -15,7 +15,7 @@ is_running: bool = true,
 allocator: std.mem.Allocator,
 threads: []std.Thread,
 
-const RunQueue = std.SinglyLinkedList(Runnable);
+const RunQueue = std.DoublyLinkedList(Runnable);
 const Runnable = struct {
     runFn: RunProto,
 };
@@ -96,7 +96,15 @@ fn join(pool: *Pool, spawned: usize) void {
 ///
 /// In the case that queuing the function call fails to allocate memory, or the
 /// target is single-threaded, the function is called directly.
-pub fn spawnRe(pool: *Pool, comptime event_dependency_indices: []const u32, event_collection: []ResetEvent, this_reset_event: *ResetEvent, comptime func: anytype, args: anytype) void {
+pub fn spawnRe(
+    pool: *Pool,
+    comptime event_dependency_indices: []const u32,
+    event_collection: []ResetEvent,
+    this_reset_event: *ResetEvent,
+    comptime func: anytype,
+    args: anytype,
+    comptime broadcast_pool: bool,
+) void {
     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.job_queue);
     defer zone.End();
 
@@ -162,54 +170,10 @@ pub fn spawnRe(pool: *Pool, comptime event_dependency_indices: []const u32, even
         pool.mutex.unlock();
     }
 
-    // Notify waiting threads outside the lock to try and keep the critical section small.
-    pool.cond.signal();
-}
-
-pub fn spawn(pool: *Pool, comptime func: anytype, args: anytype) !void {
-    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.job_queue);
-    defer zone.End();
-
-    if (builtin.single_threaded) {
-        @call(.auto, func, args);
-        return;
+    if (comptime broadcast_pool) {
+        // Notify waiting threads outside the lock to try and keep the critical section small.
+        pool.cond.broadcast();
     }
-
-    const Args = @TypeOf(args);
-    const Closure = struct {
-        arguments: Args,
-        pool: *Pool,
-        run_node: RunQueue.Node = .{ .data = .{ .runFn = runFn } },
-
-        fn runFn(runnable: *Runnable) void {
-            const run_node: *RunQueue.Node = @fieldParentPtr("data", runnable);
-            const closure: *@This() = @alignCast(@fieldParentPtr("run_node", run_node));
-            @call(.auto, func, closure.arguments);
-
-            // The thread pool's allocator is protected by the mutex.
-            const mutex = &closure.pool.mutex;
-            mutex.lock();
-            defer mutex.unlock();
-
-            closure.pool.allocator.destroy(closure);
-        }
-    };
-
-    {
-        pool.mutex.lock();
-        defer pool.mutex.unlock();
-
-        const closure = try pool.allocator.create(Closure);
-        closure.* = .{
-            .arguments = args,
-            .pool = pool,
-        };
-
-        pool.run_queue.prepend(&closure.run_node);
-    }
-
-    // Notify waiting threads outside the lock to try and keep the critical section small.
-    pool.cond.signal();
 }
 
 fn worker(pool: *Pool) void {
@@ -220,7 +184,7 @@ fn worker(pool: *Pool) void {
     defer pool.mutex.unlock();
 
     while (true) {
-        while (pool.run_queue.popFirst()) |run_node| {
+        while (pool.run_queue.pop()) |run_node| {
             // Temporarily unlock the mutex in order to execute the run_node
             pool.mutex.unlock();
             defer pool.mutex.lock();
