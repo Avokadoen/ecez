@@ -20,7 +20,12 @@ const Runnable = struct {
     runFn: RunProto,
 };
 
-const RunProto = *const fn (*Runnable) void;
+const RunProto = *const fn (*Runnable) FnStatus;
+
+const FnStatus = enum {
+    yield,
+    done,
+};
 
 pub const Options = struct {
     allocator: std.mem.Allocator,
@@ -103,7 +108,6 @@ pub fn spawnRe(
     this_reset_event: *ResetEvent,
     comptime func: anytype,
     args: anytype,
-    comptime broadcast_pool: bool,
 ) void {
     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.job_queue);
     defer zone.End();
@@ -125,7 +129,7 @@ pub fn spawnRe(
         event_dependency_indices: []const u32,
         event_collection: []ResetEvent,
 
-        fn runFn(runnable: *Runnable) void {
+        fn runFn(runnable: *Runnable) FnStatus {
             const thread_zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.job_queue);
             defer thread_zone.End();
             const run_node: *RunQueue.Node = @fieldParentPtr("data", runnable);
@@ -133,7 +137,9 @@ pub fn spawnRe(
 
             // wait for system dependencies to complete
             for (closure.event_dependency_indices) |dependency_index| {
-                closure.event_collection[dependency_index].wait();
+                if (false == closure.event_collection[dependency_index].isSet()) {
+                    return .yield;
+                }
             }
 
             @call(.auto, func, closure.arguments);
@@ -145,6 +151,8 @@ pub fn spawnRe(
             defer mutex.unlock();
 
             closure.pool.allocator.destroy(closure);
+
+            return .done;
         }
     };
 
@@ -170,10 +178,8 @@ pub fn spawnRe(
         pool.mutex.unlock();
     }
 
-    if (comptime broadcast_pool) {
-        // Notify waiting threads outside the lock to try and keep the critical section small.
-        pool.cond.broadcast();
-    }
+    // Notify waiting threads outside the lock to try and keep the critical section small.
+    pool.cond.signal();
 }
 
 fn worker(pool: *Pool) void {
@@ -185,12 +191,17 @@ fn worker(pool: *Pool) void {
 
     while (true) {
         while (pool.run_queue.pop()) |run_node| {
-            // Temporarily unlock the mutex in order to execute the run_node
-            pool.mutex.unlock();
-            defer pool.mutex.lock();
+            const fn_outcome = run_fn_blk: {
+                // Temporarily unlock the mutex in order to execute the run_node
+                pool.mutex.unlock();
+                defer pool.mutex.lock();
+                const runFn = run_node.data.runFn;
+                break :run_fn_blk runFn(&run_node.data);
+            };
 
-            const runFn = run_node.data.runFn;
-            runFn(&run_node.data);
+            if (.yield == fn_outcome) {
+                pool.run_queue.prepend(run_node);
+            }
         }
 
         // Stop executing instead of waiting if the thread pool is no longer running.
