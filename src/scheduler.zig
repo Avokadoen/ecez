@@ -236,7 +236,7 @@ pub fn CreateScheduler(
                 self.thread_pool.spawnRe(
                     &dependencies,
                     event_in_flight,
-                    &event_in_flight[system_index],
+                    system_index,
                     DispatchJob.exec,
                     .{system_job},
                 );
