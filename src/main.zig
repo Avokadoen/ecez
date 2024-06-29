@@ -35,15 +35,7 @@ pub const tracy_alloc = @import("tracy_alloc.zig");
 pub const ezby = @import("ezby.zig");
 
 test {
-    const scheduler_testing = blk: {
-        const options = @import("ecez_options");
-
-        break :blk options.scheduler_testing;
-    };
-    if (scheduler_testing) {
-        _ = @import("scheduler.zig");
-    }
-
+    _ = @import("scheduler.zig");
     _ = @import("archetype_container.zig");
     _ = @import("binary_tree.zig");
     _ = @import("ezby.zig");

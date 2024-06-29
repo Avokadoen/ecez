@@ -38,6 +38,6 @@ jobs:
         run: ./zig build
 
       - name: Run tests
-        run: ./zig build test -Dscheduler_testing=false
+        run: ./zig build test
 
 
