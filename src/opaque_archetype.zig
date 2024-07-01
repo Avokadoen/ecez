@@ -190,33 +190,6 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             }
         }
 
-        pub fn prepareNewEntity(
-            self: *OpaqueArchetype,
-            entity: Entity,
-            all_component_sizes: [max_component_count]u32,
-            all_log2_alignments: [max_component_count]u8,
-        ) error{OutOfMemory}!void {
-            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
-            defer zone.End();
-
-            const value = self.entities.count();
-            try self.entities.put(entity, value);
-            errdefer _ = self.entities.swapRemove(entity);
-
-            var bitmask = self.component_bitmask;
-            var cursor: u32 = 0;
-            for (self.component_storage) |storage| {
-                const step = @as(ComponentMask.Shift, @intCast(@ctz(bitmask)));
-                std.debug.assert((bitmask >> step) & 1 == 1);
-                bitmask = (bitmask >> step) >> 1;
-                cursor += @as(u32, @intCast(step)) + 1;
-
-                const component_size = all_component_sizes[cursor - 1];
-                const component_alignment = all_log2_alignments[cursor - 1];
-                try storage.ensureUnusedCapacity(self.allocator, component_alignment, component_size);
-            }
-        }
-
         pub fn registerEntity(
             self: *OpaqueArchetype,
             entity: Entity,
