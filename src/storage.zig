@@ -111,6 +111,16 @@ pub fn CreateStorage(comptime components: anytype) type {
             return create_result.entity;
         }
 
+        /// Create a new entity with identical components to prototype
+        /// Parameters:
+        ///     - prototype: the entity that owns component values that new entity should also have
+        pub fn cloneEntity(self: *Storage, prototype: Entity) error{OutOfMemory}!Entity {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
+            defer zone.End();
+
+            return self.container.cloneEntity(prototype);
+        }
+
         /// Reassign a component value owned by entity
         /// Parameters:
         ///     - entity:    the entity that should be assigned the component value
@@ -495,6 +505,25 @@ test "createEntity() can create empty entities" {
         try testing.expectEqual(b.value, (try storage.getComponent(entity, Testing.Component.B)).value);
         try testing.expectEqual(a.value, (try storage.getComponent(entity, Testing.Component.A)).value);
     }
+}
+
+test "cloneEntity() can clone entities" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    const initial_state = AbEntityType{
+        .a = Testing.Component.A{},
+        .b = Testing.Component.B{},
+    };
+    const prototype = try storage.createEntity(initial_state);
+
+    const clone = try storage.cloneEntity(prototype);
+    try testing.expect(prototype.id != clone.id);
+
+    const stored_a = try storage.getComponent(clone, Testing.Component.A);
+    try testing.expectEqual(initial_state.a, stored_a);
+    const stored_b = try storage.getComponent(clone, Testing.Component.B);
+    try testing.expectEqual(initial_state.b, stored_b);
 }
 
 test "setComponent() component moves entity to correct archetype" {

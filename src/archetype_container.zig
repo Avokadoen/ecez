@@ -123,7 +123,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
             // create new entity
             const entity = Entity{ .id = @as(u32, @intCast(self.entity_references.items.len)) };
 
-            // allocate the entity reference item and let initializeEntityStorage assign it if it suceeds
+            // allocate the entity reference item and let initializeEntityStorage assign it if it succeeds
             try self.entity_references.append(undefined);
             errdefer _ = self.entity_references.pop();
 
@@ -133,6 +133,41 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
                 .new_archetype_container = new_archetype_created,
                 .entity = entity,
             };
+        }
+
+        pub fn cloneEntity(self: *ArcheContainer, prototype: Entity) error{OutOfMemory}!Entity {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.arche_container);
+            defer zone.End();
+
+            // fetch entity prototype reference
+            const bit_index = self.entity_references.items[prototype.id];
+
+            // create new entity handle
+            const new_entity = Entity{ .id = @as(u32, @intCast(self.entity_references.items.len)) };
+            try self.entity_references.append(bit_index);
+            errdefer _ = self.entity_references.pop();
+
+            // look up archetype location of prototype
+            const archetype_encoding = self.archetypes.items[bit_index].component_bitmask;
+            const total_local_components: u32 = @popCount(archetype_encoding);
+
+            // fetch a view of the prototype component data
+            var data: [components.len][]u8 = undefined;
+            self.archetypes.items[bit_index].fetchEntityComponentView(
+                prototype,
+                self.component_sizes,
+                data[0..total_local_components],
+            ) catch unreachable; // in the event of error, reference is stale
+
+            // register the component bytes and entity to it's new archetype
+            try self.archetypes.items[bit_index].registerEntity(
+                new_entity,
+                data[0..total_local_components],
+                self.component_sizes,
+                self.component_log2_align,
+            );
+
+            return new_entity;
         }
 
         /// Assign the component value to an entity
@@ -763,6 +798,24 @@ test "ArcheContainer createEntity & getComponent works" {
     try testing.expectEqual(initial_state.a, try container.getComponent(entity, Testing.Component.A));
     try testing.expectEqual(initial_state.b, try container.getComponent(entity, Testing.Component.B));
     try testing.expectEqual(initial_state.c, try container.getComponent(entity, Testing.Component.C));
+}
+
+test "ArcheContainer cloneEntity works" {
+    var container = try TestContainer.init(testing.allocator);
+    defer container.deinit();
+
+    const initial_state = Testing.Archetype.ABC{
+        .a = Testing.Component.A{ .value = 1 },
+        .b = Testing.Component.B{ .value = 2 },
+        .c = Testing.Component.C{},
+    };
+    const create_result = try container.createEntity(initial_state);
+    const prototype = create_result.entity;
+
+    const new_entity_0 = try container.cloneEntity(prototype);
+    try testing.expectEqual(initial_state.a, try container.getComponent(new_entity_0, Testing.Component.A));
+    try testing.expectEqual(initial_state.b, try container.getComponent(new_entity_0, Testing.Component.B));
+    try testing.expectEqual(initial_state.c, try container.getComponent(new_entity_0, Testing.Component.C));
 }
 
 test "ArcheContainer setComponent & getComponent works" {
