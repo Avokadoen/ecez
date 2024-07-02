@@ -13,6 +13,10 @@ const iterator = @import("iterator.zig");
 const storage_edit_queue = @import("storage_edit_queue.zig");
 
 pub fn CreateStorage(comptime components: anytype) type {
+    if (1 == components.len) {
+        @compileError("storage must have atleast 2 component types");
+    }
+
     return struct {
         // a flat array of the type of each field in the components tuple
         pub const component_type_array = verify_and_extract_field_types_blk: {
