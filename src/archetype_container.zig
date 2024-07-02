@@ -121,7 +121,7 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
             defer zone.End();
 
             // create new entity
-            const entity = Entity{ .id = @as(u32, @intCast(self.entity_references.items.len)) };
+            const entity = Entity{ .id = @intCast(self.entity_references.items.len) };
 
             // allocate the entity reference item and let initializeEntityStorage assign it if it succeeds
             try self.entity_references.append(undefined);
@@ -140,35 +140,35 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
             defer zone.End();
 
             // fetch entity prototype reference
-            const bit_index = self.entity_references.items[prototype.id];
+            const archetype_index = self.entity_references.items[prototype.id];
 
             // create new entity handle
             const new_entity = Entity{ .id = @as(u32, @intCast(self.entity_references.items.len)) };
-            try self.entity_references.append(bit_index);
+            try self.entity_references.append(archetype_index);
             errdefer _ = self.entity_references.pop();
 
             // ensure current storage is sufficient, if it isnt we grow storage belid thrfore
             // fetchEntityComponentView & registerEntity to ensure data view is vaoughout the clone operation
-            try self.archetypes.items[bit_index].ensureUnusedComponentCapacity(
+            try self.archetypes.items[archetype_index].ensureUnusedComponentCapacity(
                 self.component_sizes,
                 self.component_log2_align,
                 1,
             );
 
             // look up archetype location of prototype
-            const archetype_encoding = self.archetypes.items[bit_index].component_bitmask;
+            const archetype_encoding = self.archetypes.items[archetype_index].component_bitmask;
             const total_local_components: u32 = @popCount(archetype_encoding);
 
             // fetch a view of the prototype component data
             var data: [components.len][]u8 = undefined;
-            self.archetypes.items[bit_index].fetchEntityComponentView(
+            self.archetypes.items[archetype_index].fetchEntityComponentView(
                 prototype,
                 self.component_sizes,
                 data[0..total_local_components],
             ) catch unreachable; // in the event of error, reference is stale
 
             // register the component bytes and entity to it's new archetype
-            try self.archetypes.items[bit_index].registerEntity(
+            try self.archetypes.items[archetype_index].registerEntity(
                 new_entity,
                 data[0..total_local_components],
                 self.component_sizes,
@@ -691,11 +691,11 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
                 }
             }
 
-            var new_archetype_index = self.tree.getNodeDataIndex(initial_bit_encoding);
+            var archetype_index = self.tree.getNodeDataIndex(initial_bit_encoding);
 
             const new_archetype_created: bool = regiser_entity_blk: {
                 // if the archetype already exist
-                if (new_archetype_index) |index| {
+                if (archetype_index) |index| {
                     try self.archetypes.items[index].registerEntity(
                         entity,
                         &state_data,
@@ -711,26 +711,26 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
                 );
                 errdefer new_archetype.deinit(self.component_log2_align);
 
-                const opaque_archetype_index = @as(u32, @intCast(self.archetypes.items.len));
+                const new_archetype_index = @as(u32, @intCast(self.archetypes.items.len));
                 try self.archetypes.append(new_archetype);
                 errdefer _ = self.archetypes.pop();
 
-                try self.tree.appendChain(opaque_archetype_index, initial_bit_encoding);
+                try self.tree.appendChain(new_archetype_index, initial_bit_encoding);
 
-                try self.archetypes.items[opaque_archetype_index].registerEntity(
+                try self.archetypes.items[new_archetype_index].registerEntity(
                     entity,
                     &state_data,
                     self.component_sizes,
                     self.component_log2_align,
                 );
-                errdefer self.archetypes.items[opaque_archetype_index].removeEntity(entity, self.component_sizes) catch unreachable;
+                errdefer self.archetypes.items[new_archetype_index].removeEntity(entity, self.component_sizes) catch unreachable;
 
-                new_archetype_index = opaque_archetype_index;
+                archetype_index = new_archetype_index;
                 break :regiser_entity_blk true;
             };
 
             // register a reference to able to locate entity
-            self.entity_references.items[entity.id] = @as(EntityRef, @intCast(new_archetype_index.?));
+            self.entity_references.items[entity.id] = @as(EntityRef, @intCast(archetype_index.?));
 
             return new_archetype_created;
         }
