@@ -147,6 +147,14 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
             try self.entity_references.append(bit_index);
             errdefer _ = self.entity_references.pop();
 
+            // ensure current storage is sufficient, if it isnt we grow storage belid thrfore
+            // fetchEntityComponentView & registerEntity to ensure data view is vaoughout the clone operation
+            try self.archetypes.items[bit_index].ensureUnusedComponentCapacity(
+                self.component_sizes,
+                self.component_log2_align,
+                1,
+            );
+
             // look up archetype location of prototype
             const archetype_encoding = self.archetypes.items[bit_index].component_bitmask;
             const total_local_components: u32 = @popCount(archetype_encoding);

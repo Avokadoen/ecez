@@ -190,6 +190,33 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             }
         }
 
+        /// Grow component storages
+        ///
+        /// Note: this is useful for clone entity as we avoid reading component data that has been invalidated
+        pub fn ensureUnusedComponentCapacity(
+            self: *OpaqueArchetype,
+            all_component_sizes: [max_component_count]u32,
+            all_log2_alignments: [max_component_count]u8,
+            additional_entity_capacity: usize,
+        ) error{OutOfMemory}!void {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
+            defer zone.End();
+
+            var bitmask = self.component_bitmask;
+            var cursor: u32 = 0;
+            for (self.component_storage) |*storage| {
+                const step = @as(ComponentMask.Shift, @intCast(@ctz(bitmask)));
+                std.debug.assert((bitmask >> step) & 1 == 1);
+                bitmask = (bitmask >> step) >> 1;
+                cursor += @as(u32, @intCast(step)) + 1;
+
+                const component_alignment = all_log2_alignments[cursor - 1];
+                const component_size = all_component_sizes[cursor - 1];
+                const bytes_to_ensure = component_size * additional_entity_capacity;
+                try storage.ensureUnusedCapacity(self.allocator, component_alignment, bytes_to_ensure);
+            }
+        }
+
         pub fn registerEntity(
             self: *OpaqueArchetype,
             entity: Entity,
@@ -218,7 +245,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
 
                 const component_size = all_component_sizes[cursor - 1];
                 const component_alignment = all_log2_alignments[cursor - 1];
-                // TODO: proper errdefer
+                // TODO: proper errdefer (call ensureUnusedComponentCapacity ahead of each use of registerEntity)
                 try storage.appendSlice(self.allocator, component_alignment, data_entry[0..component_size]);
             }
         }
