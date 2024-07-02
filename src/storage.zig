@@ -1349,3 +1349,35 @@ test "reproducer: MineSweeper index out of bound caused by incorrect mapping of 
 
     try testing.expect(iter.next() != null);
 }
+
+// this reproducer never had an issue filed, so no issue number
+test "reproducer: Cloning entity produce corrupted component values for new entity" {
+    const ObjectMetadata = struct {
+        a: Entity,
+        b: u8,
+        c: [64]u8,
+    };
+
+    const RepStorage = CreateStorage(.{
+        ObjectMetadata,
+        Testing.Component.A,
+    });
+
+    var storage = try RepStorage.init(testing.allocator);
+    defer storage.deinit();
+
+    const obj = ObjectMetadata{ .a = Entity{ .id = 3 }, .b = 6, .c = [_]u8{9} ** 64 };
+
+    const SceneObject = struct {
+        obj: ObjectMetadata,
+    };
+    const entity_state = SceneObject{
+        .obj = obj,
+    };
+
+    const prototype = try storage.createEntity(entity_state);
+    const clone = try storage.cloneEntity(prototype);
+
+    try testing.expectEqual(obj, try storage.getComponent(prototype, ObjectMetadata));
+    try testing.expectEqual(obj, try storage.getComponent(clone, ObjectMetadata));
+}
