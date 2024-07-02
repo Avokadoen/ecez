@@ -5,9 +5,19 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "(Linux) Debug Test",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/bin/main_tests.exe",
+            "args": [],
+            "cwd": "${fileDirname}",
+            "console": "integratedTerminal",
+            "preLaunchTask": "build"
+        },
+        {
+            "name": "(Windows) Debug Test",
             "type": "cppvsdbg",
             "request": "launch",
-            "name": "Debug Test",
             "program": "${workspaceFolder}/zig-out/bin/main_tests.exe",
             "args": [],
             "cwd": "${workspaceFolder}",
