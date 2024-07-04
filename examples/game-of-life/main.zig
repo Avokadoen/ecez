@@ -126,7 +126,7 @@ pub fn main() anyerror!void {
         defer ztracy.FrameMark();
 
         // schedule a new update cycle
-        scheduler.dispatchEvent(&storage, .loop, &event_arg, .{});
+        scheduler.dispatchEvent(&storage, .loop, &event_arg);
 
         // wait for previous update and render
         scheduler.waitEvent(.loop);
@@ -355,7 +355,7 @@ test "systems produce expected 3x3 grid state" {
             });
         }
 
-        scheduler.dispatchEvent(&storage, .loop, &event_arg, .{});
+        scheduler.dispatchEvent(&storage, .loop, &event_arg);
         scheduler.waitEvent(.loop);
 
         for ([_]bool{
@@ -391,7 +391,7 @@ test "systems produce expected 3x3 grid state" {
             ) catch unreachable;
         }
 
-        scheduler.dispatchEvent(&storage, .loop, &event_arg, .{});
+        scheduler.dispatchEvent(&storage, .loop, &event_arg);
         scheduler.waitEvent(.loop);
 
         for (&cell_entities, state_2) |entity, alive| {
@@ -399,7 +399,7 @@ test "systems produce expected 3x3 grid state" {
             try std.testing.expectEqual(alive, health.alive[0]);
         }
 
-        scheduler.dispatchEvent(&storage, .loop, &event_arg, .{});
+        scheduler.dispatchEvent(&storage, .loop, &event_arg);
         scheduler.waitEvent(.loop);
 
         for (&cell_entities, state_1) |entity, alive| {

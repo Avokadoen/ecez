@@ -150,45 +150,18 @@ pub fn CreateScheduler(
         ///                         submitted.
         ///     - event_argument:   An event specific argument. Keep in mind that if you submit a pointer as argument data
         ///                         then the lifetime of the argument must out live the execution of the event.
-        ///     - exclude_types:    A struct of component types to exclude from the event dispatch. Meaning entities with these
-        ///                         components will be ignored even though they have all components listed in the arguments of the
-        ///                         system
         ///
         /// Example:
         /// ```
         /// const Scheduler = ecez.CreateScheduler(Storage, .{ecez.Event("onMouse", .{onMouseSystem}, MouseArg)})
         /// // ... storage creation etc ...
-        /// // trigger mouse handle, exclude any entity with the RatComponent from this event
-        /// scheduler.dispatchEvent(&storage, .onMouse, @as(MouseArg, mouse), .{RatComponent});
+        /// // trigger mouse handle
+        /// scheduler.dispatchEvent(&storage, .onMouse, @as(MouseArg, mouse));
         /// ```
-        pub fn dispatchEvent(self: *Scheduler, storage: *Storage, comptime event: EventsEnum, event_argument: anytype, comptime exclude_types: anytype) void {
+        pub fn dispatchEvent(self: *Scheduler, storage: *Storage, comptime event: EventsEnum, event_argument: anytype) void {
             const tracy_zone_name = comptime std.fmt.comptimePrint("dispatchEvent {s}", .{@tagName(event)});
             const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.scheduler);
             defer zone.End();
-
-            const exclude_type_info = @typeInfo(@TypeOf(exclude_types));
-            if (exclude_type_info != .Struct) {
-                @compileError("event exclude types must be a tuple of types");
-            }
-
-            const exclude_type_arr = comptime exclude_type_extract_blk: {
-                var type_arr: [exclude_type_info.Struct.fields.len]type = undefined;
-                for (&type_arr, exclude_type_info.Struct.fields, 0..) |*exclude_type, field, index| {
-                    if (field.type != type) {
-                        @compileError("event include types field " ++ field.name ++ "must be a component type, was " ++ @typeName(field.type));
-                    }
-
-                    exclude_type.* = exclude_types[index];
-                }
-                break :exclude_type_extract_blk type_arr;
-            };
-            const exclude_bitmask = comptime include_bit_blk: {
-                var bitmask: Storage.ComponentMask.Bits = 0;
-                for (exclude_type_arr) |Component| {
-                    bitmask |= 1 << Storage.Container.componentIndex(Component);
-                }
-                break :include_bit_blk bitmask;
-            };
 
             const event_index = @intFromEnum(event);
             const event_in_flight = &self.events_in_flight[event_index];
@@ -210,6 +183,14 @@ pub fn CreateScheduler(
                         bitmask |= 1 << Storage.Container.componentIndex(Component);
                     }
                     break :include_bits_blk bitmask;
+                };
+
+                const exclude_bitmask = comptime include_bit_blk: {
+                    var bitmask: Storage.ComponentMask.Bits = 0;
+                    for (metadata.excludeComponents()) |Component| {
+                        bitmask |= 1 << Storage.Container.componentIndex(Component);
+                    }
+                    break :include_bit_blk bitmask;
                 };
 
                 const DispatchJob = EventDispatchJob(
@@ -322,10 +303,12 @@ pub fn CreateScheduler(
                             inline for (
                                 param_types,
                                 comptime metadata.paramCategories(),
+                                &arguments,
                                 0..,
                             ) |
                                 Param,
                                 param_category,
+                                *argument,
                                 nth_argument,
                             | {
                                 switch (param_category) {
@@ -338,7 +321,7 @@ pub fn CreateScheduler(
                                             const from = inner_index * param_size;
                                             const to = from + param_size;
                                             const bytes = storage.outer[component_index][from..to];
-                                            arguments[nth_argument] = @as(*Param, @ptrCast(@alignCast(bytes))).*;
+                                            argument.* = @as(*Param, @ptrCast(@alignCast(bytes))).*;
                                         }
                                     },
                                     .component_ptr => {
@@ -351,18 +334,19 @@ pub fn CreateScheduler(
                                             const from = inner_index * param_size;
                                             const to = from + param_size;
                                             const bytes = storage.outer[component_index][from..to];
-                                            arguments[nth_argument] = @as(*CompQueryType, @ptrCast(@alignCast(bytes)));
+                                            argument.* = @as(*CompQueryType, @ptrCast(@alignCast(bytes)));
                                         }
                                     },
-                                    .entity => arguments[nth_argument] = entities[inner_index],
+                                    .entity => argument.* = entities[inner_index],
                                     .query_ptr => {
                                         const Iter = @typeInfo(Param).Pointer.child;
                                         var iter = Iter.init(self_job.storage.container.archetypes.items, self_job.storage.container.tree);
-                                        arguments[nth_argument] = &iter;
+                                        argument.* = &iter;
                                     },
-                                    .invocation_number_value => arguments[nth_argument] = system_invocation_count,
-                                    .event_argument => arguments[nth_argument] = self_job.event_argument,
-                                    .storage_edit_queue => arguments[nth_argument] = &self_job.storage.storage_queue,
+                                    .invocation_number_value => argument.* = system_invocation_count,
+                                    .event_argument => argument.* = self_job.event_argument,
+                                    .storage_edit_queue => argument.* = &self_job.storage.storage_queue,
+                                    .exclude_entities_with => argument.* = Param{},
                                 }
                             }
 
@@ -420,7 +404,7 @@ test "event can have no entities or even archetype to work with" {
     var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, .{});
     scheduler.waitEvent(.onFoo);
 }
 
@@ -443,7 +427,7 @@ test "event can mutate components" {
     };
     const entity = try storage.createEntity(initial_state);
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, .{});
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -453,8 +437,16 @@ test "event can mutate components" {
 }
 
 test "event exclude types exclude entities" {
-    const SystemStruct = struct {
-        pub fn mutateA(a: *Testing.Component.A) void {
+    const SystemStructNoBC = struct {
+        pub fn mutateA(a: *Testing.Component.A, e: meta.ExcludeEntitiesWith(.{ Testing.Component.B, Testing.Component.C })) void {
+            _ = e;
+            a.value += 1;
+        }
+    };
+
+    const SystemStructNoB = struct {
+        pub fn mutateA(a: *Testing.Component.A, e: meta.ExcludeEntitiesWith(.{Testing.Component.B})) void {
+            _ = e;
             a.value += 1;
         }
     };
@@ -464,7 +456,10 @@ test "event exclude types exclude entities" {
 
     var scheduler = try CreateScheduler(
         StorageStub,
-        .{Event("onFoo", .{SystemStruct}, .{})},
+        .{
+            Event("exclude_b_c", .{SystemStructNoBC}, .{}),
+            Event("exclude_b", .{SystemStructNoB}, .{}),
+        },
     ).init(testing.allocator, .{});
     defer scheduler.deinit();
 
@@ -485,8 +480,8 @@ test "event exclude types exclude entities" {
         .c = Testing.Component.C{},
     });
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{ Testing.Component.B, Testing.Component.C });
-    scheduler.waitEvent(.onFoo);
+    scheduler.dispatchEvent(&storage, .exclude_b_c, .{});
+    scheduler.waitEvent(.exclude_b_c);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 1 },
@@ -505,8 +500,8 @@ test "event exclude types exclude entities" {
         try storage.getComponent(abc_entity, Testing.Component.A),
     );
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{Testing.Component.B});
-    scheduler.waitEvent(.onFoo);
+    scheduler.dispatchEvent(&storage, .exclude_b, .{});
+    scheduler.waitEvent(.exclude_b);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 2 },
@@ -579,19 +574,19 @@ test "DependOn support structs" {
     }
 
     // ((0 + 1) * 2) + 1 = 3
-    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, .{});
     scheduler.waitEvent(.onFoo);
 
     // ((3 + 1) * 2) + 1 = 9
-    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, .{});
     scheduler.waitEvent(.onFoo);
 
     // ((9 + 1) * 2) + 1 = 21
-    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, .{});
     scheduler.waitEvent(.onFoo);
 
     // ((21 + 1) * 2) + 1 = 45
-    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, .{});
     scheduler.waitEvent(.onFoo);
 
     const expected_value = 45;
@@ -643,7 +638,7 @@ test "DependOn support structs" {
 //     };
 //     const entity = try storage.createEntity(initial_state);
 
-//     scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+//     scheduler.dispatchEvent(&storage, .onFoo, .{});
 //     scheduler.waitEvent(.onFoo);
 
 //     try testing.expectEqual(
@@ -697,7 +692,7 @@ test "events call systems" {
         break :blk try storage.createEntity(initial_state);
     };
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, .{});
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -713,7 +708,7 @@ test "events call systems" {
         try storage.getComponent(entity2, Testing.Component.A),
     );
 
-    scheduler.dispatchEvent(&storage, .onBar, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onBar, .{});
     scheduler.waitEvent(.onBar);
 
     try testing.expectEqual(
@@ -759,7 +754,7 @@ test "systems can access edit queue" {
         entity.* = try storage.createEntity(initial_state);
     }
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, .{});
     scheduler.waitEvent(.onFoo);
 
     for (entities, 0..) |entity, index| {
@@ -793,7 +788,7 @@ test "systems can access current entity" {
         entity.* = try storage.createEntity(initial_state);
     }
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, .{});
     scheduler.waitEvent(.onFoo);
 
     for (entities) |entity| {
@@ -826,7 +821,7 @@ test "systems entity access remain correct after single removeComponent" {
         entity.* = try storage.createEntity(initial_state);
     }
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, .{});
     scheduler.waitEvent(.onFoo);
 
     for (entities[0..50]) |entity| {
@@ -866,7 +861,7 @@ test "systems can accepts event related data" {
     };
     const entity = try storage.createEntity(initial_state);
 
-    scheduler.dispatchEvent(&storage, .onFoo, MouseInput{ .x = 40, .y = 2 }, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, MouseInput{ .x = 40, .y = 2 });
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -901,7 +896,7 @@ test "event can mutate event extra argument" {
     // make sure test is not modified in an illegal manner
     try testing.expect(initial_state.a.value != mouse_event.value);
 
-    scheduler.dispatchEvent(&storage, .onFoo, &mouse_event, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, &mouse_event);
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(initial_state.a.value, mouse_event.value);
@@ -938,7 +933,7 @@ test "event can request single query with component" {
     };
     const entity = try storage.createEntity(initial_state);
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, .{});
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -976,7 +971,7 @@ test "event exit system loop" {
         .a = Testing.Component.A{ .value = 2 },
     });
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, .{});
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -1031,7 +1026,7 @@ test "event can request two queries without components" {
     };
     const entity = try storage.createEntity(initial_state);
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, .{});
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -1061,7 +1056,7 @@ test "event can access invocation number" {
         entity.* = try storage.createEntity(initial_state);
     }
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, .{});
     scheduler.waitEvent(.onFoo);
 
     for (entities, 0..) |entity, index| {
@@ -1102,7 +1097,7 @@ test "event caching works" {
         break :blk try storage.createEntity(initial_state);
     };
 
-    scheduler.dispatchEvent(&storage, .onEvent1, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onEvent1, .{});
     scheduler.waitEvent(.onEvent1);
 
     try testing.expectEqual(Testing.Component.A{ .value = 1 }, try storage.getComponent(
@@ -1113,7 +1108,7 @@ test "event caching works" {
     // move entity to archetype A, B
     try storage.setComponent(entity1, Testing.Component.B{ .value = 0 });
 
-    scheduler.dispatchEvent(&storage, .onEvent1, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onEvent1, .{});
     scheduler.waitEvent(.onEvent1);
 
     try testing.expectEqual(Testing.Component.A{ .value = 2 }, try storage.getComponent(
@@ -1121,7 +1116,7 @@ test "event caching works" {
         Testing.Component.A,
     ));
 
-    scheduler.dispatchEvent(&storage, .onEvent2, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onEvent2, .{});
     scheduler.waitEvent(.onEvent2);
 
     try testing.expectEqual(Testing.Component.B{ .value = 1 }, try storage.getComponent(
@@ -1138,7 +1133,7 @@ test "event caching works" {
         break :blk try storage.createEntity(initial_state);
     };
 
-    scheduler.dispatchEvent(&storage, .onEvent1, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onEvent1, .{});
     scheduler.waitEvent(.onEvent1);
 
     try testing.expectEqual(
@@ -1146,7 +1141,7 @@ test "event caching works" {
         try storage.getComponent(entity2, Testing.Component.A),
     );
 
-    scheduler.dispatchEvent(&storage, .onEvent2, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onEvent2, .{});
     scheduler.waitEvent(.onEvent2);
 
     try testing.expectEqual(
@@ -1169,7 +1164,7 @@ test "Event with no archetypes does not crash" {
     defer scheduler.deinit();
 
     for (0..100) |_| {
-        scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+        scheduler.dispatchEvent(&storage, .onFoo, .{});
         scheduler.waitEvent(.onFoo);
     }
 }
@@ -1226,10 +1221,10 @@ test "DependOn makes a events race free" {
         entity.* = try storage.createEntity(inital_state);
     }
 
-    scheduler.dispatchEvent(&storage, .onEvent, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onEvent, .{});
     scheduler.waitEvent(.onEvent);
 
-    scheduler.dispatchEvent(&storage, .onEvent, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onEvent, .{});
     scheduler.waitEvent(.onEvent);
 
     for (entities) |entity| {
@@ -1284,10 +1279,10 @@ test "event DependOn events can have multiple dependencies" {
         entity.* = try storage.createEntity(inital_state);
     }
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, .{});
     scheduler.waitEvent(.onFoo);
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{}, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, .{});
     scheduler.waitEvent(.onFoo);
 
     for (entities) |entity| {
@@ -1329,13 +1324,13 @@ test "reproducer: Dispatcher does not include new components to systems previous
 
     var tracker = Tracker{ .count = 0 };
 
-    scheduler.dispatchEvent(&storage, .onFoo, &tracker, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, &tracker);
     scheduler.waitEvent(.onFoo);
 
     _ = try storage.createEntity(inital_state);
     _ = try storage.createEntity(inital_state);
 
-    scheduler.dispatchEvent(&storage, .onFoo, &tracker, .{});
+    scheduler.dispatchEvent(&storage, .onFoo, &tracker);
     scheduler.waitEvent(.onFoo);
 
     // at this point we expect tracker to have a count of:

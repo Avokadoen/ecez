@@ -22,6 +22,7 @@ pub const ArgType = enum {
     query,
     query_iter,
     storage_edit_queue,
+    exclude_entities_with,
 };
 
 pub const SystemType = enum {
@@ -100,6 +101,15 @@ pub const SystemMetadata = union(SystemType) {
             .flush_storage_edit_queue => false,
         };
     }
+
+    pub fn excludeComponents(comptime self: SystemMetadata) []const type {
+        return switch (self) {
+            .common => |common| common.exclude_components,
+            .depend_on => |depend_on| depend_on.common.exclude_components,
+            .event => @compileError("ecez library bug, please file a issue if you hit this error"),
+            .flush_storage_edit_queue => &[0]type{}, // exluding components should not exist on flush system
+        };
+    }
 };
 
 pub const CommonSystem = struct {
@@ -113,6 +123,7 @@ pub const CommonSystem = struct {
         invocation_number_value,
         query_ptr,
         storage_edit_queue,
+        exclude_entities_with,
     };
 
     params: []const FnInfo.Param,
@@ -121,6 +132,7 @@ pub const CommonSystem = struct {
     has_entity_argument: bool,
     has_invocation_count_argument: bool,
     returns_system_command: bool,
+    exclude_components: []const type,
 
     /// initalize metadata for a system using a supplied function type info
     pub fn init(
@@ -184,6 +196,7 @@ pub const CommonSystem = struct {
             .has_entity_argument = parse_result.has_entity_argument,
             .has_invocation_count_argument = parse_result.has_invocation_count_argument,
             .returns_system_command = returns_system_command,
+            .exclude_components = parse_result.exclude_components,
         };
     }
 
@@ -220,6 +233,7 @@ pub const CommonSystem = struct {
         has_entity_argument: bool,
         has_invocation_count_argument: bool,
         param_categories: []const ParamCategory,
+        exclude_components: []const type,
     };
     fn parseParams(
         comptime EventArgument: type,
@@ -242,6 +256,7 @@ pub const CommonSystem = struct {
             .has_entity_argument = false,
             .has_invocation_count_argument = false,
             .param_categories = &param_categories,
+            .exclude_components = &[0]type{},
         };
 
         var parsing_state: ParsingState = .component_parsing;
@@ -321,6 +336,12 @@ pub const CommonSystem = struct {
                         break :special_parse_blk true;
                     },
                     .query => @compileError("Query is not legal, use Query.Iter instead"),
+                    .exclude_entities_with => {
+                        param.* = ParamCategory.exclude_entities_with;
+                        result.exclude_components = &parse_set_states.type.exclude_components;
+                        parsing_state = .special_arguments;
+                        break :special_parse_blk true;
+                    },
                     .presumed_component => break :special_parse_blk false,
                 }
             };
@@ -335,6 +356,7 @@ pub const CommonSystem = struct {
                         .entity => "entity",
                         .invocation_number_value => "invocation number",
                         .query_ptr => "query",
+                        .exclude_entities_with => "exclude entities with",
                     };
                     const err_msg = std.fmt.comptimePrint("system {s} argument {d} is a component but comes after {s}", .{
                         function_name,
@@ -424,7 +446,33 @@ pub fn Event(comptime event_name: []const u8, comptime systems: anytype, comptim
     };
 }
 
-/// Extract the argument "catergory" given the argument type T
+pub fn ExcludeEntitiesWith(comptime components: anytype) type {
+    const Components = @TypeOf(components);
+    const component_types = reflect_components_blk: {
+        const components_info = @typeInfo(Components);
+        if (components_info != .Struct) {
+            @compileError("ExcludeEntitiesWith argument expects a tuple of component(s), got " ++ @typeName(Components));
+        }
+
+        var component_types_: [components_info.Struct.fields.len]type = undefined;
+        for (&component_types_, components_info.Struct.fields, 0..) |*component_type, field, field_index| {
+            if (type != field.type) {
+                @compileError(std.fmt.comptimePrint("ExcludeEntitiesWith components field {d} was of type {s} expected type", .{ field_index, @typeName(field.type) }));
+            }
+
+            component_type.* = components[field_index];
+        }
+
+        break :reflect_components_blk component_types_;
+    };
+
+    return struct {
+        comptime secret_field: ArgType = .exclude_entities_with,
+        pub const exclude_components = component_types;
+    };
+}
+
+/// Extract the argument "category" given the argument type T
 pub fn getSpecialArgument(comptime EventArgument: type, comptime T: type) ArgType {
     // TODO: should we verify that type is not identified as another special argument?
     if (T == EventArgument) {

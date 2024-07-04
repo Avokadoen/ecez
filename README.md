@@ -76,9 +76,8 @@ Zig's comptime feature is utilized to perform static reflection on the usage of 
     scheduler.dispatchEvent(&storage, .update_loop, .{}, .{});
 
     // Dispatch event can take event "scoped" arguments, like here where we include a mouse event.
-    // Events can also exclude components when executing systems. In this example we will not call
-    // "FireWandSystem" on any entity components if the entity has a MonsterTag component.
-    scheduler.dispatchEvent(&storage, .on_mouse_click, .{@as(MouseArg, mouse)}, .{ MonsterTag });
+    // Events can also exclude components when executing systems. 
+    scheduler.dispatchEvent(&storage, .on_mouse_click, .{@as(MouseArg, mouse)});
 
     // Events/Systems execute asynchronously
     // You can wait on specific events ...
@@ -92,6 +91,7 @@ Zig's comptime feature is utilized to perform static reflection on the usage of 
 #### Special system arguments
 
 Systems can have arguments that have a unique semantical meaning:
+ * ExcludeEntitiesWith - Tags components that should be excluded - entities that has said components will not be called with this system
  * Entity - give the system access to the current entity
  * EventArgument - data that is relevant to an triggered event
  * Queries - the same queries described [below](#queries)
@@ -99,6 +99,44 @@ Systems can have arguments that have a unique semantical meaning:
  * Storage.StorageEditQueue - Any storage type has a StorageEditQueue which can be included as a system argument pointer allowing storage edits
 
  ##### Examples 
+
+Example of ExcludeEntitiesWith
+```zig
+    const FindGoodGuys = struct {
+        pub fn system(human: *Human, e: meta.ExcludeEntitiesWith(.{ PickNoseTag })) void {
+            _ = e;
+            std.debug.print("{s} is a good guy!", .{human.name});
+        }
+    };
+
+    const FindBadGuys = struct {
+        pub fn system(human: *Human, tag: PickNoseTag) void {
+            _ = tag;
+            std.debug.print("{s} is a bad guy!", .{human.name});
+        }
+    };
+
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    var scheduler = try CreateScheduler(
+        StorageStub,
+        .{
+            Event("find_good_guys", .{FindGoodGuys}, .{}),
+            Event("find_bad_guys", .{FindBadGuys}, .{}),
+        },
+    ).init(testing.allocator, .{});
+    defer scheduler.deinit();
+
+    scheduler.dispatchEvent(&storage, .find_good_guys, .{});
+    scheduler.waitEvent(.find_good_guys);
+
+    scheduler.dispatchEvent(&storage, .find_bad_guys, .{});
+    scheduler.waitEvent(.find_bad_guys);
+    
+    // no entity with human component will be printed twice!
+```
+
 
 Example of EventArgument
 ```zig
@@ -121,7 +159,7 @@ Example of EventArgument
     // ...
 
     // As the event is triggered we supply event specific data
-    scheduler.dispatchEvent(&storage, .onMouseMove, MouseMove{ .x = 40, .y = 2 }, .{});
+    scheduler.dispatchEvent(&storage, .onMouseMove, MouseMove{ .x = 40, .y = 2 });
 ```
 
 Example of Entity
