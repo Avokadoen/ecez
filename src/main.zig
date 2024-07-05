@@ -28,6 +28,9 @@ pub const Event = meta.Event;
 /// and any system after the FlushEditQueue must wait on this flush.
 pub const FlushEditQueue = meta.FlushEditQueue;
 
+/// A function to tag individual component types in a tuple as excluded from the system dispatch.
+pub const ExcludeEntityWith = meta.ExcludeEntitiesWith;
+
 /// Allocator traced by tracy
 pub const tracy_alloc = @import("tracy_alloc.zig");
 

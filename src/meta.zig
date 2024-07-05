@@ -446,6 +446,8 @@ pub fn Event(comptime event_name: []const u8, comptime systems: anytype, comptim
     };
 }
 
+/// A function to tag individual component types in a tuple as excluded from the system dispatch.
+/// In other words: the system will not be called on entities that also owns component types in components.
 pub fn ExcludeEntitiesWith(comptime components: anytype) type {
     const Components = @TypeOf(components);
     const component_types = reflect_components_blk: {
