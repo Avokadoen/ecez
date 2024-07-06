@@ -394,34 +394,53 @@ pub fn CreateStorage(comptime components: anytype) type {
                 return;
             }
 
-            // find first index
-            const previous_component_index = initial_component_index_blk: {
-                inline for (component_type_array, 0..) |Component, comp_index| {
-                    if (other_components[0] == Component) {
-                        break :initial_component_index_blk comp_index;
-                    }
-                }
-                @compileError("type '" ++ @typeName(other_components[0]) ++ "' is not a registered component type");
-            };
-
             // no more work to do as we validated first component already
             if (other_components.len == 1) {
                 return;
             }
 
-            inline for (other_components[1..], 0..) |OtherComponent, prev_other_index| {
-                inline for (component_type_array, 0..) |Component, comp_index| {
-                    if (OtherComponent == Component) {
-                        if (previous_component_index > comp_index) {
-                            const error_message = std.fmt.comptimePrint(
-                                "Components must be submitted in order they were registered in storage, '{s}' should come *before* '{s}'",
-                                .{
-                                    @typeName(OtherComponent),
-                                    @typeName(other_components[prev_other_index]),
-                                },
-                            );
-                            @compileError(error_message);
+            // find individual components in the global storage
+            comptime var other_components_global_index: [other_components.len]usize = undefined;
+            outer: inline for (&other_components_global_index, other_components) |*other_component_global_index, OtherComponent| {
+                inline for (component_type_array, 0..) |StorageComponent, comp_index| {
+                    if (OtherComponent == StorageComponent) {
+                        other_component_global_index.* = comp_index;
+                        continue :outer;
+                    }
+                }
+                @compileError(@typeName(OtherComponent) ++ " is not a storage registered component");
+            }
+
+            {
+                const front_global_indices_slice = other_components_global_index[0 .. other_components_global_index.len - 1];
+                const back_global_indices_slice = other_components_global_index[1..other_components_global_index.len];
+                inline for (front_global_indices_slice, back_global_indices_slice) |prev_index, index| {
+                    if (prev_index >= index) {
+                        const less_than = struct {
+                            pub fn lessThan(context: void, a: usize, b: usize) bool {
+                                _ = context;
+                                return a < b;
+                            }
+                        }.lessThan;
+                        comptime std.mem.sort(usize, &other_components_global_index, {}, less_than);
+
+                        comptime var component_list_str_len = 1;
+                        inline for (other_components) |OtherComponent| {
+                            component_list_str_len += "\n\t - ".len + @typeName(OtherComponent).len;
                         }
+
+                        comptime var str_index = 0;
+                        comptime var component_list_str: [component_list_str_len]u8 = undefined;
+                        inline for (other_components_global_index) |sorted_other_components_index| {
+                            const written = try std.fmt.bufPrint(component_list_str[str_index..], "\n\t - {s}", .{@typeName(component_type_array[sorted_other_components_index])});
+                            str_index += written.len;
+                        }
+
+                        const error_message = std.fmt.comptimePrint(
+                            "Components must be submitted in order they were registered in storage. In this case the order must be:{s}",
+                            .{&component_list_str},
+                        );
+                        @compileError(error_message);
                     }
                 }
             }
