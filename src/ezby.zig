@@ -11,6 +11,8 @@ const EntityRef = entity_type.EntityRef;
 const Entity = entity_type.Entity;
 const EntityMap = entity_type.Map;
 
+const meta = @import("meta.zig");
+
 // TODO: option to use stack instead of heap
 
 pub const version_major = 0;
@@ -33,8 +35,16 @@ pub const DeserializeError = error{
 };
 
 // TODO: doc comment
-pub const SerializeConfig = struct {
+pub const RuntimeSerializeConfig = struct {
     pre_allocation_size: usize = 0,
+};
+
+pub const ComptimeSerializeConfig = struct {
+    /// Components to not include in the output binary stream.
+    ///
+    /// NOTE: Keep in mind that archetypes that contain this component will not be serialized:
+    ///       All entities in this archetype, and their components will not be serialized.
+    culled_component_types: []const type = &[0]type{},
 };
 
 // TODO: option to use stack instead of heap
@@ -44,7 +54,8 @@ pub fn serialize(
     comptime Storage: type,
     allocator: Allocator,
     storage: Storage,
-    config: SerializeConfig,
+    runtime_config: RuntimeSerializeConfig,
+    comptime comptime_config: ComptimeSerializeConfig,
 ) SerializeError![]const u8 {
     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.serializer);
     defer zone.End();
@@ -55,11 +66,11 @@ pub fn serialize(
 
         const pre_alloc_size = pre_alloc_blk_size: {
             // TODO: replace with @max?
-            if (@sizeOf(Chunk.Ezby) > config.pre_allocation_size) {
+            if (@sizeOf(Chunk.Ezby) > runtime_config.pre_allocation_size) {
                 break :pre_alloc_blk_size @sizeOf(Chunk.Ezby);
             }
 
-            break :pre_alloc_blk_size config.pre_allocation_size;
+            break :pre_alloc_blk_size runtime_config.pre_allocation_size;
         };
 
         var bytes = try std.ArrayList(u8).initCapacity(allocator, pre_alloc_size);
@@ -78,14 +89,121 @@ pub fn serialize(
     };
     defer written_bytes.deinit();
 
+    const cull_component_bits = comptime calculate_cull_bitmask_blk: {
+        var bits: Storage.ComponentMask.Bits = 0;
+        for (comptime_config.culled_component_types) |CulledType| {
+            for (Storage.component_type_array, 0..) |Component, index| {
+                if (CulledType == Component) {
+                    const shift: Storage.ComponentMask.Shift = @intCast(index);
+                    bits |= (1 << shift);
+                    break;
+                }
+            }
+        }
+        break :calculate_cull_bitmask_blk bits;
+    };
+
+    // calculate indices that should be skipped based on cull config
+    const cull_component_indices = comptime calc_cull_component_indices_blk: {
+        if (0 == cull_component_bits) {
+            break :calc_cull_component_indices_blk &[0]u32{};
+        }
+
+        var written_indices = 0;
+        var cull_indices: [comptime_config.culled_component_types.len]u32 = undefined;
+        for (Storage.component_type_array, 0..) |Component, comp_index| {
+            for (comptime_config.culled_component_types) |CulledType| {
+                if (CulledType == Component) {
+                    cull_indices[written_indices] = comp_index;
+                    written_indices += 1;
+                    break;
+                }
+            }
+        }
+
+        std.debug.assert(written_indices == cull_indices.len);
+
+        break :calc_cull_component_indices_blk cull_indices;
+    };
+
     // append component type data (COMP)
     {
         const arch_zone = ztracy.ZoneNC(@src(), "COMP chunk", Color.serializer);
         defer arch_zone.End();
 
-        const component_hashes = comptime Storage.Container.getComponentHashes();
+        const component_hashes = comptime fetch_hashes_blk: {
+            const all_hashes = Storage.Container.getComponentHashes();
+            if (0 == cull_component_bits) {
+                break :fetch_hashes_blk all_hashes;
+            }
 
-        const comp_chunk_size = @sizeOf(Chunk.Comp) + (component_hashes.len * @sizeOf(u64)) + (storage.container.component_sizes.len * @sizeOf(u32));
+            var written_hashes = 0;
+            var filtered_hashes: [all_hashes.len - cull_component_indices.len]u64 = undefined;
+            all_hashes_loop: for (all_hashes, 0..) |hash, hash_index| {
+                for (cull_component_indices) |culled_type_index| {
+                    if (culled_type_index == hash_index) {
+                        continue :all_hashes_loop;
+                    }
+                }
+
+                filtered_hashes[written_hashes] = hash;
+                written_hashes += 1;
+            }
+
+            std.debug.assert(written_hashes == filtered_hashes.len);
+
+            break :fetch_hashes_blk filtered_hashes;
+        };
+
+        const component_sizes = fetch_component_sizes_blk: {
+            const all_sizes = storage.container.component_sizes;
+            if (comptime 0 == cull_component_bits) {
+                break :fetch_component_sizes_blk all_sizes;
+            }
+
+            var written_sizes: usize = 0;
+            var filtered_sizes: [component_hashes.len]u32 = undefined;
+            all_sizes_loop: for (all_sizes, 0..) |size, size_index| {
+                for (cull_component_indices) |culled_type_index| {
+                    if (culled_type_index == size_index) {
+                        continue :all_sizes_loop;
+                    }
+                }
+
+                filtered_sizes[written_sizes] = size;
+                written_sizes += 1;
+            }
+
+            std.debug.assert(written_sizes == filtered_sizes.len);
+
+            break :fetch_component_sizes_blk filtered_sizes;
+        };
+
+        const component_log2_align = fetch_component_aligns_blk: {
+            const all_alignments = storage.container.component_log2_align;
+            if (comptime 0 == cull_component_indices.len) {
+                break :fetch_component_aligns_blk all_alignments;
+            }
+
+            var written_alignments: usize = 0;
+            var filtered_alignments: [component_hashes.len]u8 = undefined;
+            all_alignments_loop: for (all_alignments, 0..) |comp_alignment, alignment_index| {
+                for (cull_component_indices) |culled_type_index| {
+                    if (culled_type_index == alignment_index) {
+                        continue :all_alignments_loop;
+                    }
+                }
+
+                filtered_alignments[written_alignments] = comp_alignment;
+                written_alignments += 1;
+            }
+
+            std.debug.assert(written_alignments == filtered_alignments.len);
+
+            break :fetch_component_aligns_blk filtered_alignments;
+        };
+
+        const comp_chunk_size = @sizeOf(Chunk.Comp) + (component_hashes.len * @sizeOf(u64)) + (component_sizes.len * @sizeOf(u32));
         try written_bytes.ensureUnusedCapacity(comp_chunk_size);
 
         const comp_chunk = Chunk.Comp{
@@ -93,14 +211,66 @@ pub fn serialize(
         };
         written_bytes.appendSliceAssumeCapacity(mem.asBytes(&comp_chunk));
         written_bytes.appendSliceAssumeCapacity(mem.sliceAsBytes(&component_hashes));
-        written_bytes.appendSliceAssumeCapacity(mem.sliceAsBytes(&storage.container.component_sizes));
-        written_bytes.appendSliceAssumeCapacity(mem.sliceAsBytes(&storage.container.component_log2_align));
+        written_bytes.appendSliceAssumeCapacity(mem.sliceAsBytes(&component_sizes));
+        written_bytes.appendSliceAssumeCapacity(mem.sliceAsBytes(&component_log2_align));
+    }
+
+    // If we need to cull some archetypes, then we must do a prepass to write all cull archetype entities into the void/empty archetype.
+    if (comptime 0 != cull_component_bits) {
+        {
+            const arch_zone = ztracy.ZoneNC(@src(), "Cull archetypes prepass", Color.serializer);
+            defer arch_zone.End();
+
+            // step through the archetype tree and find entities that should be empty
+            var entity_count: u64 = 0;
+            for (storage.container.archetypes.items) |archetype| {
+                const skip_root = archetype.component_bitmask == 0;
+                const is_culled_archetype = (0 != (archetype.component_bitmask & cull_component_bits));
+                if (skip_root or is_culled_archetype) {
+                    entity_count += archetype.getEntityCount();
+                }
+            }
+
+            const arch_chunk_size = blk1: {
+                const entity_list_size: usize = @intCast(entity_count * @sizeOf(u64));
+                break :blk1 @sizeOf(Chunk.Arch) + entity_list_size;
+            };
+
+            // ensure we will have enough capacity for the ARCH chunk
+            try written_bytes.ensureUnusedCapacity(arch_chunk_size);
+
+            const arch_chunk = Chunk.Arch{
+                .number_of_component_types = 0,
+                .number_of_entities = @as(u64, @intCast(entity_count)),
+            };
+
+            written_bytes.appendSliceAssumeCapacity(mem.asBytes(&arch_chunk));
+
+            for (storage.container.archetypes.items) |archetype| {
+                const skip_root = archetype.component_bitmask == 0;
+                const is_culled_archetype = (0 != (archetype.component_bitmask & cull_component_bits));
+                if (skip_root or is_culled_archetype) {
+                    // serialize Arch.EntityList
+                    const entities = archetype.getEntities();
+                    written_bytes.appendSliceAssumeCapacity(mem.sliceAsBytes(entities));
+                }
+            }
+        }
     }
 
     // step through the archetype tree and serialize each archetype (ARCH)
     for (storage.container.archetypes.items) |archetype| {
         const arch_zone = ztracy.ZoneNC(@src(), "ARCH chunk", Color.serializer);
         defer arch_zone.End();
+
+        // If this is a culled archetype then we should already have written entitites to the void archetype
+        if (comptime (0 != cull_component_bits)) {
+            const skip_root = archetype.component_bitmask == 0;
+            const is_culled_archetype = (0 != (archetype.component_bitmask & cull_component_bits));
+            if (skip_root or is_culled_archetype) {
+                continue;
+            }
+        }
 
         const entity_count: u64 = archetype.getEntityCount();
         const type_count: u32 = @intCast(archetype.getComponentCount());
@@ -132,10 +302,27 @@ pub fn serialize(
             written_bytes.appendSliceAssumeCapacity(mem.asBytes(&arch_chunk));
 
             // serialize Arch.RttiIndices
-            {
-                const rtti_indices = archetype.getComponentTypeIndices();
-                std.debug.assert(rtti_indices.len == arch_chunk.number_of_component_types);
-                written_bytes.appendSliceAssumeCapacity(mem.sliceAsBytes(rtti_indices));
+            rtti_indices_blk: {
+                const archetype_comp_indices = archetype.getComponentTypeIndices();
+                std.debug.assert(archetype_comp_indices.len == arch_chunk.number_of_component_types);
+
+                if (comptime 0 == cull_component_indices.len) {
+                    written_bytes.appendSliceAssumeCapacity(mem.sliceAsBytes(archetype_comp_indices));
+                    break :rtti_indices_blk;
+                }
+
+                var rtti_indices: [Storage.component_type_array.len - cull_component_indices.len]u32 = undefined;
+                @memcpy(rtti_indices[0..archetype_comp_indices.len], archetype_comp_indices);
+
+                for (rtti_indices[0..archetype_comp_indices.len]) |*rtti_index| {
+                    var greater_than_count: u32 = 0;
+                    for (cull_component_indices) |cull_index| {
+                        if (rtti_index.* > cull_index) greater_than_count += 1;
+                    }
+                    rtti_index.* -= greater_than_count;
+                }
+
+                written_bytes.appendSliceAssumeCapacity(mem.sliceAsBytes(rtti_indices[0..archetype_comp_indices.len]));
             }
 
             // serialize Arch.EntityList
@@ -190,7 +377,6 @@ pub fn deserialize(comptime Storage: type, storage: *Storage, ezby_bytes: []cons
         comptime Storage.Container.getComponentHashes(),
         hash_list[0..comp.number_of_component_types],
     ) |component_hash, type_hash| {
-        // TODO: option to cull some components through config
         if (component_hash != type_hash) {
             // this content contain invalid component type(s) and the serializer is
             // therefore missing static information needed to utilize the component
@@ -430,7 +616,7 @@ test "serializing then using parseEzbyChunk produce expected EZBY chunk" {
     var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
-    const bytes = try serialize(StorageStub, testing.allocator, storage, .{});
+    const bytes = try serialize(StorageStub, testing.allocator, storage, .{}, .{});
     defer testing.allocator.free(bytes);
 
     var ezby: *Chunk.Ezby = undefined;
@@ -447,7 +633,7 @@ test "serializing then using parseCompChunk produce expected COMP chunk" {
     var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
-    const bytes = try serialize(StorageStub, testing.allocator, storage, .{});
+    const bytes = try serialize(StorageStub, testing.allocator, storage, .{}, .{});
     defer testing.allocator.free(bytes);
 
     // parse ezby header to get to eref bytes
@@ -471,8 +657,6 @@ test "serializing then using parseCompChunk produce expected COMP chunk" {
         @as(u32, 3),
         comp.number_of_component_types,
     );
-
-    const meta = @import("meta.zig");
 
     // check hashes
     try testing.expectEqual(
@@ -531,7 +715,7 @@ test "serializing then using parseArchChunk produce expected ARCH chunk" {
         );
     }
 
-    const bytes = try serialize(StorageStub, testing.allocator, storage, .{});
+    const bytes = try serialize(StorageStub, testing.allocator, storage, .{}, .{});
     defer testing.allocator.free(bytes);
 
     // parse ezby header to get to eref bytes
@@ -633,12 +817,11 @@ test "serialize and deserialize is idempotent" {
     }
 
     var ac_as: [test_data_count]Testing.Component.A = undefined;
-    var ac_bs: [test_data_count]Testing.Component.B = undefined;
+    const ac_cs: Testing.Component.C = .{};
     var ac_entities: [test_data_count]Entity = undefined;
-    for (&ac_as, &ac_bs, &ac_entities, 0..) |*a, *b, *entity, index| {
+    for (&ac_as, &ac_entities, 0..) |*a, *entity, index| {
         a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
-        b.* = Testing.Component.B{ .value = @as(u8, @intCast(index)) };
-        entity.* = try storage.createEntity(Testing.Archetype.AB{ .a = a.*, .b = b.* });
+        entity.* = try storage.createEntity(Testing.Archetype.AC{ .a = a.*, .c = ac_cs });
     }
 
     var abc_as: [test_data_count]Testing.Component.A = undefined;
@@ -653,7 +836,7 @@ test "serialize and deserialize is idempotent" {
         );
     }
 
-    const bytes = try serialize(StorageStub, testing.allocator, storage, .{});
+    const bytes = try serialize(StorageStub, testing.allocator, storage, .{}, .{});
     defer testing.allocator.free(bytes);
 
     // explicitly clear to ensure there is nothing in the storage
@@ -673,9 +856,126 @@ test "serialize and deserialize is idempotent" {
         try testing.expectError(error.ComponentMissing, storage.getComponent(ab_entity, Testing.Component.C));
     }
 
+    for (ac_as, ac_entities) |ac_a, ac_entity| {
+        try testing.expectEqual(ac_a, try storage.getComponent(ac_entity, Testing.Component.A));
+        try testing.expectError(error.ComponentMissing, storage.getComponent(ac_entity, Testing.Component.B));
+        try testing.expectEqual(ac_cs, try storage.getComponent(ac_entity, Testing.Component.C));
+    }
+
     for (abc_as, abc_bs, abc_entities) |abc_a, abc_b, abc_entity| {
         try testing.expectEqual(abc_a, try storage.getComponent(abc_entity, Testing.Component.A));
         try testing.expectEqual(abc_b, try storage.getComponent(abc_entity, Testing.Component.B));
         try testing.expectEqual(abc_cs, try storage.getComponent(abc_entity, Testing.Component.C));
+    }
+}
+
+test "serialize with culled_component_types config can be deserialized by other storage type" {
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
+
+    const test_data_count = 128;
+    var a_as: [test_data_count]Testing.Component.A = undefined;
+    var a_entities: [test_data_count]Entity = undefined;
+
+    for (&a_as, &a_entities, 0..) |*a, *entity, index| {
+        a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
+        entity.* = try storage.createEntity(Testing.Archetype.A{ .a = a.* });
+    }
+
+    var ab_as: [test_data_count]Testing.Component.A = undefined;
+    var ab_bs: [test_data_count]Testing.Component.B = undefined;
+    var ab_entities: [test_data_count]Entity = undefined;
+    for (&ab_as, &ab_bs, &ab_entities, 0..) |*a, *b, *entity, index| {
+        a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
+        b.* = Testing.Component.B{ .value = @as(u8, @intCast(index)) };
+        entity.* = try storage.createEntity(
+            Testing.Archetype.AB{ .a = a.*, .b = b.* },
+        );
+    }
+
+    var ac_as: [test_data_count]Testing.Component.A = undefined;
+    const ac_cs: Testing.Component.C = .{};
+    var ac_entities: [test_data_count]Entity = undefined;
+    for (&ac_as, &ac_entities, 0..) |*a, *entity, index| {
+        a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
+        entity.* = try storage.createEntity(Testing.Archetype.AC{ .a = a.*, .c = ac_cs });
+    }
+
+    var abc_as: [test_data_count]Testing.Component.A = undefined;
+    var abc_bs: [test_data_count]Testing.Component.B = undefined;
+    const abc_cs: Testing.Component.C = .{};
+    var abc_entities: [test_data_count]Entity = undefined;
+    for (&abc_as, &abc_bs, &abc_entities, 0..) |*a, *b, *entity, index| {
+        a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
+        b.* = Testing.Component.B{ .value = @as(u8, @intCast(index)) };
+        entity.* = try storage.createEntity(
+            Testing.Archetype.ABC{ .a = a.*, .b = b.*, .c = abc_cs },
+        );
+    }
+
+    // Test with subset AB
+    {
+        const ABStorage = @import("storage.zig").CreateStorage(.{ Testing.Component.A, Testing.Component.B });
+
+        var ab_storage = try ABStorage.init(testing.allocator);
+        defer ab_storage.deinit();
+
+        const bytes = try serialize(StorageStub, testing.allocator, storage, .{}, .{ .culled_component_types = &[_]type{Testing.Component.C} });
+        defer testing.allocator.free(bytes);
+
+        try deserialize(ABStorage, &ab_storage, bytes);
+
+        for (a_as, a_entities) |a, a_entity| {
+            try testing.expectEqual(a, try ab_storage.getComponent(a_entity, Testing.Component.A));
+            try testing.expectError(error.ComponentMissing, ab_storage.getComponent(a_entity, Testing.Component.B));
+        }
+
+        for (ab_as, ab_bs, ab_entities) |ab_a, ab_b, ab_entity| {
+            try testing.expectEqual(ab_a, try ab_storage.getComponent(ab_entity, Testing.Component.A));
+            try testing.expectEqual(ab_b, try ab_storage.getComponent(ab_entity, Testing.Component.B));
+        }
+
+        for (ac_entities) |ac_entity| {
+            try testing.expectError(error.ComponentMissing, ab_storage.getComponent(ac_entity, Testing.Component.A));
+            try testing.expectError(error.ComponentMissing, ab_storage.getComponent(ac_entity, Testing.Component.B));
+        }
+
+        for (abc_entities) |abc_entity| {
+            try testing.expectError(error.ComponentMissing, ab_storage.getComponent(abc_entity, Testing.Component.A));
+            try testing.expectError(error.ComponentMissing, ab_storage.getComponent(abc_entity, Testing.Component.B));
+        }
+    }
+
+    // Test with subset AC
+    {
+        const ACStorage = @import("storage.zig").CreateStorage(.{ Testing.Component.A, Testing.Component.C });
+
+        var ac_storage = try ACStorage.init(testing.allocator);
+        defer ac_storage.deinit();
+
+        const bytes = try serialize(StorageStub, testing.allocator, storage, .{}, .{ .culled_component_types = &[_]type{Testing.Component.B} });
+        defer testing.allocator.free(bytes);
+
+        try deserialize(ACStorage, &ac_storage, bytes);
+
+        for (a_as, a_entities) |a, a_entity| {
+            try testing.expectEqual(a, try ac_storage.getComponent(a_entity, Testing.Component.A));
+            try testing.expectError(error.ComponentMissing, ac_storage.getComponent(a_entity, Testing.Component.C));
+        }
+
+        for (ab_entities) |ab_entity| {
+            try testing.expectError(error.ComponentMissing, ac_storage.getComponent(ab_entity, Testing.Component.A));
+            try testing.expectError(error.ComponentMissing, ac_storage.getComponent(ab_entity, Testing.Component.C));
+        }
+
+        for (ac_as, ac_entities) |a, ac_entity| {
+            try testing.expectEqual(a, try ac_storage.getComponent(ac_entity, Testing.Component.A));
+            try testing.expectEqual(ac_cs, try ac_storage.getComponent(ac_entity, Testing.Component.C));
+        }
+
+        for (abc_entities) |abc_entity| {
+            try testing.expectError(error.ComponentMissing, ac_storage.getComponent(abc_entity, Testing.Component.A));
+            try testing.expectError(error.ComponentMissing, ac_storage.getComponent(abc_entity, Testing.Component.C));
+        }
     }
 }
