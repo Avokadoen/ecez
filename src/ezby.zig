@@ -302,27 +302,26 @@ pub fn serialize(
             written_bytes.appendSliceAssumeCapacity(mem.asBytes(&arch_chunk));
 
             // serialize Arch.RttiIndices
-            rtti_indices_blk: {
+            {
                 const archetype_comp_indices = archetype.getComponentTypeIndices();
                 std.debug.assert(archetype_comp_indices.len == arch_chunk.number_of_component_types);
 
                 if (comptime 0 == cull_component_indices.len) {
                     written_bytes.appendSliceAssumeCapacity(mem.sliceAsBytes(archetype_comp_indices));
-                    break :rtti_indices_blk;
-                }
+                } else {
+                    var rtti_indices: [Storage.component_type_array.len - cull_component_indices.len]u32 = undefined;
+                    @memcpy(rtti_indices[0..archetype_comp_indices.len], archetype_comp_indices);
 
-                var rtti_indices: [Storage.component_type_array.len - cull_component_indices.len]u32 = undefined;
-                @memcpy(rtti_indices[0..archetype_comp_indices.len], archetype_comp_indices);
-
-                for (rtti_indices[0..archetype_comp_indices.len]) |*rtti_index| {
-                    var greater_than_count: u32 = 0;
-                    for (cull_component_indices) |cull_index| {
-                        if (rtti_index.* > cull_index) greater_than_count += 1;
+                    for (rtti_indices[0..archetype_comp_indices.len]) |*rtti_index| {
+                        var greater_than_count: u32 = 0;
+                        for (cull_component_indices) |cull_index| {
+                            if (rtti_index.* > cull_index) greater_than_count += 1;
+                        }
+                        rtti_index.* -= greater_than_count;
                     }
-                    rtti_index.* -= greater_than_count;
-                }
 
-                written_bytes.appendSliceAssumeCapacity(mem.sliceAsBytes(rtti_indices[0..archetype_comp_indices.len]));
+                    written_bytes.appendSliceAssumeCapacity(mem.sliceAsBytes(rtti_indices[0..archetype_comp_indices.len]));
+                }
             }
 
             // serialize Arch.EntityList
