@@ -203,7 +203,7 @@ pub fn serialize(
             break :fetch_component_aligns_blk filtered_alignments;
         };
 
-        const comp_chunk_size = @sizeOf(Chunk.Comp) + (component_hashes.len * @sizeOf(u64)) + (component_sizes.len * @sizeOf(u32));
+        const comp_chunk_size = @sizeOf(Chunk.Comp) + (component_hashes.len * @sizeOf(u64)) + (component_sizes.len * @sizeOf(u32)) + (component_log2_align.len * @sizeOf(u8));
         try written_bytes.ensureUnusedCapacity(comp_chunk_size);
 
         const comp_chunk = Chunk.Comp{
