@@ -472,8 +472,10 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
             );
 
             // move the data slices around to remove component
-            const rhd = data[local_remove_component_index..old_component_count];
-            std.mem.rotate([]u8, rhd, 1);
+            if (local_remove_component_index != old_component_count) {
+                const rhd = data[local_remove_component_index..old_component_count];
+                std.mem.rotate([]u8, rhd, 1);
+            }
 
             const unwrapped_index = new_archetype_index.?;
             // register the component bytes and entity to it's new archetype
@@ -574,6 +576,11 @@ pub fn FromComponents(comptime components: []const type, comptime BitMask: type)
             );
 
             for (local_remove_component_indices) |local_remove_component_index| {
+                if (local_remove_component_index == old_component_count) {
+                    // nothing to rotate
+                    continue;
+                }
+
                 // move the data slices around to remove component
                 const rhd = data[local_remove_component_index..old_component_count];
                 std.mem.rotate([]u8, rhd, 1);
