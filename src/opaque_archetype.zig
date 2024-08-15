@@ -417,7 +417,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
 
             const component_count = @popCount(filter_bitmask);
             var bitmask = filter_bitmask;
-            var cursor: u32 = 0;
+            var cursor: ComponentMask.Bits = 0;
             for (0..component_count) |out_index| {
                 const step = @as(ComponentMask.Shift, @intCast(@ctz(bitmask)));
                 std.debug.assert((bitmask >> step) & 1 == 1);
@@ -453,6 +453,7 @@ pub fn FromComponentMask(comptime ComponentMask: type) type {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.opaque_archetype);
             defer zone.End();
 
+            // Stack allocate array. We get away with this UB because the function is forced inline
             var list: [max_component_count]u32 = undefined;
             var bitmask = self.component_bitmask;
             var current_offset: ComponentMask.Shift = 0;

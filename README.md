@@ -208,7 +208,7 @@ Example of InvocationCount
 ```zig
     const System = struct {
         pub fn system(health: HealthComponent, count: InvocationCount) void {
-            // ...
+            health.value -= count.number;
         }
     };
 ```
