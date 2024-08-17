@@ -351,11 +351,11 @@ pub const CommonSystem = struct {
                 if (parsing_state == .special_arguments) {
                     const pre_arg_str = switch (param_categories[i - 1]) {
                         .component_ptr, .component_value => unreachable,
-                        .event_argument_ptr, .event_argument_value => "event",
-                        .storage_edit_queue => "storage edit queue",
                         .entity => "entity",
+                        .event_argument => "event",
                         .invocation_number_value => "invocation number",
                         .query_ptr => "query",
+                        .storage_edit_queue => "storage edit queue",
                         .exclude_entities_with => "exclude entities with",
                     };
                     const err_msg = std.fmt.comptimePrint("system {s} argument {d} is a component but comes after {s}", .{
