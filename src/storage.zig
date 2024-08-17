@@ -246,6 +246,8 @@ pub fn CreateStorage(comptime components: anytype) type {
         /// }
         /// ```
         pub fn Query(comptime ResultItem: type, comptime exclude_types: anytype) type {
+            @setEvalBranchQuota(10000);
+
             const include_type_info = @typeInfo(ResultItem);
             if (include_type_info != .Struct) {
                 @compileError("query result_item must be a struct of components");
