@@ -493,5 +493,7 @@ test "skip moves iterator to requested entry" {
             // 50 + 1 (call to next) + 100 = 151
             try testing.expectEqual(Testing.Component.A{ .value = 151 }, item_151th.a);
         }
+
+        iter.skip(200);
     }
 }
