@@ -1,5 +1,3 @@
-const meta = @import("meta.zig");
-
 pub const Component = struct {
     pub const A = struct { value: u32 = 2 };
     pub const B = struct { value: u8 = 4 };
@@ -61,13 +59,4 @@ pub const AllArchetypesTuple = .{
     Archetype.AB,
     Archetype.AC,
     Archetype.ABC,
-};
-
-pub const ComponentBitmask = meta.BitMaskFromComponents(&AllComponentsArr);
-pub const Bits = struct {
-    pub const None = @as(ComponentBitmask.Bits, 0b000);
-    pub const A = @as(ComponentBitmask.Bits, 0b001);
-    pub const B = @as(ComponentBitmask.Bits, 0b010);
-    pub const C = @as(ComponentBitmask.Bits, 0b100);
-    pub const All = @as(ComponentBitmask.Bits, 0b111);
 };
