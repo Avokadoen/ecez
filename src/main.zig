@@ -30,9 +30,9 @@
 // pub const ezby = @import("ezby.zig");
 
 test {
+    _ = @import("dependency_chain.zig");
     _ = @import("sparse_set.zig");
     // _ = @import("scheduler.zig");
-    // _ = @import("binary_tree.zig");
     // _ = @import("ezby.zig");
     _ = @import("storage.zig");
 }

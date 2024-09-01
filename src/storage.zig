@@ -1,7 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const compile_reflect = @import("compile_reflect.zig");
 const set = @import("sparse_set.zig");
 
 const ztracy = @import("ztracy");
@@ -11,7 +10,6 @@ const Color = @import("misc.zig").Color;
 const entity_type = @import("entity_type.zig");
 const Entity = entity_type.Entity;
 const EntityId = entity_type.EntityId;
-const iterator = @import("iterator.zig");
 
 pub fn CreateStorage(comptime all_components: anytype) type {
     return struct {
@@ -36,7 +34,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             break :verify_and_extract_field_types_blk field_types;
         };
 
-        pub const GroupSparseSets = compile_reflect.GroupSparseSets(&component_type_array);
+        pub const GroupSparseSets = CompileReflect.GroupSparseSets(&component_type_array);
 
         const Storage = @This();
 
@@ -232,7 +230,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             var result: Components = undefined;
             const field_info = @typeInfo(Components);
             inline for (field_info.Struct.fields) |field| {
-                const component_to_get = compile_reflect.compactComponentRequest(field.type);
+                const component_to_get = CompileReflect.compactComponentRequest(field.type);
 
                 const sparse_set: set.SparseSet(EntityId, component_to_get.type) = @field(
                     self.sparse_sets,
@@ -303,7 +301,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     incl_field,
                     incl_index,
                 | {
-                    const request = compile_reflect.compactComponentRequest(incl_field.type);
+                    const request = CompileReflect.compactComponentRequest(incl_field.type);
                     component_index.* = incl_index;
                     query_component.* = request.type;
                 }
@@ -320,7 +318,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     excl_index,
                     comp_index,
                 | {
-                    const request = compile_reflect.compactComponentRequest(exclude_types[excl_index]);
+                    const request = CompileReflect.compactComponentRequest(exclude_types[excl_index]);
                     component_index.* = comp_index;
                     query_component.* = request.type;
                 }
@@ -329,15 +327,17 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             };
 
             return struct {
+                pub const _include_fields = include_fields;
+                pub const secret_field = QueryType;
+
                 pub const ThisQuery = @This();
-                pub const secret_field = compile_reflect.SpecialArguments.Type.query;
 
                 // TODO: this is horrible for cache, we should find the next N entities instead
                 sparse_cursors: EntityId,
                 storage_entity_count_ptr: *const EntityId,
 
                 search_order: [component_include_count + exclude_fields.len]usize,
-                sparse_sets: compile_reflect.GroupSparseSetsPtr(&query_components),
+                sparse_sets: CompileReflect.GroupSparseSetsPtr(&query_components),
 
                 pub fn submit(storage: *Storage) ThisQuery {
                     var current_index: usize = undefined;
@@ -398,7 +398,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                         last_min_value = current_min_value;
                     }
 
-                    var sparse_sets: compile_reflect.GroupSparseSetsPtr(&query_components) = undefined;
+                    var sparse_sets: CompileReflect.GroupSparseSetsPtr(&query_components) = undefined;
                     inline for (query_components) |Component| {
                         @field(sparse_sets, @typeName(Component)) = &@field(storage.sparse_sets, @typeName(Component));
                     }
@@ -450,7 +450,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     }
 
                     inline for (include_fields[include_start_index..include_end_index]) |incl_field| {
-                        const component_to_get = compile_reflect.compactComponentRequest(incl_field.type);
+                        const component_to_get = CompileReflect.compactComponentRequest(incl_field.type);
 
                         const sparse_set = @field(self.sparse_sets, @typeName(component_to_get.type));
                         const component_ptr = sparse_set.get(self.sparse_cursors).?;
@@ -468,7 +468,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         }
 
         fn indexOfComponent(comptime Component: type) usize {
-            inline for (all_components, 0..) |StorageComponent, index| {
+            inline for (component_type_array, 0..) |StorageComponent, index| {
                 if (Component == StorageComponent) {
                     return index;
                 }
@@ -478,6 +478,78 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         }
     };
 }
+
+pub const QueryType = struct {};
+
+pub const CompileReflect = struct {
+    pub const CompactComponentRequest = struct {
+        pub const Attr = enum {
+            value,
+            ptr,
+        };
+
+        type: type,
+        attr: Attr,
+    };
+    pub fn compactComponentRequest(comptime ComponentPtrOrValueType: type) CompactComponentRequest {
+        const type_info = @typeInfo(ComponentPtrOrValueType);
+
+        return switch (type_info) {
+            .Struct => .{
+                .type = ComponentPtrOrValueType,
+                .attr = .value,
+            },
+            .Pointer => |ptr_info| .{
+                .type = ptr_info.child,
+                .attr = .ptr,
+            },
+            else => @compileError(@typeName(ComponentPtrOrValueType) ++ " is not pointer, nor struct."),
+        };
+    }
+
+    pub fn GroupSparseSets(comptime components: []const type) type {
+        var struct_fields: [components.len]std.builtin.Type.StructField = undefined;
+        inline for (&struct_fields, components) |*field, component| {
+            const SparseSet = set.SparseSet(EntityId, component);
+            const default_value = SparseSet{};
+            field.* = std.builtin.Type.StructField{
+                .name = @typeName(component),
+                .type = SparseSet,
+                .default_value = @ptrCast(&default_value),
+                .is_comptime = false,
+                .alignment = @alignOf(SparseSet),
+            };
+        }
+        const group_type = std.builtin.Type{ .Struct = .{
+            .layout = .auto,
+            .fields = &struct_fields,
+            .decls = &[_]std.builtin.Type.Declaration{},
+            .is_tuple = false,
+        } };
+        return @Type(group_type);
+    }
+
+    pub fn GroupSparseSetsPtr(comptime components: []const type) type {
+        var struct_fields: [components.len]std.builtin.Type.StructField = undefined;
+        inline for (&struct_fields, components) |*field, component| {
+            const SparseSet = set.SparseSet(EntityId, component);
+            field.* = std.builtin.Type.StructField{
+                .name = @typeName(component),
+                .type = *SparseSet,
+                .default_value = null,
+                .is_comptime = false,
+                .alignment = @alignOf(*SparseSet),
+            };
+        }
+        const group_type = std.builtin.Type{ .Struct = .{
+            .layout = .auto,
+            .fields = &struct_fields,
+            .decls = &[_]std.builtin.Type.Declaration{},
+            .is_tuple = false,
+        } };
+        return @Type(group_type);
+    }
+};
 
 const Testing = @import("Testing.zig");
 const testing = std.testing;

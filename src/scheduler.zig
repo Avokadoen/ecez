@@ -5,8 +5,7 @@ const ztracy = @import("ztracy");
 const ThreadPool = @import("StdThreadPool.zig");
 const ResetEvent = std.Thread.ResetEvent;
 
-const meta = @import("meta.zig");
-const SystemMetadata = meta.SystemMetadata;
+const QueryType = @import("storage.zig").QueryType;
 
 const Color = @import("misc.zig").Color;
 
@@ -16,19 +15,18 @@ pub const Config = struct {
 
 /// Allow the user to attach systems to a storage. The user can then trigger events on the scheduler to execute
 /// the systems in a multithreaded environment
-pub fn CreateScheduler(
-    comptime Storage: type,
-    comptime events: anytype,
-) type {
-    const event_count = meta.countAndVerifyEvents(events);
+pub fn CreateScheduler(comptime events: anytype) type {
+    const event_count = CompileReflect.countAndVerifyEvents(events);
 
-    // Store each individual WaitGroup
+    // Store each individual ResetEvent
     const EventsInFlight = blk: {
         // TODO: move to meta
         const Type = std.builtin.Type;
         var fields: [event_count]Type.StructField = undefined;
         inline for (&fields, events, 0..) |*field, event, i| {
-            const default_value = [_]ResetEvent{.{}} ** event.system_count;
+            const system_count = CompileReflect.countAndVerifySystems(event);
+
+            const default_value = [_]ResetEvent{.{}} ** system_count;
             var num_buf: [8:0]u8 = undefined;
             const name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable;
             num_buf[name.len] = 0;
@@ -102,11 +100,12 @@ pub fn CreateScheduler(
     };
 
     const dependency_tracker: DependencyRelations = DependencyRelations{};
+    _ = dependency_tracker; // autofix
 
     return struct {
         const Scheduler = @This();
 
-        pub const EventsEnum = meta.GenerateEventsEnum(event_count, events);
+        pub const EventsEnum = CompileReflect.GenerateEventEnum(event_count, events);
 
         thread_pool: *ThreadPool,
         events_in_flight: EventsInFlight,
@@ -250,19 +249,13 @@ pub fn CreateScheduler(
         fn EventDispatchJob(
             comptime func: *const anyopaque,
             comptime FuncType: type,
-            comptime metadata: SystemMetadata,
-            comptime include_bitmask: Storage.ComponentMask.Bits,
-            comptime exclude_bitmask: Storage.ComponentMask.Bits,
-            comptime component_query_types: []const type,
-            comptime EventArgument: type,
         ) type {
             return struct {
                 const DispatchJob = @This();
 
-                storage: *Storage,
                 event_argument: EventArgument,
 
-                pub fn exec(self_job: DispatchJob) void {
+                pub fn exec(self_job: DispatchJob, storage: *Storage) void {
                     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
                     defer zone.End();
 
@@ -372,15 +365,161 @@ pub fn CreateScheduler(
     };
 }
 
+pub const EventType = struct {};
+
+pub fn Event(comptime name: []const u8, comptime systems: anytype) type {
+    const systems_fields = @typeInfo(@TypeOf(systems));
+    if (systems_fields != .Struct) {
+        @compileError("Event expect systems to be a tuple of systems");
+    }
+
+    const system_infos, const system_infos_len = check_field_blk: {
+        var len: comptime_int = 0;
+        var info: [systems_fields.Struct.decls.len]std.builtin.Type.Fn = undefined;
+        decl_loop: inline for (systems_fields.Struct.decls) |decl| {
+            const field = @field(systems, decl.name);
+            const func = @typeInfo(field);
+            if (func != .Fn) {
+                continue :decl_loop;
+            }
+
+            info[len] = func;
+            len += 1;
+        }
+
+        break :check_field_blk .{ info, len };
+    };
+
+    return struct {
+        pub const secret_field = EventType{};
+        pub const _name = name;
+        pub const _systems = systems;
+        pub const _system_infos = system_infos[0..system_infos_len];
+    };
+}
+
+// TODO: move scheduler and dependency_chain to same folder. Move this logic in this folder out of this file
+pub const CompileReflect = struct {
+    pub fn isQueryType(comptime a: type) bool {
+        _ = a; // autofix
+
+    }
+
+    pub fn countAndVerifyEvents(comptime events: anytype) u32 {
+        const events_info = events_info_blk: {
+            const info: std.builtin.Type = @typeInfo(@TypeOf(events));
+            if (info != .Struct) {
+                @compileError("expected events to be a struct of Event");
+            }
+            break :events_info_blk info.Struct;
+        };
+
+        inline for (events_info.fields, 0..) |events_fields, event_index| {
+            if (events_fields.default_value == null) {
+                @compileError(std.fmt.comptimePrint("event number {d} is not an event. Events must be created with ecez.Event()", .{event_index}));
+            }
+
+            const this_event = @as(*const events_fields.type, @ptrCast(events_fields.default_value.?)).*;
+            const has_secret_field = @hasField(this_event, "secret_field");
+            const has_name = @hasField(this_event, "_name");
+            const has_systems = @hasField(this_event, "_systems");
+            const has_system_infos = @hasField(this_event, "_system_infos");
+
+            const has_expected_decls = has_secret_field and has_name and has_systems and has_system_infos;
+            if (has_expected_decls) {
+                @compileError(@typeName(events[event_index]) ++ " Event missing expected decal. Events must be created with ecez.Event()");
+            }
+
+            if (@TypeOf(this_event.secret_field) != EventType) {
+                @compileError(std.fmt.comptimePrint("event number {d} is not an event. Events must be created with ecez.Event()", .{event_index}));
+            }
+        }
+
+        return events_info.fields.len;
+    }
+    test "countAndVerifyEvents return correct event count" {
+        const event1 = Event("a", .{countAndVerifyEvents});
+        const event2 = Event("b", .{std.debug.print});
+        const event3 = Event("c", .{std.debug.assert});
+        const event_count = countAndVerifyEvents(.{ event1, event2, event3 });
+        try std.testing.expectEqual(3, event_count);
+    }
+
+    pub fn countAndVerifySystems(comptime event: anytype) u32 {
+        {
+            const info: std.builtin.Type = @typeInfo(@TypeOf(event));
+            if (info != .Struct) {
+                @compileError("expected events to be a struct of Event");
+            }
+        }
+
+        comptime var system_count = 0;
+        const systems_info = @typeInfo(@TypeOf(event._systems));
+        system_loop: inline for (systems_info.fields) |field_system| {
+            const system_info = @typeInfo(field_system.type);
+            if (system_info != .Fn) {
+                continue :system_loop;
+            }
+
+            // Ensure arguments are queries
+            const params = system_info.Fn.params;
+            for (params) |param| {
+                if (param.is_generic) {
+                    @compileError("system of type " ++ @typeName(field_system.type) ++ " has generic parameter, expected ecez storage query");
+                }
+
+                if (param.type == null) {
+                    @compileError("system of type " ++ @typeName(field_system.type) ++ " is missing type, expected ecez storage query");
+                }
+
+                const ParamType = param.type.?;
+                const has_secret_field = @hasField(ParamType, "secret_field");
+                if (has_secret_field == false or ParamType.secret_field != QueryType) {
+                    @compileError("system of type " ++ @typeName(field_system.type) ++ " has parameter of type '" ++ @typeName(ParamType) ++ "' expected ecez storage query");
+                }
+            }
+
+            system_count += 1;
+        }
+
+        return system_count;
+    }
+    test "countAndVerifySystems return correct system count" {
+        const event1 = Event("a", .{countAndVerifyEvents});
+        const event2 = Event("b", .{ countAndVerifyEvents, std.debug.print });
+        const event3 = Event("c", .{ countAndVerifyEvents, std.debug.print, std.debug.assert });
+
+        try std.testing.expectEqual(1, countAndVerifySystems(event1));
+        try std.testing.expectEqual(2, countAndVerifySystems(event2));
+        try std.testing.expectEqual(3, countAndVerifySystems(event3));
+    }
+
+    pub fn GenerateEventEnum(comptime events: anytype) type {
+        const events_info = @typeInfo(@TypeOf(events)).Struct;
+
+        var enum_fields: [events_info.fields.len]std.builtin.Type.EnumField = undefined;
+        inline for (&enum_fields, events_info.fields, 0..) |*enum_field, events_fields, enum_value| {
+            const this_event = @as(*const events_fields.type, @ptrCast(events_fields.default_value.?)).*;
+            enum_field.name = this_event._name;
+            enum_field.value = enum_value;
+        }
+
+        const enum_info = std.builtin.Type{.Enum{
+            .tag_type = u32,
+            .fields = enum_fields,
+            .decls = &[_]std.builtin.Type.Declaration{},
+            .is_exhaustive = true,
+        }};
+
+        return @Type(enum_info);
+    }
+};
+
 const Testing = @import("Testing.zig");
 const testing = std.testing;
 
 const CreateStorage = @import("storage.zig").CreateStorage;
 const Entity = @import("entity_type.zig").Entity;
-
-const Event = meta.Event;
-const DependOn = meta.DependOn;
-const InvocationCount = meta.InvocationCount;
 
 // TODO: we cant use tuples here because of https://github.com/ziglang/zig/issues/12963
 const AEntityType = Testing.Archetype.A;
