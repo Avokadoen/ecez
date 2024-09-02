@@ -23,6 +23,8 @@ pub fn buildDependencyList(
     comptime systems: anytype,
     comptime system_count: u32,
 ) [system_count]Dependency {
+    @setEvalBranchQuota(50_000);
+
     if (@inComptime() == false) {
         @compileError(@src().fn_name ++ " can only be called in comptime");
     }
@@ -72,7 +74,7 @@ pub fn buildDependencyList(
         }
 
         var systems_dependencies: [system_count]Dependency = undefined;
-        systems_dependencies[0] = Dependency{ .wait_on_indices = &[0]u32{} };
+        systems_dependencies[0] = Dependency{ .wait_on_indices = &[_]u32{} };
         inline for (systems_dependencies[1..], graph[1..], 1..) |*system_dependencies, this_node, node_index| {
             var access_not_locked: [this_node.access.len]Access = undefined;
             var access_not_locked_len = access_not_locked.len;
@@ -193,11 +195,19 @@ test buildDependencyList {
         }, .{});
 
         pub const ReadB = StorageStub.Query(struct {
-            a: Testing.Component.B,
+            b: Testing.Component.B,
         }, .{});
 
         pub const WriteB = StorageStub.Query(struct {
-            a: *Testing.Component.B,
+            b: *Testing.Component.B,
+        }, .{});
+
+        pub const ReadC = StorageStub.Query(struct {
+            c: Testing.Component.C,
+        }, .{});
+
+        pub const WriteC = StorageStub.Query(struct {
+            c: *Testing.Component.C,
         }, .{});
 
         pub const ReadAReadB = StorageStub.Query(struct {
@@ -209,23 +219,41 @@ test buildDependencyList {
             a: *Testing.Component.A,
             b: *Testing.Component.B,
         }, .{});
+
+        pub const ReadAReadBReadC = StorageStub.Query(struct {
+            a: Testing.Component.A,
+            b: Testing.Component.B,
+            c: Testing.Component.C,
+        }, .{});
+
+        pub const WriteAWriteBWriteC = StorageStub.Query(struct {
+            a: *Testing.Component.A,
+            b: *Testing.Component.B,
+            c: *Testing.Component.C,
+        }, .{});
     };
 
     const Systems = struct {
         pub fn readA(a: *Queries.ReadA) void {
-            _ = a; // autofix
+            _ = a;
         }
         pub fn writeA(a: *Queries.WriteA) void {
-            _ = a; // autofix
+            _ = a;
         }
         pub fn readB(b: *Queries.ReadB) void {
-            _ = b; // autofix
+            _ = b;
         }
         pub fn writeB(b: *Queries.WriteB) void {
-            _ = b; // autofix
+            _ = b;
         }
-        pub fn readAreadB(ab: *Queries.ReadAReadB) void {
-            _ = ab; // autofix
+        pub fn readC(c: *Queries.ReadC) void {
+            _ = c;
+        }
+        pub fn writeC(c: *Queries.WriteC) void {
+            _ = c;
+        }
+        pub fn readAReadB(ab: *Queries.ReadAReadB) void {
+            _ = ab;
         }
         // pub fn readAWriteB(a: Testing.Component.A, b: *Testing.Component.B) void {
         //     _ = b; // autofix
@@ -235,8 +263,16 @@ test buildDependencyList {
         //     _ = b; // autofix
         //     _ = a; // autofix
         // }
-        pub fn writeAwriteB(ab: *Queries.WriteAWriteB) void {
-            _ = ab; // autofix
+        pub fn writeAWriteB(ab: *Queries.WriteAWriteB) void {
+            _ = ab;
+        }
+
+        pub fn readAReadBReadC(abc: *Queries.ReadAReadBReadC) void {
+            _ = abc;
+        }
+
+        pub fn writeAWriteBWriteC(abc: *Queries.WriteAWriteBWriteC) void {
+            _ = abc;
         }
     };
 
@@ -249,7 +285,7 @@ test buildDependencyList {
                 Systems.writeA,
             }, 2);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[0]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
             };
 
@@ -265,8 +301,8 @@ test buildDependencyList {
                 Systems.readA,
             }, 2);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[0]u32{} },
-                Dependency{ .wait_on_indices = &[0]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -281,7 +317,7 @@ test buildDependencyList {
                 Systems.readA,
             }, 2);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[0]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
             };
 
@@ -298,8 +334,8 @@ test buildDependencyList {
                 Systems.writeA,
             }, 3);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[0]u32{} },
-                Dependency{ .wait_on_indices = &[0]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[2]u32{ 1, 0 } },
             };
 
@@ -317,7 +353,7 @@ test buildDependencyList {
                 Systems.writeA,
             }, 4);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[0]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
@@ -338,7 +374,7 @@ test buildDependencyList {
                 Systems.writeA,
             }, 5);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[0]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
@@ -360,7 +396,7 @@ test buildDependencyList {
                 Systems.writeA,
             }, 5);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[0]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
@@ -375,17 +411,135 @@ test buildDependencyList {
 
     // Two types
     {
-        // Single type writes to multiple reads
+        // single type writes to double read
         {
             const dependencies = comptime buildDependencyList(.{
                 Systems.writeA,
                 Systems.writeB,
-                Systems.readAreadB,
+                Systems.readAReadB,
             }, 3);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[0]u32{} },
-                Dependency{ .wait_on_indices = &[0]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
+            };
+
+            for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            }
+        }
+
+        // double reads to single type writes
+        {
+            const dependencies = comptime buildDependencyList(.{
+                Systems.readAReadB,
+                Systems.writeA,
+                Systems.writeB,
+            }, 3);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+            };
+
+            for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            }
+        }
+
+        // double type writes to single reads
+        {
+            const dependencies = comptime buildDependencyList(.{
+                Systems.writeAWriteB,
+                Systems.readA,
+                Systems.readB,
+            }, 3);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+            };
+
+            for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            }
+        }
+
+        // single type reads to double writes
+        {
+            const dependencies = comptime buildDependencyList(.{
+                Systems.readA,
+                Systems.readB,
+                Systems.writeAWriteB,
+            }, 3);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
+            };
+
+            for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            }
+        }
+
+        // Write, read, read, write
+        {
+            const dependencies = comptime buildDependencyList(.{
+                Systems.writeAWriteB,
+                Systems.readAReadB,
+                Systems.readAReadB,
+                Systems.writeAWriteB,
+            }, 4);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+            };
+
+            for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            }
+        }
+
+        // Write, read, read, write, write
+        {
+            const dependencies = comptime buildDependencyList(.{
+                Systems.writeAWriteB,
+                Systems.readAReadB,
+                Systems.readAReadB,
+                Systems.writeAWriteB,
+                Systems.writeAWriteB,
+            }, 5);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{3} },
+            };
+
+            for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            }
+        }
+
+        // Write, read, read, write, write
+        {
+            const dependencies = comptime buildDependencyList(.{
+                Systems.writeAWriteB,
+                Systems.readAReadB,
+                Systems.readAReadB,
+                Systems.writeAWriteB,
+                Systems.writeAWriteB,
+            }, 5);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{3} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -402,20 +556,137 @@ test buildDependencyList {
                 Systems.writeA,
                 Systems.readB,
                 Systems.writeB,
-                Systems.readAreadB,
-                Systems.readAreadB,
-                Systems.writeAwriteB,
+                Systems.readAReadB,
+                Systems.readAReadB,
+                Systems.writeAWriteB,
             }, 9);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[0]u32{} }, // 0: Systems.writeA,
-                Dependency{ .wait_on_indices = &[0]u32{} }, // 1: Systems.readB,
-                Dependency{ .wait_on_indices = &[_]u32{0} }, // 2: Systems.readA,
-                Dependency{ .wait_on_indices = &[_]u32{2} }, // 3: Systems.writeA,
-                Dependency{ .wait_on_indices = &[0]u32{} }, // 4: Systems.readB,
-                Dependency{ .wait_on_indices = &[_]u32{ 4, 1 } }, // 5: Systems.writeB,
-                Dependency{ .wait_on_indices = &[_]u32{ 5, 3 } }, // 6: Systems.readAreadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 5, 3 } }, // 7: Systems.readAreadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 7, 6 } }, // 8: Systems.writeAwriteB,
+                Dependency{ .wait_on_indices = &[_]u32{} }, // 0: writeA,
+                Dependency{ .wait_on_indices = &[_]u32{} }, // 1: readB,
+                Dependency{ .wait_on_indices = &[_]u32{0} }, // 2: readA,
+                Dependency{ .wait_on_indices = &[_]u32{2} }, // 3: writeA,
+                Dependency{ .wait_on_indices = &[_]u32{} }, // 4: readB,
+                Dependency{ .wait_on_indices = &[_]u32{ 4, 1 } }, // 5: writeB,
+                Dependency{ .wait_on_indices = &[_]u32{ 5, 3 } }, // 6: readAreadB,
+                Dependency{ .wait_on_indices = &[_]u32{ 5, 3 } }, // 7: readAreadB,
+                Dependency{ .wait_on_indices = &[_]u32{ 7, 6 } }, // 8: writeAwriteB,
+            };
+
+            for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            }
+        }
+    }
+
+    // Three types
+    {
+        // single writes to triple read
+        {
+            const dependencies = comptime buildDependencyList(.{
+                Systems.writeA,
+                Systems.writeB,
+                Systems.writeC,
+                Systems.readAReadBReadC,
+            }, 4);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1, 0 } },
+            };
+
+            for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            }
+        }
+
+        // triple reads to single type writes
+        {
+            const dependencies = comptime buildDependencyList(.{
+                Systems.readAReadBReadC,
+                Systems.writeA,
+                Systems.writeB,
+                Systems.writeC,
+            }, 4);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+            };
+
+            for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            }
+        }
+
+        // triple type writes to single reads
+        {
+            const dependencies = comptime buildDependencyList(.{
+                Systems.writeAWriteBWriteC,
+                Systems.readA,
+                Systems.readB,
+                Systems.readC,
+            }, 4);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+            };
+
+            for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            }
+        }
+
+        // single type reads to triple writes
+        {
+            const dependencies = comptime buildDependencyList(.{
+                Systems.readA,
+                Systems.readB,
+                Systems.readC,
+                Systems.writeAWriteBWriteC,
+            }, 4);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1, 0 } },
+            };
+
+            for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            }
+        }
+
+        // Artibtrary order (0)
+        {
+            const dependencies = comptime buildDependencyList(.{
+                Systems.writeA,
+                Systems.writeAWriteBWriteC,
+                Systems.readA,
+                Systems.readC,
+                Systems.readB,
+                Systems.readAReadB,
+                Systems.readAReadB,
+                Systems.writeAWriteB,
+                Systems.writeAWriteBWriteC,
+                Systems.readAReadB,
+                Systems.readAReadBReadC,
+            }, 11);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} }, // 0: writeA,
+                Dependency{ .wait_on_indices = &[_]u32{0} }, // 1: writeAWriteBWriteC,
+                Dependency{ .wait_on_indices = &[_]u32{1} }, // 2: readA,
+                Dependency{ .wait_on_indices = &[_]u32{1} }, // 3: readC,
+                Dependency{ .wait_on_indices = &[_]u32{1} }, // 4: readB,
+                Dependency{ .wait_on_indices = &[_]u32{1} }, // 5: readAReadB,
+                Dependency{ .wait_on_indices = &[_]u32{1} }, // 6: readAReadB,
+                Dependency{ .wait_on_indices = &[_]u32{ 6, 5, 4, 2 } }, // 7: writeAWriteB,
+                Dependency{ .wait_on_indices = &[_]u32{ 7, 3 } }, // 8: writeAWriteBWriteC,
+                Dependency{ .wait_on_indices = &[_]u32{8} }, // 9: readAReadB,
+                Dependency{ .wait_on_indices = &[_]u32{8} }, // 10: readAReadBReadC,
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
