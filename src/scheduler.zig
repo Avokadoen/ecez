@@ -122,11 +122,11 @@ pub fn CreateScheduler(comptime events: anytype) type {
 
                 const child_type = storage_ptr.Pointer.child;
                 const is_storage_type = check_if_storage_type_blk: {
-                    if (@hasDecl(child_type, "secret_field") == false) {
+                    if (@hasDecl(child_type, "EcezType") == false) {
                         break :check_if_storage_type_blk false;
                     }
 
-                    if (child_type.secret_field != StorageType) {
+                    if (child_type.EcezType != StorageType) {
                         break :check_if_storage_type_blk false;
                     }
 
@@ -278,7 +278,7 @@ pub fn Event(comptime name: []const u8, comptime systems: anytype) type {
     return struct {
         const ThisEvent = @This();
 
-        pub const secret_field = EventType;
+        pub const EcezType = EventType;
         pub const _name = name;
         pub const _systems = systems;
 
@@ -316,16 +316,16 @@ pub const CompileReflect = struct {
             }
 
             const this_event = @as(*const events_fields.type, @ptrCast(events_fields.default_value.?)).*;
-            const has_secret_field = @hasField(this_event, "secret_field");
+            const has_EcezType = @hasField(this_event, "EcezType");
             const has_name = @hasField(this_event, "_name");
             const has_systems = @hasField(this_event, "_systems");
 
-            const has_expected_decls = has_secret_field and has_name and has_systems;
+            const has_expected_decls = has_EcezType and has_name and has_systems;
             if (has_expected_decls) {
                 @compileError(@typeName(events[event_index]) ++ " Event missing expected decal. Events must be created with ecez.Event()");
             }
 
-            if (this_event.secret_field != EventType) {
+            if (this_event.EcezType != EventType) {
                 @compileError(std.fmt.comptimePrint("event number {d} is not an event. Events must be created with ecez.Event()", .{event_index}));
             }
         }
@@ -369,8 +369,8 @@ pub const CompileReflect = struct {
 
                 // TODO: verify that system has EventArgument, or Query, or ???
                 // const ParamType = param.type.?;
-                // const has_secret_field = @hasField(ParamType, "secret_field");
-                // if (has_secret_field == false or ParamType.secret_field != QueryType) {
+                // const has_EcezType = @hasField(ParamType, "EcezType");
+                // if (has_EcezType == false or ParamType.EcezType != QueryType) {
                 //     @compileError("system of type " ++ @typeName(field_system.type) ++ " has parameter of type '" ++ @typeName(ParamType) ++ "' expected ecez storage query");
                 // }
             }

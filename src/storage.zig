@@ -15,7 +15,7 @@ pub const StorageType = struct {};
 
 pub fn CreateStorage(comptime all_components: anytype) type {
     return struct {
-        pub const secret_field = StorageType;
+        pub const EcezType = StorageType;
 
         // a flat array of the type of each field in the components tuple
         pub const component_type_array = verify_and_extract_field_types_blk: {
@@ -332,7 +332,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
             return struct {
                 pub const _include_fields = include_fields;
-                pub const secret_field = QueryType;
+                pub const EcezType = QueryType;
 
                 pub const ThisQuery = @This();
 

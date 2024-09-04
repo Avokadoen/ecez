@@ -50,11 +50,11 @@ pub fn buildDependencyList(
 
             access_count_loop: inline for (params) |param| {
                 const MaybeQueryTypeParam = storage.CompileReflect.compactComponentRequest(param.type.?).type;
-                if (@hasDecl(MaybeQueryTypeParam, "secret_field") == false) {
+                if (@hasDecl(MaybeQueryTypeParam, "EcezType") == false) {
                     continue :access_count_loop; // assume legal argument, but not query argument
                 }
 
-                if (MaybeQueryTypeParam.secret_field != QueryType) {
+                if (MaybeQueryTypeParam.EcezType != QueryType) {
                     continue :access_count_loop; // assume legal argument, but not query argument
                 }
 
