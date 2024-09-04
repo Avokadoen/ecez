@@ -32,7 +32,7 @@
 test {
     _ = @import("dependency_chain.zig");
     _ = @import("sparse_set.zig");
-    // _ = @import("scheduler.zig");
+    _ = @import("scheduler.zig");
     // _ = @import("ezby.zig");
     _ = @import("storage.zig");
 }

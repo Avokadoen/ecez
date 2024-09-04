@@ -11,8 +11,12 @@ const entity_type = @import("entity_type.zig");
 const Entity = entity_type.Entity;
 const EntityId = entity_type.EntityId;
 
+pub const StorageType = struct {};
+
 pub fn CreateStorage(comptime all_components: anytype) type {
     return struct {
+        pub const secret_field = StorageType;
+
         // a flat array of the type of each field in the components tuple
         pub const component_type_array = verify_and_extract_field_types_blk: {
             const components_info = @typeInfo(@TypeOf(all_components));
@@ -557,12 +561,12 @@ const testing = std.testing;
 const StorageStub = CreateStorage(Testing.AllComponentsTuple);
 
 // TODO: we cant use tuples here because of https://github.com/ziglang/zig/issues/12963
-const AEntityType = Testing.Archetype.A;
-const BEntityType = Testing.Archetype.B;
-const AbEntityType = Testing.Archetype.AB;
-const AcEntityType = Testing.Archetype.AC;
-const BcEntityType = Testing.Archetype.BC;
-const AbcEntityType = Testing.Archetype.ABC;
+const AEntityType = Testing.Structure.A;
+const BEntityType = Testing.Structure.B;
+const AbEntityType = Testing.Structure.AB;
+const AcEntityType = Testing.Structure.AC;
+const BcEntityType = Testing.Structure.BC;
+const AbcEntityType = Testing.Structure.ABC;
 
 test "init() + deinit() is idempotent" {
     var storage = try StorageStub.init(testing.allocator);
@@ -660,7 +664,7 @@ test "setComponents() can reassign multiple components" {
 
     const new_a = Testing.Component.A{ .value = 1 };
     const new_b = Testing.Component.B{ .value = 2 };
-    try storage.setComponents(entity, Testing.Archetype.AB{
+    try storage.setComponents(entity, Testing.Structure.AB{
         .a = new_a,
         .b = new_b,
     });
@@ -678,7 +682,7 @@ test "setComponents() can add new components to entity" {
 
     const new_a = Testing.Component.A{ .value = 1 };
     const new_b = Testing.Component.B{ .value = 2 };
-    try storage.setComponents(entity, Testing.Archetype.AB{
+    try storage.setComponents(entity, Testing.Structure.AB{
         .a = new_a,
         .b = new_b,
     });
@@ -727,7 +731,7 @@ test "removeComponents() removes multiple components" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const initial_state = Testing.Archetype.ABC{};
+    const initial_state = Testing.Structure.ABC{};
     const entity = try storage.createEntity(initial_state);
 
     try storage.removeComponents(entity, .{ Testing.Component.A, Testing.Component.C });

@@ -44,16 +44,29 @@ pub fn buildDependencyList(
             }
 
             const params = system_info.Fn.params;
+            var access_params: [params.len]std.builtin.Type.Fn.Param = undefined;
+            var access_params_len: usize = 0;
             var access_count = 0;
-            inline for (params) |param| {
-                const QueryTypeParam = storage.CompileReflect.compactComponentRequest(param.type.?).type;
-                access_count += QueryTypeParam._include_fields.len;
+
+            access_count_loop: inline for (params) |param| {
+                const MaybeQueryTypeParam = storage.CompileReflect.compactComponentRequest(param.type.?).type;
+                if (@hasDecl(MaybeQueryTypeParam, "secret_field") == false) {
+                    continue :access_count_loop; // assume legal argument, but not query argument
+                }
+
+                if (MaybeQueryTypeParam.secret_field != QueryType) {
+                    continue :access_count_loop; // assume legal argument, but not query argument
+                }
+
+                access_params[access_params_len] = param;
+                access_params_len += 1;
+                access_count += MaybeQueryTypeParam._include_fields.len;
             }
 
             const all_access = get_access_blk: {
                 var access_index = 0;
                 var access: [access_count]Access = undefined;
-                inline for (params) |param| {
+                inline for (access_params[0..access_params_len]) |param| {
                     const QueryTypeParam = storage.CompileReflect.compactComponentRequest(param.type.?).type;
                     inline for (QueryTypeParam._include_fields) |componenet_field| {
                         const req = storage.CompileReflect.compactComponentRequest(componenet_field.type);

@@ -4,7 +4,7 @@ pub const Component = struct {
     pub const C = struct {};
 };
 
-pub const Archetype = struct {
+pub const Structure = struct {
     pub const A = struct {
         a: Component.A = .{},
     };
@@ -47,16 +47,16 @@ pub const AllComponentsTuple = .{
 
 // TODO: remove me
 pub const AllArchetypesArr = [_]type{
-    Archetype.A,
-    Archetype.AB,
-    Archetype.AC,
-    Archetype.ABC,
+    Structure.A,
+    Structure.AB,
+    Structure.AC,
+    Structure.ABC,
 };
 
 // TODO: remove me
 pub const AllArchetypesTuple = .{
-    Archetype.A,
-    Archetype.AB,
-    Archetype.AC,
-    Archetype.ABC,
+    Structure.A,
+    Structure.AB,
+    Structure.AC,
+    Structure.ABC,
 };
