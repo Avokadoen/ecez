@@ -6,6 +6,3 @@ pub const Entity = packed struct {
     /// Unique ID of the entity
     id: EntityId,
 };
-
-/// Used to retrieve the archetype of a specific entity
-pub const EntityRef = u16;

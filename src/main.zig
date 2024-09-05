@@ -3,7 +3,6 @@
 
 // pub const Entity = entity_type.Entity;
 // pub const EntityId = entity_type.EntityId;
-// pub const EntityRef = entity_type.EntityRef;
 
 // /// Use this function to create the ecs storage
 // pub const CreateStorage = @import("storage.zig").CreateStorage;
@@ -33,6 +32,6 @@ test {
     _ = @import("dependency_chain.zig");
     _ = @import("sparse_set.zig");
     _ = @import("scheduler.zig");
-    // _ = @import("ezby.zig");
+    _ = @import("ezby.zig");
     _ = @import("storage.zig");
 }

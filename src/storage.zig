@@ -44,7 +44,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
         allocator: Allocator,
         sparse_sets: GroupSparseSets = .{},
-        prev_entity_incr: EntityId = 0,
+        number_of_entities: EntityId = 0,
 
         /// intialize the storage structure
         /// Parameters:
@@ -84,7 +84,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 sparse_set.clearRetainingCapacity();
             }
 
-            self.prev_entity_incr = 0;
+            self.number_of_entities = 0;
         }
 
         /// Create an entity and returns the entity handle
@@ -97,19 +97,19 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const field_info = @typeInfo(@TypeOf(entity_state));
 
             errdefer {
-                self.prev_entity_incr -= 1;
+                self.number_of_entities -= 1;
                 inline for (field_info.Struct.fields) |field| {
                     var sparse_set: *set.SparseSet(EntityId, field.type) = &@field(
                         self.sparse_sets,
                         @typeName(field.type),
                     );
-                    _ = sparse_set.unset(self.prev_entity_incr);
+                    _ = sparse_set.unset(self.number_of_entities);
                 }
             }
 
-            const this_id = self.prev_entity_incr;
-            const next_id = self.prev_entity_incr + 1;
-            defer self.prev_entity_incr = next_id;
+            const this_id = self.number_of_entities;
+            const next_id = self.number_of_entities + 1;
+            defer self.number_of_entities = next_id;
 
             inline for (all_components) |Component| {
                 const sparse_set: *set.SparseSet(EntityId, Component) = &@field(
@@ -391,7 +391,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                                     @typeName(Component),
                                 );
 
-                                const inverse_value = storage.prev_entity_incr - sparse_set.len;
+                                const inverse_value = storage.number_of_entities - sparse_set.len;
                                 if (inverse_value <= current_min_value and inverse_value >= last_min_value) {
                                     current_index = component_index;
                                 }
@@ -409,7 +409,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                     return ThisQuery{
                         .sparse_cursors = 0,
-                        .storage_entity_count_ptr = &storage.prev_entity_incr,
+                        .storage_entity_count_ptr = &storage.number_of_entities,
                         .search_order = search_order,
                         .sparse_sets = sparse_sets,
                     };
