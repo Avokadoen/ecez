@@ -84,17 +84,17 @@ pub fn serialize(
     var bytes = try allocator.alloc(u8, total_byte_size);
     errdefer allocator.free(bytes);
 
-    var byte_cursor: usize = 0;
     // Write to bytes
     {
-        // Write ezby
-        {
-            const ezby_chunk = Chunk.Ezby{
-                .version_major = version_major,
-                .version_minor = version_minor,
-                .number_of_entities = storage.number_of_entities,
-            };
+        var byte_cursor: usize = 0;
 
+        // Write ezby
+        const ezby_chunk = Chunk.Ezby{
+            .version_major = version_major,
+            .version_minor = version_minor,
+            .number_of_entities = storage.number_of_entities,
+        };
+        {
             @memcpy(
                 bytes[byte_cursor .. byte_cursor + @sizeOf(Chunk.Ezby)],
                 mem.asBytes(&ezby_chunk),
@@ -120,18 +120,23 @@ pub fn serialize(
             );
             byte_cursor += @sizeOf(Chunk.Comp);
 
-            @memcpy(
-                bytes[byte_cursor .. byte_cursor + @sizeOf(Component) * sparse_set.dense.len],
-                std.mem.sliceAsBytes(sparse_set.dense),
-            );
-            byte_cursor += @sizeOf(Component) * sparse_set.dense.len;
+            std.debug.assert(@sizeOf(Component) == comp_chunk.type_size);
+            if (@sizeOf(Component) > 0) {
+                const size_of_components = comp_chunk.comp_count * comp_chunk.type_size;
+                @memcpy(
+                    bytes[byte_cursor .. byte_cursor + size_of_components],
+                    std.mem.sliceAsBytes(sparse_set.dense[0..ezby_chunk.number_of_entities]),
+                );
+                byte_cursor += size_of_components;
+            }
 
-            std.debug.assert(storage.number_of_entities <= sparse_set.sparse.len);
+            std.debug.assert(ezby_chunk.number_of_entities <= sparse_set.sparse.len);
+            const size_of_entities = @sizeOf(EntityId) * ezby_chunk.number_of_entities;
             @memcpy(
-                bytes[byte_cursor .. byte_cursor + @sizeOf(EntityId) * storage.number_of_entities],
-                std.mem.sliceAsBytes(sparse_set.sparse[0..storage.number_of_entities]),
+                bytes[byte_cursor .. byte_cursor + size_of_entities],
+                std.mem.sliceAsBytes(sparse_set.sparse[0..ezby_chunk.number_of_entities]),
             );
-            byte_cursor += @sizeOf(EntityId) * storage.number_of_entities;
+            byte_cursor += size_of_entities;
         }
     }
 
@@ -167,8 +172,8 @@ pub const Chunk = struct {
         type_alignment: u32,
         type_name_hash: u64,
 
-        pub const ComponentBytes = [*]const u8;
-        pub const EntityIds = [*]const EntityId;
+        pub const ComponentBytes = []const u8;
+        pub const EntityIds = []const EntityId;
     };
 };
 
@@ -205,19 +210,20 @@ fn parseCompChunk(
         @ptrCast(@alignCast(bytes.ptr)),
     );
 
-    const component_bytes_offset = @sizeOf(Chunk.Comp);
-    component_bytes.* = @as(
-        Chunk.Comp.ComponentBytes,
-        @ptrCast(@alignCast(bytes[component_bytes_offset..].ptr)),
-    );
+    var bytes_cursor: usize = @sizeOf(Chunk.Comp);
+    const size_of_component_bytes = chunk.*.comp_count * chunk.*.type_size;
+    component_bytes.* = bytes[bytes_cursor .. bytes_cursor + size_of_component_bytes];
 
-    const entity_ids_offset = component_bytes_offset + chunk.*.comp_count * chunk.*.type_size;
-    entity_ids.* = @as(
-        Chunk.Comp.EntityIds,
-        @ptrCast(@alignCast(bytes[entity_ids_offset..].ptr)),
+    bytes_cursor += size_of_component_bytes;
+    const size_of_entities = @sizeOf(EntityId) * number_of_entities;
+    entity_ids.ptr = @as(
+        [*]const EntityId,
+        @ptrCast(@alignCast(bytes[bytes_cursor .. bytes_cursor + size_of_entities].ptr)),
     );
+    entity_ids.len = @intCast(number_of_entities);
 
-    return bytes[0 .. entity_ids_offset + number_of_entities * @sizeOf(EntityId)];
+    bytes_cursor += size_of_entities;
+    return bytes[bytes_cursor..];
 }
 
 fn pow2Align(comptime T: type, num: T, @"align": T) T {
@@ -267,7 +273,7 @@ test "serializing then using parseEzbyChunk produce expected EZBY chunk" {
     }, ezby.*);
 }
 
-test "serializing then using parseCompChunk produce expected COMP chunk" {
+test parseCompChunk {
     var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
@@ -292,18 +298,18 @@ test "serializing then using parseCompChunk produce expected COMP chunk" {
     var ezby: *Chunk.Ezby = undefined;
     cursor = try parseEzbyChunk(cursor, &ezby);
 
-    var comp: *Chunk.Comp = undefined;
-    var component_bytes: Chunk.Comp.ComponentBytes = undefined;
-    var entity_ids: Chunk.Comp.EntityIds = undefined;
-    cursor = parseCompChunk(
-        cursor,
-        ezby.number_of_entities,
-        &comp,
-        &component_bytes,
-        &entity_ids,
-    );
-
     inline for (Testing.AllComponentsArr) |Component| {
+        var comp: *Chunk.Comp = undefined;
+        var component_bytes: Chunk.Comp.ComponentBytes = undefined;
+        var entity_ids: Chunk.Comp.EntityIds = undefined;
+        cursor = parseCompChunk(
+            cursor,
+            ezby.number_of_entities,
+            &comp,
+            &component_bytes,
+            &entity_ids,
+        );
+
         try testing.expectEqual(Chunk.Comp{
             .comp_count = 128,
             .type_size = @sizeOf(Component),

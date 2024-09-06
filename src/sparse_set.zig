@@ -8,6 +8,7 @@ pub fn SparseSet(comptime SparseT: type, comptime DenseT: type) type {
 
         const Set = @This();
 
+        // TODO: even though the same pattern exist in std arraylist, I am not comfortable with stack addr to realloc
         dense: []DenseT = &[0]DenseT{},
         // TODO: make 1 bit per entity (tradeof with o(1))
         sparse: []SparseT = &[0]SparseT{},

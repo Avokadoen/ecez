@@ -33,6 +33,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 if (@typeInfo(all_components[component_index]) != .Struct) {
                     @compileError("component types must be a struct, field '" ++ field.name ++ "' was '" ++ @typeName(all_components[component_index]));
                 }
+
                 field_type.* = all_components[component_index];
             }
             break :verify_and_extract_field_types_blk field_types;
