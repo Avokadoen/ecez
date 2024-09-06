@@ -13,7 +13,7 @@ const EntityId = entity_type.EntityId;
 const set = @import("sparse_set.zig");
 
 const hashfn: fn (str: []const u8) u64 = std.hash.Fnv1a_64.hash;
-pub fn hashType(comptime T: type) u64 {
+pub fn hashTypeName(comptime T: type) u64 {
     if (@inComptime() == false) {
         @compileError(@src().fn_name ++ " is not allowed during runtime");
     }
@@ -74,8 +74,8 @@ pub fn serialize(
             );
 
             total_size += @sizeOf(Chunk.Comp);
-            total_size += sparse_set.sparse.len * @sizeOf(EntityId);
-            total_size += sparse_set.dense.len * @sizeOf(Component);
+            total_size += storage.number_of_entities * @sizeOf(EntityId);
+            total_size += sparse_set.dense_len * @sizeOf(Component);
         }
 
         break :count_byte_size_blk total_size;
@@ -103,13 +103,10 @@ pub fn serialize(
         }
 
         inline for (Storage.component_type_array) |Component| {
-            const sparse_set: set.SparseSet(EntityId, Component) = @field(
-                storage.sparse_sets,
-                @typeName(Component),
-            );
+            const sparse_set: set.SparseSet(EntityId, Component) = storage.getSparseSetValue(Component);
 
             const comp_chunk = Chunk.Comp{
-                .comp_count = @intCast(sparse_set.len),
+                .comp_count = @intCast(sparse_set.dense_len),
                 .type_size = @sizeOf(Component),
                 .type_alignment = @alignOf(Component),
                 .type_name_hash = hashfn(@typeName(Component)),
@@ -125,7 +122,7 @@ pub fn serialize(
                 const size_of_components = comp_chunk.comp_count * comp_chunk.type_size;
                 @memcpy(
                     bytes[byte_cursor .. byte_cursor + size_of_components],
-                    std.mem.sliceAsBytes(sparse_set.dense[0..ezby_chunk.number_of_entities]),
+                    std.mem.sliceAsBytes(sparse_set.dense[0..comp_chunk.comp_count]),
                 );
                 byte_cursor += size_of_components;
             }
@@ -145,14 +142,67 @@ pub fn serialize(
 
 /// Deserialize the supplied bytes and insert them into a storage. This function will
 /// clear the storage memory which means that **current storage will be cleared**
-pub fn deserialize(comptime Storage: type, storage: *Storage, ezby_bytes: []const u8) DeserializeError!void {
-    _ = storage; // autofix
-    _ = ezby_bytes; // autofix
+///
+/// In the event of error, the storage will be empty
+pub fn deserialize(
+    storage_allocator: Allocator,
+    comptime Storage: type,
+    storage: *Storage,
+    ezby_bytes: []const u8,
+) DeserializeError!void {
     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.serializer);
     defer zone.End();
 
-    // unimplemented
-    return;
+    storage.clearRetainingCapacity();
+    errdefer storage.clearRetainingCapacity();
+
+    var cursor = ezby_bytes;
+
+    var ezby: *Chunk.Ezby = undefined;
+    cursor = try Chunk.parseEzby(cursor, &ezby);
+
+    if (ezby.version_major != version_major) {
+        return error.VersionMismatch;
+    }
+
+    storage.number_of_entities = @intCast(ezby.number_of_entities);
+
+    while (cursor.len != 0) {
+        var comp: *Chunk.Comp = undefined;
+        var component_bytes: Chunk.Comp.ComponentBytes = undefined;
+        var entity_ids: Chunk.Comp.EntityIds = undefined;
+        cursor = Chunk.parseComp(
+            cursor,
+            ezby.number_of_entities,
+            &comp,
+            &component_bytes,
+            &entity_ids,
+        );
+        std.debug.assert(comp.identifier == mem.bytesToValue(u32, "COMP"));
+
+        // TODO: not good ...
+        inline for (Storage.component_type_array) |Component| {
+            const type_hash = comptime hashTypeName(Component);
+            if (type_hash == comp.type_name_hash) {
+                std.debug.assert(comp.type_size == @sizeOf(Component));
+                std.debug.assert(comp.type_alignment == @alignOf(Component));
+
+                const sparse_set: *set.SparseSet(EntityId, Component) = storage.getSparseSetPtr(Component);
+                sparse_set.dense_len = comp.comp_count;
+
+                // Set sparse
+                try sparse_set.growSparse(storage_allocator, ezby.number_of_entities);
+                @memcpy(sparse_set.sparse[0..entity_ids.len], entity_ids);
+
+                if (@sizeOf(Component) > 0) {
+                    const component_data = std.mem.bytesAsSlice(Component, component_bytes);
+                    // set dense
+                    try sparse_set.growDense(storage_allocator, comp.comp_count);
+                    @memcpy(sparse_set.dense[0..component_data.len], component_data);
+                }
+            }
+        }
+    }
 }
 
 /// ezby v1 files can only have 2 chunks. Ezby chunk is always first, then 1 or many Comp chunks
@@ -175,56 +225,56 @@ pub const Chunk = struct {
         pub const ComponentBytes = []const u8;
         pub const EntityIds = []const EntityId;
     };
-};
 
-/// parse EZBY chunk from bytes and return remaining bytes
-fn parseEzbyChunk(bytes: []const u8, chunk: **const Chunk.Ezby) error{UnexpectedEzbyIdentifier}![]const u8 {
-    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.serializer);
-    defer zone.End();
+    /// parse EZBY chunk from bytes and return remaining bytes
+    fn parseEzby(bytes: []const u8, chunk: **const Chunk.Ezby) error{UnexpectedEzbyIdentifier}![]const u8 {
+        const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.serializer);
+        defer zone.End();
 
-    std.debug.assert(bytes.len >= @sizeOf(Chunk.Ezby));
+        std.debug.assert(bytes.len >= @sizeOf(Chunk.Ezby));
 
-    if (mem.eql(u8, bytes[0..4], "EZBY") == false) {
-        return error.UnexpectedEzbyIdentifier;
+        if (mem.eql(u8, bytes[0..4], "EZBY") == false) {
+            return error.UnexpectedEzbyIdentifier;
+        }
+
+        chunk.* = @as(*const Chunk.Ezby, @ptrCast(@alignCast(bytes.ptr)));
+        return bytes[@sizeOf(Chunk.Ezby)..];
     }
 
-    chunk.* = @as(*const Chunk.Ezby, @ptrCast(@alignCast(bytes.ptr)));
-    return bytes[@sizeOf(Chunk.Ezby)..];
-}
+    fn parseComp(
+        bytes: []const u8,
+        number_of_entities: u64,
+        chunk: **const Chunk.Comp,
+        component_bytes: *Chunk.Comp.ComponentBytes,
+        entity_ids: *Chunk.Comp.EntityIds,
+    ) []const u8 {
+        const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.serializer);
+        defer zone.End();
 
-fn parseCompChunk(
-    bytes: []const u8,
-    number_of_entities: u64,
-    chunk: **const Chunk.Comp,
-    component_bytes: *Chunk.Comp.ComponentBytes,
-    entity_ids: *Chunk.Comp.EntityIds,
-) []const u8 {
-    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.serializer);
-    defer zone.End();
+        std.debug.assert(bytes.len >= @sizeOf(Chunk.Comp));
+        std.debug.assert(mem.eql(u8, bytes[0..4], "COMP"));
 
-    std.debug.assert(bytes.len >= @sizeOf(Chunk.Comp));
-    std.debug.assert(mem.eql(u8, bytes[0..4], "COMP"));
+        chunk.* = @as(
+            *const Chunk.Comp,
+            @ptrCast(@alignCast(bytes.ptr)),
+        );
 
-    chunk.* = @as(
-        *const Chunk.Comp,
-        @ptrCast(@alignCast(bytes.ptr)),
-    );
+        var bytes_cursor: usize = @sizeOf(Chunk.Comp);
+        const size_of_component_bytes = chunk.*.comp_count * chunk.*.type_size;
+        component_bytes.* = bytes[bytes_cursor .. bytes_cursor + size_of_component_bytes];
 
-    var bytes_cursor: usize = @sizeOf(Chunk.Comp);
-    const size_of_component_bytes = chunk.*.comp_count * chunk.*.type_size;
-    component_bytes.* = bytes[bytes_cursor .. bytes_cursor + size_of_component_bytes];
+        bytes_cursor += size_of_component_bytes;
+        const size_of_entities = @sizeOf(EntityId) * number_of_entities;
+        entity_ids.ptr = @as(
+            [*]const EntityId,
+            @ptrCast(@alignCast(bytes[bytes_cursor .. bytes_cursor + size_of_entities].ptr)),
+        );
+        entity_ids.len = @intCast(number_of_entities);
 
-    bytes_cursor += size_of_component_bytes;
-    const size_of_entities = @sizeOf(EntityId) * number_of_entities;
-    entity_ids.ptr = @as(
-        [*]const EntityId,
-        @ptrCast(@alignCast(bytes[bytes_cursor .. bytes_cursor + size_of_entities].ptr)),
-    );
-    entity_ids.len = @intCast(number_of_entities);
-
-    bytes_cursor += size_of_entities;
-    return bytes[bytes_cursor..];
-}
+        bytes_cursor += size_of_entities;
+        return bytes[bytes_cursor..];
+    }
+};
 
 fn pow2Align(comptime T: type, num: T, @"align": T) T {
     return (num + @"align" - 1) & ~(@"align" - 1);
@@ -251,7 +301,7 @@ test "pow2Align return value aligned with 8" {
     }
 }
 
-test "serializing then using parseEzbyChunk produce expected EZBY chunk" {
+test "serializing then using Chunk.parseEzby produce expected EZBY chunk" {
     var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
@@ -264,7 +314,7 @@ test "serializing then using parseEzbyChunk produce expected EZBY chunk" {
     defer testing.allocator.free(bytes);
 
     var ezby: *Chunk.Ezby = undefined;
-    _ = try parseEzbyChunk(bytes, &ezby);
+    _ = try Chunk.parseEzby(bytes, &ezby);
 
     try testing.expectEqual(Chunk.Ezby{
         .version_major = version_major,
@@ -273,7 +323,7 @@ test "serializing then using parseEzbyChunk produce expected EZBY chunk" {
     }, ezby.*);
 }
 
-test parseCompChunk {
+test "Chunk.parseComp" {
     var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
@@ -296,13 +346,13 @@ test parseCompChunk {
     var cursor = bytes;
 
     var ezby: *Chunk.Ezby = undefined;
-    cursor = try parseEzbyChunk(cursor, &ezby);
+    cursor = try Chunk.parseEzby(cursor, &ezby);
 
     inline for (Testing.AllComponentsArr) |Component| {
         var comp: *Chunk.Comp = undefined;
         var component_bytes: Chunk.Comp.ComponentBytes = undefined;
         var entity_ids: Chunk.Comp.EntityIds = undefined;
-        cursor = parseCompChunk(
+        cursor = Chunk.parseComp(
             cursor,
             ezby.number_of_entities,
             &comp,
@@ -319,82 +369,78 @@ test parseCompChunk {
     }
 }
 
-// test "serialize and deserialize is idempotent" {
-//     var storage = try StorageStub.init(std.testing.allocator);
-//     defer storage.deinit();
+test "serialize and deserializeAssumeSameStorageLayout is idempotent" {
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
 
-//     const test_data_count = 128;
-//     var a_as: [test_data_count]Testing.Component.A = undefined;
-//     var a_entities: [test_data_count]Entity = undefined;
+    const test_data_count = 128;
 
-//     for (&a_as, &a_entities, 0..) |*a, *entity, index| {
-//         a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
-//         entity.* = try storage.createEntity(Testing.Archetype.A{ .a = a.* });
-//     }
+    var a_as: [test_data_count]Testing.Component.A = undefined;
+    var a_entities: [test_data_count]Entity = undefined;
+    for (&a_as, &a_entities, 0..) |*a, *entity, index| {
+        a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
+        entity.* = try storage.createEntity(.{a.*});
+    }
 
-//     var ab_as: [test_data_count]Testing.Component.A = undefined;
-//     var ab_bs: [test_data_count]Testing.Component.B = undefined;
-//     var ab_entities: [test_data_count]Entity = undefined;
-//     for (&ab_as, &ab_bs, &ab_entities, 0..) |*a, *b, *entity, index| {
-//         a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
-//         b.* = Testing.Component.B{ .value = @as(u8, @intCast(index)) };
-//         entity.* = try storage.createEntity(
-//             Testing.Archetype.AB{ .a = a.*, .b = b.* },
-//         );
-//     }
+    var ab_as: [test_data_count]Testing.Component.A = undefined;
+    var ab_bs: [test_data_count]Testing.Component.B = undefined;
+    var ab_entities: [test_data_count]Entity = undefined;
+    for (&ab_as, &ab_bs, &ab_entities, 0..) |*a, *b, *entity, index| {
+        a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
+        b.* = Testing.Component.B{ .value = @as(u8, @intCast(index)) };
+        entity.* = try storage.createEntity(.{ a.*, b.* });
+    }
 
-//     var ac_as: [test_data_count]Testing.Component.A = undefined;
-//     const ac_cs: Testing.Component.C = .{};
-//     var ac_entities: [test_data_count]Entity = undefined;
-//     for (&ac_as, &ac_entities, 0..) |*a, *entity, index| {
-//         a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
-//         entity.* = try storage.createEntity(Testing.Archetype.AC{ .a = a.*, .c = ac_cs });
-//     }
+    var ac_as: [test_data_count]Testing.Component.A = undefined;
+    const ac_cs: Testing.Component.C = .{};
+    var ac_entities: [test_data_count]Entity = undefined;
+    for (&ac_as, &ac_entities, 0..) |*a, *entity, index| {
+        a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
+        entity.* = try storage.createEntity(.{ a.*, ac_cs });
+    }
 
-//     var abc_as: [test_data_count]Testing.Component.A = undefined;
-//     var abc_bs: [test_data_count]Testing.Component.B = undefined;
-//     const abc_cs: Testing.Component.C = .{};
-//     var abc_entities: [test_data_count]Entity = undefined;
-//     for (&abc_as, &abc_bs, &abc_entities, 0..) |*a, *b, *entity, index| {
-//         a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
-//         b.* = Testing.Component.B{ .value = @as(u8, @intCast(index)) };
-//         entity.* = try storage.createEntity(
-//             Testing.Archetype.ABC{ .a = a.*, .b = b.*, .c = abc_cs },
-//         );
-//     }
+    var abc_as: [test_data_count]Testing.Component.A = undefined;
+    var abc_bs: [test_data_count]Testing.Component.B = undefined;
+    const abc_cs: Testing.Component.C = .{};
+    var abc_entities: [test_data_count]Entity = undefined;
+    for (&abc_as, &abc_bs, &abc_entities, 0..) |*a, *b, *entity, index| {
+        a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
+        b.* = Testing.Component.B{ .value = @as(u8, @intCast(index)) };
+        entity.* = try storage.createEntity(.{ a.*, b.*, abc_cs });
+    }
 
-//     const bytes = try serialize(StorageStub, testing.allocator, storage, .{}, .{});
-//     defer testing.allocator.free(bytes);
+    const bytes = try serialize(testing.allocator, StorageStub, storage, .{});
+    defer testing.allocator.free(bytes);
 
-//     // explicitly clear to ensure there is nothing in the storage
-//     storage.clearRetainingCapacity();
+    try deserialize(testing.allocator, StorageStub, &storage, bytes);
 
-//     try deserialize(StorageStub, &storage, bytes);
+    for (a_as, a_entities) |a, a_entity| {
+        try testing.expectEqual(a, (try storage.getComponents(a_entity, Testing.Structure.A)).a);
+        try testing.expectError(error.MissingComponent, storage.getComponents(a_entity, Testing.Structure.B));
+        try testing.expectError(error.MissingComponent, storage.getComponents(a_entity, Testing.Structure.C));
+    }
 
-//     for (a_as, a_entities) |a, a_entity| {
-//         try testing.expectEqual(a, try storage.getComponent(a_entity, Testing.Component.A));
-//         try testing.expectError(error.ComponentMissing, storage.getComponent(a_entity, Testing.Component.B));
-//         try testing.expectError(error.ComponentMissing, storage.getComponent(a_entity, Testing.Component.C));
-//     }
+    for (ab_as, ab_bs, ab_entities) |ab_a, ab_b, ab_entity| {
+        const ab = try storage.getComponents(ab_entity, Testing.Structure.AB);
+        try testing.expectEqual(ab_a, ab.a);
+        try testing.expectEqual(ab_b, ab.b);
+        try testing.expectError(error.MissingComponent, storage.getComponents(ab_entity, Testing.Structure.C));
+    }
 
-//     for (ab_as, ab_bs, ab_entities) |ab_a, ab_b, ab_entity| {
-//         try testing.expectEqual(ab_a, try storage.getComponent(ab_entity, Testing.Component.A));
-//         try testing.expectEqual(ab_b, try storage.getComponent(ab_entity, Testing.Component.B));
-//         try testing.expectError(error.ComponentMissing, storage.getComponent(ab_entity, Testing.Component.C));
-//     }
+    for (ac_as, ac_entities) |ac_a, ac_entity| {
+        const ac = try storage.getComponents(ac_entity, Testing.Structure.AC);
+        try testing.expectEqual(ac_a, ac.a);
+        try testing.expectError(error.MissingComponent, storage.getComponents(ac_entity, Testing.Structure.B));
+        try testing.expectEqual(ac_cs, ac.c);
+    }
 
-//     for (ac_as, ac_entities) |ac_a, ac_entity| {
-//         try testing.expectEqual(ac_a, try storage.getComponent(ac_entity, Testing.Component.A));
-//         try testing.expectError(error.ComponentMissing, storage.getComponent(ac_entity, Testing.Component.B));
-//         try testing.expectEqual(ac_cs, try storage.getComponent(ac_entity, Testing.Component.C));
-//     }
-
-//     for (abc_as, abc_bs, abc_entities) |abc_a, abc_b, abc_entity| {
-//         try testing.expectEqual(abc_a, try storage.getComponent(abc_entity, Testing.Component.A));
-//         try testing.expectEqual(abc_b, try storage.getComponent(abc_entity, Testing.Component.B));
-//         try testing.expectEqual(abc_cs, try storage.getComponent(abc_entity, Testing.Component.C));
-//     }
-// }
+    for (abc_as, abc_bs, abc_entities) |abc_a, abc_b, abc_entity| {
+        const abc = try storage.getComponents(abc_entity, Testing.Structure.ABC);
+        try testing.expectEqual(abc_a, abc.a);
+        try testing.expectEqual(abc_b, abc.b);
+        try testing.expectEqual(abc_cs, abc.c);
+    }
+}
 
 // test "serialize with culled_component_types config can be deserialized by other storage type" {
 //     var storage = try StorageStub.init(std.testing.allocator);
@@ -454,7 +500,7 @@ test parseCompChunk {
 
 //         for (a_as, a_entities) |a, a_entity| {
 //             try testing.expectEqual(a, try ab_storage.getComponent(a_entity, Testing.Component.A));
-//             try testing.expectError(error.ComponentMissing, ab_storage.getComponent(a_entity, Testing.Component.B));
+//             try testing.expectError(error.MissingComponent, ab_storage.getComponent(a_entity, Testing.Component.B));
 //         }
 
 //         for (ab_as, ab_bs, ab_entities) |ab_a, ab_b, ab_entity| {
@@ -463,13 +509,13 @@ test parseCompChunk {
 //         }
 
 //         for (ac_entities) |ac_entity| {
-//             try testing.expectError(error.ComponentMissing, ab_storage.getComponent(ac_entity, Testing.Component.A));
-//             try testing.expectError(error.ComponentMissing, ab_storage.getComponent(ac_entity, Testing.Component.B));
+//             try testing.expectError(error.MissingComponent, ab_storage.getComponent(ac_entity, Testing.Component.A));
+//             try testing.expectError(error.MissingComponent, ab_storage.getComponent(ac_entity, Testing.Component.B));
 //         }
 
 //         for (abc_entities) |abc_entity| {
-//             try testing.expectError(error.ComponentMissing, ab_storage.getComponent(abc_entity, Testing.Component.A));
-//             try testing.expectError(error.ComponentMissing, ab_storage.getComponent(abc_entity, Testing.Component.B));
+//             try testing.expectError(error.MissingComponent, ab_storage.getComponent(abc_entity, Testing.Component.A));
+//             try testing.expectError(error.MissingComponent, ab_storage.getComponent(abc_entity, Testing.Component.B));
 //         }
 //     }
 
@@ -487,12 +533,12 @@ test parseCompChunk {
 
 //         for (a_as, a_entities) |a, a_entity| {
 //             try testing.expectEqual(a, try ac_storage.getComponent(a_entity, Testing.Component.A));
-//             try testing.expectError(error.ComponentMissing, ac_storage.getComponent(a_entity, Testing.Component.C));
+//             try testing.expectError(error.MissingComponent, ac_storage.getComponent(a_entity, Testing.Component.C));
 //         }
 
 //         for (ab_entities) |ab_entity| {
-//             try testing.expectError(error.ComponentMissing, ac_storage.getComponent(ab_entity, Testing.Component.A));
-//             try testing.expectError(error.ComponentMissing, ac_storage.getComponent(ab_entity, Testing.Component.C));
+//             try testing.expectError(error.MissingComponent, ac_storage.getComponent(ab_entity, Testing.Component.A));
+//             try testing.expectError(error.MissingComponent, ac_storage.getComponent(ab_entity, Testing.Component.C));
 //         }
 
 //         for (ac_as, ac_entities) |a, ac_entity| {
@@ -501,8 +547,8 @@ test parseCompChunk {
 //         }
 
 //         for (abc_entities) |abc_entity| {
-//             try testing.expectError(error.ComponentMissing, ac_storage.getComponent(abc_entity, Testing.Component.A));
-//             try testing.expectError(error.ComponentMissing, ac_storage.getComponent(abc_entity, Testing.Component.C));
+//             try testing.expectError(error.MissingComponent, ac_storage.getComponent(abc_entity, Testing.Component.A));
+//             try testing.expectError(error.MissingComponent, ac_storage.getComponent(abc_entity, Testing.Component.C));
 //         }
 //     }
 // }

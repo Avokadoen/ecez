@@ -369,7 +369,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                                     @typeName(Component),
                                 );
 
-                                if (sparse_set.len <= current_min_value and sparse_set.len >= last_min_value) {
+                                if (sparse_set.dense_len <= current_min_value and sparse_set.dense_len >= last_min_value) {
                                     current_index = component_index;
                                 }
                             }
@@ -392,7 +392,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                                     @typeName(Component),
                                 );
 
-                                const inverse_value = storage.number_of_entities - sparse_set.len;
+                                const inverse_value = storage.number_of_entities - sparse_set.dense_len;
                                 if (inverse_value <= current_min_value and inverse_value >= last_min_value) {
                                     current_index = component_index;
                                 }
@@ -470,6 +470,26 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     return result;
                 }
             };
+        }
+
+        /// Retrieve the sparse set for a component type.
+        /// Mostly meant for internal usage. Be careful not to write to the set as this can
+        /// lead to inconsistent storage state.
+        pub fn getSparseSetValue(storage: Storage, comptime Component: type) set.SparseSet(EntityId, Component) {
+            return @field(
+                storage.sparse_sets,
+                @typeName(Component),
+            );
+        }
+
+        /// Retrieve the sparse set for a component type.
+        /// Mostly meant for internal usage. Be careful not to write to the set as this can
+        /// lead to inconsistent storage state.
+        pub fn getSparseSetPtr(storage: *Storage, comptime Component: type) *set.SparseSet(EntityId, Component) {
+            return &@field(
+                storage.sparse_sets,
+                @typeName(Component),
+            );
         }
 
         fn indexOfComponent(comptime Component: type) usize {

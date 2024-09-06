@@ -8,12 +8,12 @@ pub fn SparseSet(comptime SparseT: type, comptime DenseT: type) type {
 
         const Set = @This();
 
-        // TODO: even though the same pattern exist in std arraylist, I am not comfortable with stack addr to realloc
-        dense: []DenseT = &[0]DenseT{},
         // TODO: make 1 bit per entity (tradeof with o(1))
         sparse: []SparseT = &[0]SparseT{},
 
-        len: usize = 0,
+        // TODO: even though the same pattern exist in std arraylist, I am not comfortable with stack addr to realloc
+        dense_len: usize = 0,
+        dense: []DenseT = &[0]DenseT{},
 
         pub fn deinit(self: *Set, allocator: Allocator) void {
             if (@sizeOf(DenseT) > 0) {
@@ -24,7 +24,7 @@ pub fn SparseSet(comptime SparseT: type, comptime DenseT: type) type {
 
             self.dense = undefined;
             self.sparse = undefined;
-            self.len = undefined;
+            self.dense_len = undefined;
         }
 
         pub fn growSparse(self: *Set, allocator: Allocator, min_size: usize) error{OutOfMemory}!void {
@@ -40,6 +40,15 @@ pub fn SparseSet(comptime SparseT: type, comptime DenseT: type) type {
                 self.sparse = try allocator.realloc(self.sparse, new_len);
                 @memset(self.sparse[old_len..new_len], not_set);
             }
+        }
+
+        pub fn growDense(self: *Set, allocator: Allocator, min_size: usize) error{OutOfMemory}!void {
+            if (self.dense.len >= min_size) {
+                return;
+            }
+
+            const new_len = growSize(self.dense.len, min_size);
+            self.dense = try allocator.realloc(self.dense, new_len);
         }
 
         pub fn set(self: *Set, allocator: Allocator, sparse: SparseT, item: DenseT) error{OutOfMemory}!void {
@@ -59,7 +68,7 @@ pub fn SparseSet(comptime SparseT: type, comptime DenseT: type) type {
             {
                 // Check if dense has sufficient capcacity
                 if (@sizeOf(DenseT) > 0) {
-                    if (self.dense.len <= self.len) {
+                    if (self.dense.len <= self.dense_len) {
                         // Grow dense, realloc will resize if possible internaly
                         const new_len = growSize(self.dense.len, self.dense.len + 1);
                         self.dense = try allocator.realloc(self.dense, new_len);
@@ -67,10 +76,10 @@ pub fn SparseSet(comptime SparseT: type, comptime DenseT: type) type {
                 }
 
                 // Add new item and register index
-                const entry = self.len;
+                const entry = self.dense_len;
                 self.sparse[sparse] = @intCast(entry);
 
-                self.len += 1;
+                self.dense_len += 1;
 
                 if (@sizeOf(DenseT) > 0) {
                     self.dense[entry] = item;
@@ -103,7 +112,7 @@ pub fn SparseSet(comptime SparseT: type, comptime DenseT: type) type {
                 }
             }
 
-            self.len -= 1;
+            self.dense_len -= 1;
             return true;
         }
 
@@ -113,12 +122,17 @@ pub fn SparseSet(comptime SparseT: type, comptime DenseT: type) type {
                 return null;
             }
 
-            return &self.dense[entry];
+            if (@sizeOf(DenseT) > 0) {
+                return &self.dense[entry];
+            } else {
+                var zero_size = DenseT{};
+                return &zero_size;
+            }
         }
 
         pub fn clearRetainingCapacity(self: *Set) void {
             @memset(self.sparse, not_set);
-            self.len = 0;
+            self.dense_len = 0;
         }
 
         // "Borrowed" from std.ArrayList :)
@@ -161,7 +175,7 @@ test "SparseSet set populates dense" {
     try sparse_set.growSparse(std.testing.allocator, 16);
 
     try sparse_set.set(std.testing.allocator, 3, 5);
-    try std.testing.expectEqual(1, sparse_set.len);
+    try std.testing.expectEqual(1, sparse_set.dense_len);
     try std.testing.expectEqual(5, sparse_set.dense[0]);
 
     var sparse = [_]u32{TestSparseSet.not_set} ** 16;
@@ -171,16 +185,16 @@ test "SparseSet set populates dense" {
     }
 
     try sparse_set.set(std.testing.allocator, 3, 8);
-    try std.testing.expectEqual(1, sparse_set.len);
+    try std.testing.expectEqual(1, sparse_set.dense_len);
     try std.testing.expectEqual(8, sparse_set.dense[0]);
 
     try sparse_set.set(std.testing.allocator, 6, 3);
-    try std.testing.expectEqual(2, sparse_set.len);
+    try std.testing.expectEqual(2, sparse_set.dense_len);
     try std.testing.expectEqual(3, sparse_set.dense[1]);
     sparse[6] = 1;
 
     try sparse_set.set(std.testing.allocator, 15, 15);
-    try std.testing.expectEqual(3, sparse_set.len);
+    try std.testing.expectEqual(3, sparse_set.dense_len);
     try std.testing.expectEqual(15, sparse_set.dense[2]);
     sparse[15] = 2;
 
@@ -211,7 +225,7 @@ test "SparseSet unset removes elements" {
     }
 
     const dense = [_]u32{ 8, 15 };
-    for (dense, sparse_set.dense[0..sparse_set.len]) |expected_dense, actual_dense| {
+    for (dense, sparse_set.dense[0..sparse_set.dense_len]) |expected_dense, actual_dense| {
         try std.testing.expectEqual(expected_dense, actual_dense);
     }
 }
@@ -289,7 +303,7 @@ test "SparseSet clearRetainingCapacity clears" {
         try std.testing.expectEqual(expected_entry, actual_entry);
     }
 
-    try std.testing.expectEqual(0, sparse_set.len);
+    try std.testing.expectEqual(0, sparse_set.dense_len);
 }
 
 test "SparseSet with zero sized type only has sparse" {
@@ -311,5 +325,5 @@ test "SparseSet with zero sized type only has sparse" {
         try std.testing.expectEqual(expected_entry, actual_entry);
     }
 
-    try std.testing.expectEqual(0, sparse_set.len);
+    try std.testing.expectEqual(0, sparse_set.dense_len);
 }
