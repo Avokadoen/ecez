@@ -220,11 +220,30 @@ pub fn busyWorkSystem(query: *GridPosQuery) void {
     }
 }
 
+// flushBufferSystem must wait for systems using RenderCellQuery and LinePosQuery
+const WaitOnRenderCellQuery = Storage.Query(
+    struct {
+        pos: *Components.GridPos,
+        health: *Components.Health,
+    },
+    .{},
+);
+const WaitOnLinePosQuery = Storage.Query(
+    struct {
+        line_pos: *Components.LinePos,
+    },
+    .{},
+);
 const FlushQuery = Storage.Query(
     struct { flush: Components.FlushTag },
     .{},
 );
-pub fn flushBufferSystem(query: *FlushQuery, event_arg: *EventArg) void {
+pub fn flushBufferSystem(
+    query: *FlushQuery,
+    _: *WaitOnRenderCellQuery,
+    _: *WaitOnLinePosQuery,
+    event_arg: *EventArg,
+) void {
     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.turquoise);
     defer zone.End();
 
