@@ -12,32 +12,15 @@ const Entity = entity_type.Entity;
 const EntityId = entity_type.EntityId;
 
 pub const StorageType = struct {};
+pub const StorageSubsetType = struct {};
+pub const QueryType = struct {};
 
 pub fn CreateStorage(comptime all_components: anytype) type {
     return struct {
         pub const EcezType = StorageType;
 
         // a flat array of the type of each field in the components tuple
-        pub const component_type_array = verify_and_extract_field_types_blk: {
-            const components_info = @typeInfo(@TypeOf(all_components));
-            if (components_info != .Struct) {
-                @compileError("components was not a tuple of types");
-            }
-
-            var field_types: [components_info.Struct.fields.len]type = undefined;
-            for (&field_types, components_info.Struct.fields, 0..) |*field_type, field, component_index| {
-                if (@typeInfo(field.type) != .Type) {
-                    @compileError("components must be a struct of types, field '" ++ field.name ++ "' was " ++ @typeName(field.type));
-                }
-
-                if (@typeInfo(all_components[component_index]) != .Struct) {
-                    @compileError("component types must be a struct, field '" ++ field.name ++ "' was '" ++ @typeName(all_components[component_index]));
-                }
-
-                field_type.* = all_components[component_index];
-            }
-            break :verify_and_extract_field_types_blk field_types;
-        };
+        pub const component_type_array = CompileReflect.verifyComponentTuple(all_components);
 
         pub const GroupSparseSets = CompileReflect.GroupSparseSets(&component_type_array);
 
@@ -95,6 +78,12 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
+            comptime CompileReflect.verifyInnerTypesIsInSlice(
+                " is not part of storage components",
+                &component_type_array,
+                @TypeOf(entity_state),
+            );
+
             const field_info = @typeInfo(@TypeOf(entity_state));
 
             errdefer {
@@ -149,6 +138,12 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
+            comptime CompileReflect.verifyInnerTypesIsInSlice(
+                " is not part of storage components",
+                &component_type_array,
+                @TypeOf(struct_of_components),
+            );
+
             const field_info = @typeInfo(@TypeOf(struct_of_components));
 
             // TODO: proper errdefer
@@ -180,6 +175,12 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
+            comptime CompileReflect.verifyInnerTypesIsInSlice(
+                " is not part of storage components",
+                &component_type_array,
+                struct_of_remove_components,
+            );
+
             const field_info = @typeInfo(@TypeOf(struct_of_remove_components));
 
             // TODO: proper errdefer
@@ -203,6 +204,12 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         pub fn hasComponents(self: Storage, entity: Entity, comptime components: anytype) bool {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
+
+            comptime CompileReflect.verifyInnerTypesIsInSlice(
+                " is not part of storage components",
+                &component_type_array,
+                components,
+            );
 
             const field_info = @typeInfo(@TypeOf(components));
 
@@ -231,6 +238,12 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         pub fn getComponents(self: *const Storage, entity: Entity, comptime Components: type) error{MissingComponent}!Components {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
+
+            comptime CompileReflect.verifyInnerTypesIsInSlice(
+                " is not part of storage components",
+                &component_type_array,
+                Components,
+            );
 
             var result: Components = undefined;
             const field_info = @typeInfo(Components);
@@ -263,6 +276,12 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         pub fn getComponent(self: *const Storage, entity: Entity, comptime Component: type) error{MissingComponent}!Component {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
+
+            comptime CompileReflect.verifyInnerTypesIsInSlice(
+                " is not part of storage components",
+                &component_type_array,
+                .{Component},
+            );
 
             const component_to_get = CompileReflect.compactComponentRequest(Component);
             const sparse_set: set.SparseSet(EntityId, component_to_get.type) = @field(
@@ -529,8 +548,6 @@ pub fn CreateStorage(comptime all_components: anytype) type {
     };
 }
 
-pub const QueryType = struct {};
-
 pub const CompileReflect = struct {
     pub const CompactComponentRequest = struct {
         pub const Attr = enum {
@@ -553,7 +570,7 @@ pub const CompileReflect = struct {
                 .type = ptr_info.child,
                 .attr = .ptr,
             },
-            else => @compileError(@typeName(ComponentPtrOrValueType) ++ " is not pointer, nor struct."),
+            else => @compileError(@typeName(ComponentPtrOrValueType) ++ " is not pointer, nor a struct."),
         };
     }
 
@@ -598,6 +615,54 @@ pub const CompileReflect = struct {
             .is_tuple = false,
         } };
         return @Type(group_type);
+    }
+
+    /// Produce a flat array of component types if the 'components' tuple is valid
+    fn verifyComponentTuple(comptime components: anytype) return_type_blk: {
+        const components_info = @typeInfo(@TypeOf(components));
+        if (components_info != .Struct) {
+            @compileError("components was not a tuple of types");
+        }
+
+        break :return_type_blk [components_info.Struct.fields.len]type;
+    } {
+        const components_info = @typeInfo(@TypeOf(components));
+        var field_types: [components_info.Struct.fields.len]type = undefined;
+        for (&field_types, components_info.Struct.fields, 0..) |*field_type, field, component_index| {
+            if (@typeInfo(field.type) != .Type) {
+                @compileError("components must be a struct of types, field '" ++ field.name ++ "' was " ++ @typeName(field.type));
+            }
+
+            if (@typeInfo(components[component_index]) != .Struct) {
+                @compileError("component types must be a struct, field '" ++ field.name ++ "' was '" ++ @typeName(components[component_index]));
+            }
+
+            field_type.* = components[component_index];
+        }
+
+        return field_types;
+    }
+
+    fn verifyInnerTypesIsInSlice(
+        comptime fmt_error_msg: []const u8,
+        comptime type_slice: []const type,
+        comptime type_tuple: anytype,
+    ) void {
+        const TupleUnwrapped = if (@TypeOf(type_tuple) == type) type_tuple else @TypeOf(type_tuple);
+
+        const type_tuple_info = @typeInfo(TupleUnwrapped);
+        field_loop: for (type_tuple_info.Struct.fields) |field| {
+            const FieldTypeUnwrapped = if (field.type == type) @field(type_tuple, field.name) else field.type;
+            const InnerType = compactComponentRequest(FieldTypeUnwrapped).type;
+
+            for (type_slice) |Type| {
+                if (InnerType == Type) {
+                    continue :field_loop;
+                }
+            }
+
+            @compileError(@typeName(InnerType) ++ fmt_error_msg);
+        }
     }
 };
 
