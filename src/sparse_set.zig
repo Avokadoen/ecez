@@ -4,7 +4,7 @@ const Allocator = std.mem.Allocator;
 // TODO: sparse set is not thread safe
 pub fn SparseSet(comptime SparseT: type, comptime DenseT: type) type {
     return struct {
-        const not_set = std.math.maxInt(SparseT);
+        pub const sparse_not_set = std.math.maxInt(SparseT);
 
         const Set = @This();
 
@@ -38,7 +38,7 @@ pub fn SparseSet(comptime SparseT: type, comptime DenseT: type) type {
             // Grow sparse, realloc will resize if possible internaly
             {
                 self.sparse = try allocator.realloc(self.sparse, new_len);
-                @memset(self.sparse[old_len..new_len], not_set);
+                @memset(self.sparse[old_len..new_len], sparse_not_set);
             }
         }
 
@@ -57,7 +57,7 @@ pub fn SparseSet(comptime SparseT: type, comptime DenseT: type) type {
             // Check if we have sparse already has a item
             {
                 const entry = self.sparse[sparse];
-                if (entry != not_set) {
+                if (entry != sparse_not_set) {
                     if (@sizeOf(DenseT) > 0) {
                         self.dense[entry] = item;
                     }
@@ -88,20 +88,20 @@ pub fn SparseSet(comptime SparseT: type, comptime DenseT: type) type {
         }
 
         pub inline fn isSet(self: Set, sparse: SparseT) bool {
-            return self.sparse[sparse] != not_set;
+            return self.sparse[sparse] != sparse_not_set;
         }
 
         // True if sparse was set, false otherwise
         pub fn unset(self: *Set, sparse: SparseT) bool {
             const entry = self.sparse[sparse];
-            if (entry == not_set) {
+            if (entry == sparse_not_set) {
                 return false;
             }
 
-            self.sparse[sparse] = not_set;
+            self.sparse[sparse] = sparse_not_set;
             if (@sizeOf(DenseT) > 0) {
                 for (self.sparse[sparse..]) |*sparse_entry| {
-                    if (sparse_entry.* == not_set) continue;
+                    if (sparse_entry.* == sparse_not_set) continue;
 
                     sparse_entry.* -= 1;
                 }
@@ -118,7 +118,7 @@ pub fn SparseSet(comptime SparseT: type, comptime DenseT: type) type {
 
         pub fn get(self: Set, sparse: SparseT) ?*DenseT {
             const entry = self.sparse[sparse];
-            if (entry == not_set) {
+            if (entry == sparse_not_set) {
                 return null;
             }
 
@@ -131,7 +131,7 @@ pub fn SparseSet(comptime SparseT: type, comptime DenseT: type) type {
         }
 
         pub fn clearRetainingCapacity(self: *Set) void {
-            @memset(self.sparse, not_set);
+            @memset(self.sparse, sparse_not_set);
             self.dense_len = 0;
         }
 
@@ -157,14 +157,14 @@ test "SparseSet growSparse grows set" {
     try std.testing.expect(16 <= sparse_set.sparse.len);
 
     for (sparse_set.sparse) |sparse| {
-        try std.testing.expectEqual(TestSparseSet.not_set, sparse);
+        try std.testing.expectEqual(TestSparseSet.sparse_not_set, sparse);
     }
 
     try sparse_set.growSparse(std.testing.allocator, 1024);
     try std.testing.expect(1024 <= sparse_set.sparse.len);
 
     for (sparse_set.sparse) |sparse| {
-        try std.testing.expectEqual(TestSparseSet.not_set, sparse);
+        try std.testing.expectEqual(TestSparseSet.sparse_not_set, sparse);
     }
 }
 
@@ -178,7 +178,7 @@ test "SparseSet set populates dense" {
     try std.testing.expectEqual(1, sparse_set.dense_len);
     try std.testing.expectEqual(5, sparse_set.dense[0]);
 
-    var sparse = [_]u32{TestSparseSet.not_set} ** 16;
+    var sparse = [_]u32{TestSparseSet.sparse_not_set} ** 16;
     sparse[3] = 0;
     for (sparse, sparse_set.sparse[0..16]) |expected_entry, actual_entry| {
         try std.testing.expectEqual(expected_entry, actual_entry);
@@ -217,7 +217,7 @@ test "SparseSet unset removes elements" {
     try std.testing.expect(sparse_set.unset(6));
     try std.testing.expect(sparse_set.unset(6) == false);
 
-    var sparse = [_]u32{TestSparseSet.not_set} ** 16;
+    var sparse = [_]u32{TestSparseSet.sparse_not_set} ** 16;
     sparse[3] = 0;
     sparse[15] = 1;
     for (sparse, sparse_set.sparse[0..16]) |expected_entry, actual_entry| {
@@ -298,7 +298,7 @@ test "SparseSet clearRetainingCapacity clears" {
 
     sparse_set.clearRetainingCapacity();
 
-    const sparse = [_]u32{TestSparseSet.not_set} ** 16;
+    const sparse = [_]u32{TestSparseSet.sparse_not_set} ** 16;
     for (sparse, sparse_set.sparse[0..16]) |expected_entry, actual_entry| {
         try std.testing.expectEqual(expected_entry, actual_entry);
     }
@@ -320,7 +320,7 @@ test "SparseSet with zero sized type only has sparse" {
 
     sparse_set.clearRetainingCapacity();
 
-    const sparse = [_]u32{TestSparseSet.not_set} ** 16;
+    const sparse = [_]u32{TestSparseSet.sparse_not_set} ** 16;
     for (sparse, sparse_set.sparse[0..16]) |expected_entry, actual_entry| {
         try std.testing.expectEqual(expected_entry, actual_entry);
     }

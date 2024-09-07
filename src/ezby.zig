@@ -60,7 +60,6 @@ pub fn serialize(
     storage: Storage,
     comptime comptime_config: ComptimeSerializeConfig,
 ) SerializeError![]const u8 {
-    _ = comptime_config; // autofix
     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.serializer);
     defer zone.End();
 
@@ -68,6 +67,15 @@ pub fn serialize(
         var total_size: usize = @sizeOf(Chunk.Ezby);
 
         inline for (Storage.component_type_array) |Component| {
+            const cull_component = comptime check_if_cull_needed_blk: {
+                for (comptime_config.culled_component_types) |CullComponent| {
+                    if (Component == CullComponent) {
+                        break :check_if_cull_needed_blk true;
+                    }
+                }
+                break :check_if_cull_needed_blk false;
+            };
+
             const sparse_set: set.SparseSet(EntityId, Component) = @field(
                 storage.sparse_sets,
                 @typeName(Component),
@@ -75,7 +83,10 @@ pub fn serialize(
 
             total_size += @sizeOf(Chunk.Comp);
             total_size += storage.number_of_entities * @sizeOf(EntityId);
-            total_size += sparse_set.dense_len * @sizeOf(Component);
+
+            if (cull_component == false) {
+                total_size += sparse_set.dense_len * @sizeOf(Component);
+            }
         }
 
         break :count_byte_size_blk total_size;
@@ -103,37 +114,70 @@ pub fn serialize(
         }
 
         inline for (Storage.component_type_array) |Component| {
-            const sparse_set: set.SparseSet(EntityId, Component) = storage.getSparseSetValue(Component);
+            const SparseSet = set.SparseSet(EntityId, Component);
+            const sparse_set: SparseSet = storage.getSparseSetValue(Component);
+
+            const cull_component = comptime check_if_cull_needed_blk: {
+                for (comptime_config.culled_component_types) |CullComponent| {
+                    if (Component == CullComponent) {
+                        break :check_if_cull_needed_blk true;
+                    }
+                }
+                break :check_if_cull_needed_blk false;
+            };
 
             const comp_chunk = Chunk.Comp{
-                .comp_count = @intCast(sparse_set.dense_len),
+                .comp_count = if (cull_component) 0 else @intCast(sparse_set.dense_len),
                 .type_size = @sizeOf(Component),
                 .type_alignment = @alignOf(Component),
                 .type_name_hash = hashfn(@typeName(Component)),
             };
-            @memcpy(
-                bytes[byte_cursor .. byte_cursor + @sizeOf(Chunk.Comp)],
-                mem.asBytes(&comp_chunk),
-            );
-            byte_cursor += @sizeOf(Chunk.Comp);
 
-            std.debug.assert(@sizeOf(Component) == comp_chunk.type_size);
-            if (@sizeOf(Component) > 0) {
-                const size_of_components = comp_chunk.comp_count * comp_chunk.type_size;
+            // Write base comp chunk
+            {
+                const comp_chunk_bytes = bytes[byte_cursor .. byte_cursor + @sizeOf(Chunk.Comp)];
+                byte_cursor += @sizeOf(Chunk.Comp);
                 @memcpy(
-                    bytes[byte_cursor .. byte_cursor + size_of_components],
-                    std.mem.sliceAsBytes(sparse_set.dense[0..comp_chunk.comp_count]),
+                    comp_chunk_bytes,
+                    mem.asBytes(&comp_chunk),
                 );
-                byte_cursor += size_of_components;
             }
 
-            std.debug.assert(ezby_chunk.number_of_entities <= sparse_set.sparse.len);
-            const size_of_entities = @sizeOf(EntityId) * ezby_chunk.number_of_entities;
-            @memcpy(
-                bytes[byte_cursor .. byte_cursor + size_of_entities],
-                std.mem.sliceAsBytes(sparse_set.sparse[0..ezby_chunk.number_of_entities]),
-            );
-            byte_cursor += size_of_entities;
+            // Write EntityIds
+            {
+                std.debug.assert(ezby_chunk.number_of_entities <= sparse_set.sparse.len);
+                const size_of_entities = @sizeOf(EntityId) * ezby_chunk.number_of_entities;
+                const sparse_bytes = bytes[byte_cursor .. byte_cursor + size_of_entities];
+                byte_cursor += size_of_entities;
+
+                if (cull_component) {
+                    std.debug.assert(SparseSet.sparse_not_set == std.math.maxInt(EntityId));
+                    const not_set_byte = 0b1111_1111;
+                    @memset(sparse_bytes, not_set_byte);
+                } else {
+                    @memcpy(
+                        sparse_bytes,
+                        std.mem.sliceAsBytes(sparse_set.sparse[0..ezby_chunk.number_of_entities]),
+                    );
+                }
+            }
+
+            // Write ComponentBytes
+            {
+                std.debug.assert(@sizeOf(Component) == comp_chunk.type_size);
+                if (@sizeOf(Component) > 0) {
+                    if (comp_chunk.comp_count > 0) {
+                        const size_of_components = comp_chunk.comp_count * comp_chunk.type_size;
+                        const dense_bytes = bytes[byte_cursor .. byte_cursor + size_of_components];
+                        byte_cursor += size_of_components;
+
+                        @memcpy(
+                            dense_bytes,
+                            std.mem.sliceAsBytes(sparse_set.dense[0..comp_chunk.comp_count]),
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -175,8 +219,8 @@ pub fn deserialize(
             cursor,
             ezby.number_of_entities,
             &comp,
-            &component_bytes,
             &entity_ids,
+            &component_bytes,
         );
         std.debug.assert(comp.identifier == mem.bytesToValue(u32, "COMP"));
 
@@ -222,8 +266,8 @@ pub const Chunk = struct {
         type_alignment: u32,
         type_name_hash: u64,
 
-        pub const ComponentBytes = []const u8;
         pub const EntityIds = []const EntityId;
+        pub const ComponentBytes = []const u8;
     };
 
     /// parse EZBY chunk from bytes and return remaining bytes
@@ -245,8 +289,8 @@ pub const Chunk = struct {
         bytes: []const u8,
         number_of_entities: u64,
         chunk: **const Chunk.Comp,
-        component_bytes: *Chunk.Comp.ComponentBytes,
         entity_ids: *Chunk.Comp.EntityIds,
+        component_bytes: *Chunk.Comp.ComponentBytes,
     ) []const u8 {
         const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.serializer);
         defer zone.End();
@@ -254,24 +298,32 @@ pub const Chunk = struct {
         std.debug.assert(bytes.len >= @sizeOf(Chunk.Comp));
         std.debug.assert(mem.eql(u8, bytes[0..4], "COMP"));
 
-        chunk.* = @as(
-            *const Chunk.Comp,
-            @ptrCast(@alignCast(bytes.ptr)),
-        );
+        var bytes_cursor: usize = parse_comp_chunk_blk: {
+            chunk.* = @as(
+                *const Chunk.Comp,
+                @ptrCast(@alignCast(bytes.ptr)),
+            );
+            break :parse_comp_chunk_blk @sizeOf(Chunk.Comp);
+        };
 
-        var bytes_cursor: usize = @sizeOf(Chunk.Comp);
-        const size_of_component_bytes = chunk.*.comp_count * chunk.*.type_size;
-        component_bytes.* = bytes[bytes_cursor .. bytes_cursor + size_of_component_bytes];
+        bytes_cursor += parse_entity_ids_blk: {
+            const size_of_entity_ids = @sizeOf(EntityId) * number_of_entities;
+            entity_ids.ptr = @as(
+                [*]const EntityId,
+                @ptrCast(@alignCast(bytes[bytes_cursor .. bytes_cursor + size_of_entity_ids].ptr)),
+            );
+            entity_ids.len = @intCast(number_of_entities);
 
-        bytes_cursor += size_of_component_bytes;
-        const size_of_entities = @sizeOf(EntityId) * number_of_entities;
-        entity_ids.ptr = @as(
-            [*]const EntityId,
-            @ptrCast(@alignCast(bytes[bytes_cursor .. bytes_cursor + size_of_entities].ptr)),
-        );
-        entity_ids.len = @intCast(number_of_entities);
+            break :parse_entity_ids_blk size_of_entity_ids;
+        };
 
-        bytes_cursor += size_of_entities;
+        bytes_cursor += parse_component_bytes_blk: {
+            const size_of_component_bytes = chunk.*.comp_count * chunk.*.type_size;
+            component_bytes.* = bytes[bytes_cursor .. bytes_cursor + size_of_component_bytes];
+
+            break :parse_component_bytes_blk size_of_component_bytes;
+        };
+
         return bytes[bytes_cursor..];
     }
 };
@@ -350,14 +402,14 @@ test "Chunk.parseComp" {
 
     inline for (Testing.AllComponentsArr) |Component| {
         var comp: *Chunk.Comp = undefined;
-        var component_bytes: Chunk.Comp.ComponentBytes = undefined;
         var entity_ids: Chunk.Comp.EntityIds = undefined;
+        var component_bytes: Chunk.Comp.ComponentBytes = undefined;
         cursor = Chunk.parseComp(
             cursor,
             ezby.number_of_entities,
             &comp,
-            &component_bytes,
             &entity_ids,
+            &component_bytes,
         );
 
         try testing.expectEqual(Chunk.Comp{
@@ -369,7 +421,7 @@ test "Chunk.parseComp" {
     }
 }
 
-test "serialize and deserializeAssumeSameStorageLayout is idempotent" {
+test "serialize and deserialized is idempotent" {
     var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
@@ -409,10 +461,20 @@ test "serialize and deserializeAssumeSameStorageLayout is idempotent" {
         entity.* = try storage.createEntity(.{ a.*, b.*, abc_cs });
     }
 
-    const bytes = try serialize(testing.allocator, StorageStub, storage, .{});
+    const bytes = try serialize(
+        testing.allocator,
+        StorageStub,
+        storage,
+        .{},
+    );
     defer testing.allocator.free(bytes);
 
-    try deserialize(testing.allocator, StorageStub, &storage, bytes);
+    try deserialize(
+        testing.allocator,
+        StorageStub,
+        &storage,
+        bytes,
+    );
 
     for (a_as, a_entities) |a, a_entity| {
         try testing.expectEqual(a, (try storage.getComponents(a_entity, Testing.Structure.A)).a);
@@ -442,6 +504,246 @@ test "serialize and deserializeAssumeSameStorageLayout is idempotent" {
     }
 }
 
+test "serialize with culled_component_types config can be deserialized by other storage type" {
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
+
+    const test_data_count = 128;
+
+    var a_as: [test_data_count]Testing.Component.A = undefined;
+    var a_entities: [test_data_count]Entity = undefined;
+    for (&a_as, &a_entities, 0..) |*a, *entity, index| {
+        a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
+        entity.* = try storage.createEntity(.{a.*});
+    }
+
+    var ab_as: [test_data_count]Testing.Component.A = undefined;
+    var ab_bs: [test_data_count]Testing.Component.B = undefined;
+    var ab_entities: [test_data_count]Entity = undefined;
+    for (&ab_as, &ab_bs, &ab_entities, 0..) |*a, *b, *entity, index| {
+        a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
+        b.* = Testing.Component.B{ .value = @as(u8, @intCast(index)) };
+        entity.* = try storage.createEntity(.{ a.*, b.* });
+    }
+
+    var ac_as: [test_data_count]Testing.Component.A = undefined;
+    const ac_cs: Testing.Component.C = .{};
+    var ac_entities: [test_data_count]Entity = undefined;
+    for (&ac_as, &ac_entities, 0..) |*a, *entity, index| {
+        a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
+        entity.* = try storage.createEntity(.{ a.*, ac_cs });
+    }
+
+    var abc_as: [test_data_count]Testing.Component.A = undefined;
+    var abc_bs: [test_data_count]Testing.Component.B = undefined;
+    const abc_cs: Testing.Component.C = .{};
+    var abc_entities: [test_data_count]Entity = undefined;
+    for (&abc_as, &abc_bs, &abc_entities, 0..) |*a, *b, *entity, index| {
+        a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
+        b.* = Testing.Component.B{ .value = @as(u8, @intCast(index)) };
+        entity.* = try storage.createEntity(.{ a.*, b.*, abc_cs });
+    }
+
+    // Cull A
+    {
+        var bc_storage = try StorageStub.init(std.testing.allocator);
+        defer bc_storage.deinit();
+
+        const bytes = try serialize(
+            testing.allocator,
+            StorageStub,
+            storage,
+            .{
+                .culled_component_types = &[_]type{Testing.Component.A},
+            },
+        );
+        defer testing.allocator.free(bytes);
+
+        try deserialize(
+            testing.allocator,
+            StorageStub,
+            &bc_storage,
+            bytes,
+        );
+
+        for (a_entities) |a_entity| {
+            try testing.expectError(error.MissingComponent, bc_storage.getComponents(a_entity, Testing.Structure.A));
+            try testing.expectError(error.MissingComponent, bc_storage.getComponents(a_entity, Testing.Structure.B));
+            try testing.expectError(error.MissingComponent, bc_storage.getComponents(a_entity, Testing.Structure.C));
+        }
+
+        for (ab_bs, ab_entities) |ab_b, ab_entity| {
+            const b = try bc_storage.getComponents(ab_entity, Testing.Structure.B);
+            try testing.expectError(error.MissingComponent, bc_storage.getComponents(ab_entity, Testing.Structure.A));
+            try testing.expectEqual(ab_b, b.b);
+            try testing.expectError(error.MissingComponent, bc_storage.getComponents(ab_entity, Testing.Structure.C));
+        }
+
+        for (ac_entities) |ac_entity| {
+            const c = try bc_storage.getComponents(ac_entity, Testing.Structure.C);
+            try testing.expectError(error.MissingComponent, bc_storage.getComponents(ac_entity, Testing.Structure.A));
+            try testing.expectError(error.MissingComponent, bc_storage.getComponents(ac_entity, Testing.Structure.B));
+            try testing.expectEqual(ac_cs, c.c);
+        }
+
+        for (abc_bs, abc_entities) |abc_b, abc_entity| {
+            const bc = try bc_storage.getComponents(abc_entity, Testing.Structure.BC);
+            try testing.expectError(error.MissingComponent, bc_storage.getComponents(abc_entity, Testing.Structure.A));
+            try testing.expectEqual(abc_b, bc.b);
+            try testing.expectEqual(ac_cs, bc.c);
+        }
+    }
+
+    // Cull B
+    {
+        var ac_storage = try StorageStub.init(std.testing.allocator);
+        defer ac_storage.deinit();
+
+        const bytes = try serialize(
+            testing.allocator,
+            StorageStub,
+            storage,
+            .{
+                .culled_component_types = &[_]type{Testing.Component.B},
+            },
+        );
+        defer testing.allocator.free(bytes);
+
+        try deserialize(
+            testing.allocator,
+            StorageStub,
+            &ac_storage,
+            bytes,
+        );
+
+        for (a_as, a_entities) |a, a_entity| {
+            try testing.expectEqual(a, (try ac_storage.getComponents(a_entity, Testing.Structure.A)).a);
+            try testing.expectError(error.MissingComponent, ac_storage.getComponents(a_entity, Testing.Structure.B));
+            try testing.expectError(error.MissingComponent, ac_storage.getComponents(a_entity, Testing.Structure.C));
+        }
+
+        for (ab_as, ab_entities) |ab_a, ab_entity| {
+            const ab = try ac_storage.getComponents(ab_entity, Testing.Structure.A);
+            try testing.expectEqual(ab_a, ab.a);
+            try testing.expectError(error.MissingComponent, ac_storage.getComponents(ab_entity, Testing.Structure.B));
+            try testing.expectError(error.MissingComponent, ac_storage.getComponents(ab_entity, Testing.Structure.C));
+        }
+
+        for (ac_as, ac_entities) |ac_a, ac_entity| {
+            const ac = try ac_storage.getComponents(ac_entity, Testing.Structure.AC);
+            try testing.expectEqual(ac_a, ac.a);
+            try testing.expectError(error.MissingComponent, ac_storage.getComponents(ac_entity, Testing.Structure.B));
+            try testing.expectEqual(ac_cs, ac.c);
+        }
+
+        for (abc_as, abc_entities) |abc_a, abc_entity| {
+            const ac = try ac_storage.getComponents(abc_entity, Testing.Structure.AC);
+            try testing.expectEqual(abc_a, ac.a);
+            try testing.expectError(error.MissingComponent, ac_storage.getComponents(abc_entity, Testing.Structure.B));
+            try testing.expectEqual(ac_cs, ac.c);
+        }
+    }
+
+    // Cull C
+    {
+        var ab_storage = try StorageStub.init(std.testing.allocator);
+        defer ab_storage.deinit();
+
+        const bytes = try serialize(
+            testing.allocator,
+            StorageStub,
+            storage,
+            .{
+                .culled_component_types = &[_]type{Testing.Component.C},
+            },
+        );
+        defer testing.allocator.free(bytes);
+
+        try deserialize(
+            testing.allocator,
+            StorageStub,
+            &ab_storage,
+            bytes,
+        );
+
+        for (a_as, a_entities) |a, a_entity| {
+            try testing.expectEqual(a, (try ab_storage.getComponents(a_entity, Testing.Structure.A)).a);
+            try testing.expectError(error.MissingComponent, ab_storage.getComponents(a_entity, Testing.Structure.B));
+            try testing.expectError(error.MissingComponent, ab_storage.getComponents(a_entity, Testing.Structure.C));
+        }
+
+        for (ab_as, ab_bs, ab_entities) |ab_a, ab_b, ab_entity| {
+            const ab = try ab_storage.getComponents(ab_entity, Testing.Structure.AB);
+            try testing.expectEqual(ab_a, ab.a);
+            try testing.expectEqual(ab_b, ab.b);
+            try testing.expectError(error.MissingComponent, ab_storage.getComponents(ab_entity, Testing.Structure.C));
+        }
+
+        for (ac_as, ac_entities) |ac_a, ac_entity| {
+            const ac = try ab_storage.getComponents(ac_entity, Testing.Structure.A);
+            try testing.expectEqual(ac_a, ac.a);
+            try testing.expectError(error.MissingComponent, ab_storage.getComponents(ac_entity, Testing.Structure.B));
+            try testing.expectError(error.MissingComponent, ab_storage.getComponents(ac_entity, Testing.Structure.C));
+        }
+
+        for (abc_as, abc_bs, abc_entities) |abc_a, abc_b, abc_entity| {
+            const abc = try ab_storage.getComponents(abc_entity, Testing.Structure.AB);
+            try testing.expectEqual(abc_a, abc.a);
+            try testing.expectEqual(abc_b, abc.b);
+            try testing.expectError(error.MissingComponent, ab_storage.getComponents(abc_entity, Testing.Structure.C));
+        }
+    }
+
+    // Cull AC
+    {
+        var b_storage = try StorageStub.init(std.testing.allocator);
+        defer b_storage.deinit();
+
+        const bytes = try serialize(
+            testing.allocator,
+            StorageStub,
+            storage,
+            .{
+                .culled_component_types = &[_]type{ Testing.Component.A, Testing.Component.C },
+            },
+        );
+        defer testing.allocator.free(bytes);
+
+        try deserialize(
+            testing.allocator,
+            StorageStub,
+            &b_storage,
+            bytes,
+        );
+
+        for (a_entities) |a_entity| {
+            try testing.expectError(error.MissingComponent, b_storage.getComponents(a_entity, Testing.Structure.A));
+            try testing.expectError(error.MissingComponent, b_storage.getComponents(a_entity, Testing.Structure.B));
+            try testing.expectError(error.MissingComponent, b_storage.getComponents(a_entity, Testing.Structure.C));
+        }
+
+        for (ab_bs, ab_entities) |ab_b, ab_entity| {
+            const b = try b_storage.getComponents(ab_entity, Testing.Structure.B);
+            try testing.expectError(error.MissingComponent, b_storage.getComponents(ab_entity, Testing.Structure.A));
+            try testing.expectEqual(ab_b, b.b);
+            try testing.expectError(error.MissingComponent, b_storage.getComponents(ab_entity, Testing.Structure.C));
+        }
+
+        for (ac_entities) |ac_entity| {
+            try testing.expectError(error.MissingComponent, b_storage.getComponents(ac_entity, Testing.Structure.A));
+            try testing.expectError(error.MissingComponent, b_storage.getComponents(ac_entity, Testing.Structure.B));
+            try testing.expectError(error.MissingComponent, b_storage.getComponents(ac_entity, Testing.Structure.C));
+        }
+
+        for (abc_bs, abc_entities) |abc_b, abc_entity| {
+            const b = try b_storage.getComponents(abc_entity, Testing.Structure.B);
+            try testing.expectError(error.MissingComponent, b_storage.getComponents(abc_entity, Testing.Structure.A));
+            try testing.expectEqual(abc_b, b.b);
+            try testing.expectError(error.MissingComponent, b_storage.getComponents(abc_entity, Testing.Structure.C));
+        }
+    }
+}
+
 // test "serialize with culled_component_types config can be deserialized by other storage type" {
 //     var storage = try StorageStub.init(std.testing.allocator);
 //     defer storage.deinit();
@@ -449,7 +751,6 @@ test "serialize and deserializeAssumeSameStorageLayout is idempotent" {
 //     const test_data_count = 128;
 //     var a_as: [test_data_count]Testing.Component.A = undefined;
 //     var a_entities: [test_data_count]Entity = undefined;
-
 //     for (&a_as, &a_entities, 0..) |*a, *entity, index| {
 //         a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
 //         entity.* = try storage.createEntity(Testing.Archetype.A{ .a = a.* });
