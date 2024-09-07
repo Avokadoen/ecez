@@ -189,7 +189,6 @@ pub fn serialize(
 ///
 /// In the event of error, the storage will be empty
 pub fn deserialize(
-    storage_allocator: Allocator,
     comptime Storage: type,
     storage: *Storage,
     ezby_bytes: []const u8,
@@ -235,13 +234,13 @@ pub fn deserialize(
                 sparse_set.dense_len = comp.comp_count;
 
                 // Set sparse
-                try sparse_set.growSparse(storage_allocator, ezby.number_of_entities);
+                try sparse_set.growSparse(storage.allocator, ezby.number_of_entities);
                 @memcpy(sparse_set.sparse[0..entity_ids.len], entity_ids);
 
                 if (@sizeOf(Component) > 0) {
                     const component_data = std.mem.bytesAsSlice(Component, component_bytes);
                     // set dense
-                    try sparse_set.growDense(storage_allocator, comp.comp_count);
+                    try sparse_set.growDense(storage.allocator, comp.comp_count);
                     @memcpy(sparse_set.dense[0..component_data.len], component_data);
                 }
             }
@@ -470,7 +469,6 @@ test "serialize and deserialized is idempotent" {
     defer testing.allocator.free(bytes);
 
     try deserialize(
-        testing.allocator,
         StorageStub,
         &storage,
         bytes,
@@ -560,7 +558,6 @@ test "serialize with culled_component_types config can be deserialized by other 
         defer testing.allocator.free(bytes);
 
         try deserialize(
-            testing.allocator,
             StorageStub,
             &bc_storage,
             bytes,
@@ -610,7 +607,6 @@ test "serialize with culled_component_types config can be deserialized by other 
         defer testing.allocator.free(bytes);
 
         try deserialize(
-            testing.allocator,
             StorageStub,
             &ac_storage,
             bytes,
@@ -660,7 +656,6 @@ test "serialize with culled_component_types config can be deserialized by other 
         defer testing.allocator.free(bytes);
 
         try deserialize(
-            testing.allocator,
             StorageStub,
             &ab_storage,
             bytes,
@@ -710,7 +705,6 @@ test "serialize with culled_component_types config can be deserialized by other 
         defer testing.allocator.free(bytes);
 
         try deserialize(
-            testing.allocator,
             StorageStub,
             &b_storage,
             bytes,
