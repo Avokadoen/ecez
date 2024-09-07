@@ -341,7 +341,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     @compileError("unimplemented for now");
                 }
 
-                pub fn setComponents(self: *ThisStorageSubset, entity: Entity, struct_of_components: anytype) error{OutOfMemory}!void {
+                pub fn setComponents(self: *const ThisStorageSubset, entity: Entity, struct_of_components: anytype) error{OutOfMemory}!void {
                     comptime CompileReflect.verifyInnerTypesIsInSlice(
                         " is not part of " ++ simplifiedTypeName(),
                         &component_subset_arr,
@@ -351,7 +351,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     return self.storage.setComponents(entity, struct_of_components);
                 }
 
-                pub fn unsetComponents(self: *ThisStorageSubset, entity: Entity, comptime struct_of_remove_components: anytype) error{OutOfMemory}!void {
+                pub fn unsetComponents(self: *const ThisStorageSubset, entity: Entity, comptime struct_of_remove_components: anytype) error{OutOfMemory}!void {
                     comptime CompileReflect.verifyInnerTypesIsInSlice(
                         " is not part of " ++ simplifiedTypeName(),
                         &component_subset_arr,
@@ -361,7 +361,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     return self.storage.unsetComponents(entity, struct_of_remove_components);
                 }
 
-                pub fn hasComponents(self: ThisStorageSubset, entity: Entity, comptime components: anytype) bool {
+                pub fn hasComponents(self: *const ThisStorageSubset, entity: Entity, comptime components: anytype) bool {
                     comptime CompileReflect.verifyInnerTypesIsInSlice(
                         " is not part of " ++ simplifiedTypeName(),
                         &component_subset_arr,
