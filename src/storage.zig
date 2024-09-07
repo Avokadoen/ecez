@@ -493,16 +493,16 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                         current_min_value = std.math.maxInt(usize);
 
                         inline for (incl_component_indices) |component_index| {
-                            var skip: bool = false;
+                            var skip_component: bool = false;
                             // Skip indices we already stored
                             already_included_loop: for (search_order[0..search_index]) |prev_found| {
                                 if (prev_found == component_index) {
-                                    skip = true;
+                                    skip_component = true;
                                     continue :already_included_loop;
                                 }
                             }
 
-                            if (skip == false) {
+                            if (skip_component == false) {
                                 const Component = all_components[component_index];
                                 const sparse_set: set.SparseSet(EntityId, Component) = @field(
                                     storage.sparse_sets,
@@ -516,16 +516,16 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                         }
 
                         inline for (excl_component_indices) |component_index| {
-                            var skip: bool = false;
+                            var skip_component: bool = false;
                             // Skip indices we already stored
                             already_included_loop: for (search_order[0..search_index]) |prev_found| {
                                 if (prev_found == component_index) {
-                                    skip = true;
+                                    skip_component = true;
                                     continue :already_included_loop;
                                 }
                             }
 
-                            if (skip == false) {
+                            if (skip_component == false) {
                                 const Component = all_components[component_index];
                                 const sparse_set: set.SparseSet(EntityId, Component) = @field(
                                     storage.sparse_sets,
@@ -608,6 +608,43 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                     self.sparse_cursors += 1;
                     return result;
+                }
+
+                pub fn skip(self: *ThisQuery, skip_count: u32) void {
+                    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
+                    defer zone.End();
+
+                    // TODO: this is horrible for cache, we should find the next N entities instead
+                    // Find next entity
+                    for (0..skip_count) |_| {
+                        search_next_loop: while (true) {
+                            if (self.sparse_cursors >= self.storage_entity_count_ptr.*) {
+                                return;
+                            }
+
+                            // Check that entry has all include components
+                            const include_components = query_components[0..incl_component_indices.len];
+                            inline for (include_components) |IncludeComponent| {
+                                if (@field(self.sparse_sets, @typeName(IncludeComponent)).isSet(self.sparse_cursors) == false) {
+                                    self.sparse_cursors += 1;
+                                    continue :search_next_loop;
+                                }
+                            }
+
+                            // Check that entry does not have any exclude components
+                            const exclude_components = query_components[incl_component_indices.len .. incl_component_indices.len + excl_component_indices.len];
+                            inline for (exclude_components) |ExcludeComponent| {
+                                if (@field(self.sparse_sets, @typeName(ExcludeComponent)).isSet(self.sparse_cursors) == true) {
+                                    self.sparse_cursors += 1;
+                                    continue :search_next_loop;
+                                }
+                            }
+
+                            break :search_next_loop; // sparse_cursor is a valid entity!
+                        }
+
+                        self.sparse_cursors = @min(self.sparse_cursors + 1, self.storage_entity_count_ptr.*);
+                    }
                 }
             };
         }
@@ -1263,6 +1300,36 @@ test "query with single include type works" {
             struct { a: Testing.Component.A },
             .{},
         ).submit(&storage);
+
+        while (a_iter.next()) |item| {
+            try std.testing.expectEqual(Testing.Component.A{
+                .value = @as(u32, @intCast(index)),
+            }, item.a);
+
+            index += 1;
+        }
+    }
+}
+
+test "query skip works" {
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
+
+    for (0..100) |index| {
+        _ = try storage.createEntity(AbEntityType{
+            .a = .{ .value = @as(u32, @intCast(index)) },
+            .b = .{ .value = @as(u8, @intCast(index)) },
+        });
+    }
+
+    {
+        var a_iter = StorageStub.Query(
+            struct { a: Testing.Component.A },
+            .{},
+        ).submit(&storage);
+
+        var index: usize = 50;
+        a_iter.skip(50);
 
         while (a_iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
