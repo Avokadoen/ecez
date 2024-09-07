@@ -234,6 +234,10 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
             var result: Components = undefined;
             const field_info = @typeInfo(Components);
+            if (field_info != .Struct) {
+                @compileError(@src().fn_name ++ " expect Components type arg to be a struct of components");
+            }
+
             inline for (field_info.Struct.fields) |field| {
                 const component_to_get = CompileReflect.compactComponentRequest(field.type);
 
@@ -250,6 +254,27 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             }
 
             return result;
+        }
+
+        /// Fetch an entity's component data
+        /// Parameters:
+        ///     - entity:    the entity to retrieve Component from
+        ///     - Components: a struct type where fields are compoents that that belong to entity
+        pub fn getComponent(self: *const Storage, entity: Entity, comptime Component: type) error{MissingComponent}!Component {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
+            defer zone.End();
+
+            const component_to_get = CompileReflect.compactComponentRequest(Component);
+            const sparse_set: set.SparseSet(EntityId, component_to_get.type) = @field(
+                self.sparse_sets,
+                @typeName(component_to_get.type),
+            );
+
+            const get_ptr = sparse_set.get(entity.id) orelse return error.MissingComponent;
+            switch (component_to_get.attr) {
+                .ptr => return get_ptr,
+                .value => return get_ptr.*,
+            }
         }
 
         /// Query components which can be iterated upon.
@@ -779,53 +804,164 @@ test "hasComponents() identify missing and present components" {
     try testing.expectEqual(true, storage.hasComponents(entity, .{ Testing.Component.A, Testing.Component.C }));
 }
 
-test "getComponents() retrieve component value" {
+test "getComponents() retrieve component values" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var initial_state = AEntityType{
-        .a = Testing.Component.A{ .value = 0 },
-    };
-    _ = try storage.createEntity(initial_state);
+    {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 0 },
+            .b = Testing.Component.B{ .value = 0 },
+        };
+        _ = try storage.createEntity(initial_state);
+    }
 
-    initial_state.a = Testing.Component.A{ .value = 1 };
-    _ = try storage.createEntity(initial_state);
+    {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 1 },
+            .b = Testing.Component.B{ .value = 1 },
+        };
+        _ = try storage.createEntity(initial_state);
+    }
 
-    initial_state.a = Testing.Component.A{ .value = 2 };
-    _ = try storage.createEntity(initial_state);
+    {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 2 },
+            .b = Testing.Component.B{ .value = 2 },
+        };
+        _ = try storage.createEntity(initial_state);
+    }
 
-    const entity_initial_state = AEntityType{
+    const entity_initial_state = AbEntityType{
         .a = Testing.Component.A{ .value = 123 },
+        .b = Testing.Component.B{ .value = 123 },
     };
     const entity = try storage.createEntity(entity_initial_state);
 
-    initial_state.a = Testing.Component.A{ .value = 3 };
-    _ = try storage.createEntity(initial_state);
-    initial_state.a = Testing.Component.A{ .value = 4 };
-    _ = try storage.createEntity(initial_state);
+    {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 3 },
+            .b = Testing.Component.B{ .value = 3 },
+        };
+        _ = try storage.createEntity(initial_state);
+    }
 
-    try testing.expectEqual(entity_initial_state, try storage.getComponents(entity, AEntityType));
+    {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 4 },
+            .b = Testing.Component.B{ .value = 4 },
+        };
+        _ = try storage.createEntity(initial_state);
+    }
+
+    try testing.expectEqual(entity_initial_state, try storage.getComponents(entity, AbEntityType));
 }
 
 test "getComponents() can mutate component value with ptr" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const initial_state = AEntityType{
+    const initial_state = AbEntityType{
         .a = Testing.Component.A{ .value = 0 },
+        .b = Testing.Component.B{ .value = 0 },
     };
     const entity = try storage.createEntity(initial_state);
 
-    const MutableA = struct { a: *Testing.Component.A };
-    const a_ptr = try storage.getComponents(entity, MutableA);
-    try testing.expectEqual(initial_state.a, a_ptr.a.*);
+    const MutableAB = struct { a: *Testing.Component.A, b: *Testing.Component.B };
+    const ab_ptr = try storage.getComponents(entity, MutableAB);
+    try testing.expectEqual(initial_state.a, ab_ptr.a.*);
+    try testing.expectEqual(initial_state.b, ab_ptr.b.*);
 
     const new_a_value = Testing.Component.A{ .value = 42 };
+    const new_b_value = Testing.Component.B{ .value = 99 };
 
     // mutate a value ptr
-    a_ptr.a.* = new_a_value;
+    ab_ptr.a.* = new_a_value;
+    ab_ptr.b.* = new_b_value;
 
-    try testing.expectEqual(new_a_value, (try storage.getComponents(entity, MutableA)).a.*);
+    const stored_components = try storage.getComponents(entity, AbEntityType);
+    try testing.expectEqual(new_a_value, stored_components.a);
+    try testing.expectEqual(new_b_value, stored_components.b);
+}
+
+test "getComponent() retrieve component values" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 0 },
+            .b = Testing.Component.B{ .value = 0 },
+        };
+        _ = try storage.createEntity(initial_state);
+    }
+
+    {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 1 },
+            .b = Testing.Component.B{ .value = 1 },
+        };
+        _ = try storage.createEntity(initial_state);
+    }
+
+    {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 2 },
+            .b = Testing.Component.B{ .value = 2 },
+        };
+        _ = try storage.createEntity(initial_state);
+    }
+
+    const entity_initial_state = AbEntityType{
+        .a = Testing.Component.A{ .value = 123 },
+        .b = Testing.Component.B{ .value = 123 },
+    };
+    const entity = try storage.createEntity(entity_initial_state);
+
+    {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 3 },
+            .b = Testing.Component.B{ .value = 3 },
+        };
+        _ = try storage.createEntity(initial_state);
+    }
+
+    {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 4 },
+            .b = Testing.Component.B{ .value = 4 },
+        };
+        _ = try storage.createEntity(initial_state);
+    }
+
+    try testing.expectEqual(entity_initial_state.a, try storage.getComponent(entity, Testing.Component.A));
+    try testing.expectEqual(entity_initial_state.b, try storage.getComponent(entity, Testing.Component.B));
+}
+
+test "getComponent() can mutate component value with ptr" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    const initial_state = AbEntityType{
+        .a = Testing.Component.A{ .value = 0 },
+        .b = Testing.Component.B{ .value = 0 },
+    };
+    const entity = try storage.createEntity(initial_state);
+
+    const MutableAB = struct { a: *Testing.Component.A, b: *Testing.Component.B };
+    const ab_ptr = try storage.getComponents(entity, MutableAB);
+    try testing.expectEqual(initial_state.a, ab_ptr.a.*);
+    try testing.expectEqual(initial_state.b, ab_ptr.b.*);
+
+    const new_a_value = Testing.Component.A{ .value = 42 };
+    const new_b_value = Testing.Component.B{ .value = 99 };
+
+    // mutate a value ptr
+    ab_ptr.a.* = new_a_value;
+    ab_ptr.b.* = new_b_value;
+
+    try testing.expectEqual(new_a_value, try storage.getComponent(entity, Testing.Component.A));
+    try testing.expectEqual(new_b_value, try storage.getComponent(entity, Testing.Component.B));
 }
 
 test "clearRetainingCapacity() allow storage reuse" {
