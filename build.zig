@@ -79,7 +79,7 @@ pub fn build(b: *std.Build) void {
     };
 
     inline for ([_]Example{
-        // .{ .name = "game-of-life" },
+        .{ .name = "game-of-life" },
     }) |example| {
         const path = b.path("examples/" ++ example.name ++ "/main.zig");
         const exe = b.addExecutable(.{

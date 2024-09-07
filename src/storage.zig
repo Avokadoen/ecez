@@ -646,6 +646,10 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                         self.sparse_cursors = @min(self.sparse_cursors + 1, self.storage_entity_count_ptr.*);
                     }
                 }
+
+                pub fn reset(self: *ThisQuery) void {
+                    self.sparse_cursors = 0;
+                }
             };
         }
 
@@ -1331,6 +1335,44 @@ test "query skip works" {
         var index: usize = 50;
         a_iter.skip(50);
 
+        while (a_iter.next()) |item| {
+            try std.testing.expectEqual(Testing.Component.A{
+                .value = @as(u32, @intCast(index)),
+            }, item.a);
+
+            index += 1;
+        }
+    }
+}
+
+test "query reset works" {
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
+
+    for (0..100) |index| {
+        _ = try storage.createEntity(AbEntityType{
+            .a = .{ .value = @as(u32, @intCast(index)) },
+            .b = .{ .value = @as(u8, @intCast(index)) },
+        });
+    }
+
+    {
+        var a_iter = StorageStub.Query(
+            struct { a: Testing.Component.A },
+            .{},
+        ).submit(&storage);
+
+        var index: usize = 0;
+        while (a_iter.next()) |item| {
+            try std.testing.expectEqual(Testing.Component.A{
+                .value = @as(u32, @intCast(index)),
+            }, item.a);
+
+            index += 1;
+        }
+
+        a_iter.reset();
+        index = 0;
         while (a_iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
                 .value = @as(u32, @intCast(index)),
