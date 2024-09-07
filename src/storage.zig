@@ -296,12 +296,108 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             }
         }
 
-        /// Query components which can be iterated upon.
+        /// Create a SubStorage api. Allows calling createEntity, (un)setComponents, getComponent(s), hasComponents
+        /// using types registered in fn SubStorage arg 'components'.
+        ///
         /// Parameters:
+        ///
+        ///     - component_subset: All components that may be edited by this storage subset
+        ///
+        /// This is used by the scheduler to track systems that does storage edits and to allow
+        /// narrow synchronization. In other words, this lets the scheduler see which components
+        /// need to be accounted for in a system when present as a system argument. The scheduler
+        /// assumes all components has write access
+        pub fn StorageSubset(comptime component_subset: anytype) type {
+
+            // Check if tuple is valid and get array of types instead if valid
+            const comp_arr = CompileReflect.verifyComponentTuple(component_subset);
+
+            // Check that each component type is part of the storage
+            comptime CompileReflect.verifyInnerTypesIsInSlice(
+                " is not a storage component",
+                &component_type_array,
+                component_subset,
+            );
+
+            return struct {
+                pub const EcezType = StorageSubsetType;
+                pub const component_subset_arr = comp_arr;
+
+                pub const ThisStorageSubset = @This();
+
+                storage: *Storage,
+
+                pub fn createEntity(self: *ThisStorageSubset, entity_state: anytype) error{OutOfMemory}!Entity {
+                    _ = self; // autofix
+                    _ = entity_state; // autofix
+                    @compileError("unimplemented for now");
+
+                    // TODO: Queue entity creation, entity counter must be atomic
+                    // Components are added during this function call, without the actual entity/sparse entry
+                }
+
+                fn flushEntities(self: *ThisStorageSubset) error{OutOfMemory}!void {
+                    _ = self; // autofix
+                    @compileError("unimplemented for now");
+                }
+
+                pub fn setComponents(self: *ThisStorageSubset, entity: Entity, struct_of_components: anytype) error{OutOfMemory}!void {
+                    comptime CompileReflect.verifyInnerTypesIsInSlice(
+                        " is not part of " ++ simplifiedTypeName(),
+                        &component_subset_arr,
+                        @TypeOf(struct_of_components),
+                    );
+
+                    return self.storage.setComponents(entity, struct_of_components);
+                }
+
+                pub fn unsetComponents(self: *ThisStorageSubset, entity: Entity, comptime struct_of_remove_components: anytype) error{OutOfMemory}!void {
+                    comptime CompileReflect.verifyInnerTypesIsInSlice(
+                        " is not part of " ++ simplifiedTypeName(),
+                        &component_subset_arr,
+                        struct_of_remove_components,
+                    );
+
+                    return self.storage.unsetComponents(entity, struct_of_remove_components);
+                }
+
+                pub fn hasComponents(self: ThisStorageSubset, entity: Entity, comptime components: anytype) bool {
+                    comptime CompileReflect.verifyInnerTypesIsInSlice(
+                        " is not part of " ++ simplifiedTypeName(),
+                        &component_subset_arr,
+                        components,
+                    );
+
+                    return self.storage.hasComponents(entity, components);
+                }
+
+                pub fn getComponents(self: *const ThisStorageSubset, entity: Entity, comptime Components: type) error{MissingComponent}!Components {
+                    comptime CompileReflect.verifyInnerTypesIsInSlice(
+                        " is not part of " ++ simplifiedTypeName(),
+                        &component_subset_arr,
+                        Components,
+                    );
+
+                    return self.storage.getComponents(entity, Components);
+                }
+
+                fn simplifiedTypeName() [:0]const u8 {
+                    const type_name = @typeName(ThisStorageSubset);
+                    const start_index = std.mem.indexOf(u8, type_name, "StorageSubset").?;
+                    return type_name[start_index..];
+                }
+            };
+        }
+
+        /// Query components which can be iterated upon.
+        ///
+        /// Parameters:
+        ///
         ///     - ResultItem:    All the components you would like to iterate over in a single struct.
         ///                      Each component in the struct will belong to the same entity.
         ///                      A field does not have to be a component if it is of type Entity and it's the first
         ///                      field.
+        ///
         ///     - exclude_types: All the components that should be excluded from the query result
         ///
         /// Example:
@@ -1067,6 +1163,87 @@ test "clearRetainingCapacity() allow storage reuse" {
     try testing.expectEqual(first_entity, entity);
     const entity_a = try storage.getComponents(entity, AEntityType);
     try testing.expectEqual(entity_initial_state.a, entity_a.a);
+}
+
+test "StorageSubset createEntity" {
+    // TODO
+}
+
+test "StorageSubset setComponents() can reassign multiple components" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    const Subset = StorageStub.StorageSubset(.{ Testing.Component.A, Testing.Component.B });
+    var storage_subset = Subset{
+        .storage = &storage,
+    };
+
+    const initial_state = AbEntityType{
+        .a = Testing.Component.A{ .value = 0 },
+        .b = Testing.Component.B{ .value = 0 },
+    };
+    const entity = try storage.createEntity(initial_state);
+
+    const new_a = Testing.Component.A{ .value = 1 };
+    const new_b = Testing.Component.B{ .value = 2 };
+    try storage_subset.setComponents(entity, Testing.Structure.AB{
+        .a = new_a,
+        .b = new_b,
+    });
+
+    const stored = try storage_subset.getComponents(entity, AbEntityType);
+    try testing.expectEqual(new_a, stored.a);
+    try testing.expectEqual(new_b, stored.b);
+}
+
+test "StorageSubset setComponents() can add new components to entity" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    const Subset = StorageStub.StorageSubset(.{ Testing.Component.A, Testing.Component.B });
+    var storage_subset = Subset{
+        .storage = &storage,
+    };
+
+    const entity = try storage.createEntity(.{});
+
+    const new_a = Testing.Component.A{ .value = 1 };
+    const new_b = Testing.Component.B{ .value = 2 };
+    try storage_subset.setComponents(entity, Testing.Structure.AB{
+        .a = new_a,
+        .b = new_b,
+    });
+
+    const stored = try storage.getComponents(entity, AbEntityType);
+    try testing.expectEqual(new_a, stored.a);
+    try testing.expectEqual(new_b, stored.b);
+}
+
+test "StorageSubset unsetComponents() removes the component as expected" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    const Subset = StorageStub.StorageSubset(.{ Testing.Component.A, Testing.Component.B });
+    var storage_subset = Subset{
+        .storage = &storage,
+    };
+
+    const initial_state = BcEntityType{
+        .b = Testing.Component.B{},
+        .c = Testing.Component.C{},
+    };
+    const entity = try storage.createEntity(initial_state);
+
+    try storage.setComponents(entity, .{Testing.Component.A{}});
+    try testing.expectEqual(true, storage.hasComponents(entity, .{Testing.Component.A}));
+
+    try storage_subset.unsetComponents(entity, .{Testing.Component.A});
+    try testing.expectEqual(false, storage_subset.hasComponents(entity, .{Testing.Component.A}));
+
+    try testing.expectEqual(true, storage_subset.hasComponents(entity, .{Testing.Component.B}));
+
+    try storage_subset.unsetComponents(entity, .{Testing.Component.B});
+    try testing.expectEqual(false, storage_subset.hasComponents(entity, .{Testing.Component.B}));
 }
 
 test "query with single include type works" {
