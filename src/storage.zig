@@ -172,11 +172,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             }
         }
 
-        /// Remove components owned by entity
+        /// Unset components owned by entity
         /// Parameters:
         ///     - entity:    the entity being mutated
         ///     - components: the components to remove in a tuple/struct
-        pub fn removeComponents(self: *Storage, entity: Entity, comptime struct_of_remove_components: anytype) error{OutOfMemory}!void {
+        pub fn unsetComponents(self: *Storage, entity: Entity, comptime struct_of_remove_components: anytype) error{OutOfMemory}!void {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
@@ -713,7 +713,7 @@ test "setComponents() can add new components to entity" {
     try testing.expectEqual(new_b, stored.b);
 }
 
-test "removeComponents() removes the component as expected" {
+test "unsetComponents() removes the component as expected" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
@@ -726,16 +726,16 @@ test "removeComponents() removes the component as expected" {
     try storage.setComponents(entity, .{Testing.Component.A{}});
     try testing.expectEqual(true, storage.hasComponents(entity, .{Testing.Component.A}));
 
-    try storage.removeComponents(entity, .{Testing.Component.A});
+    try storage.unsetComponents(entity, .{Testing.Component.A});
     try testing.expectEqual(false, storage.hasComponents(entity, .{Testing.Component.A}));
 
     try testing.expectEqual(true, storage.hasComponents(entity, .{Testing.Component.B}));
 
-    try storage.removeComponents(entity, .{Testing.Component.B});
+    try storage.unsetComponents(entity, .{Testing.Component.B});
     try testing.expectEqual(false, storage.hasComponents(entity, .{Testing.Component.B}));
 }
 
-test "removeComponents() removes all components from entity" {
+test "unsetComponents() removes all components from entity" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
@@ -744,18 +744,18 @@ test "removeComponents() removes all components from entity" {
     };
     const entity = try storage.createEntity(initial_state);
 
-    try storage.removeComponents(entity, .{Testing.Component.A});
+    try storage.unsetComponents(entity, .{Testing.Component.A});
     try testing.expectEqual(false, storage.hasComponents(entity, .{Testing.Component.A}));
 }
 
-test "removeComponents() removes multiple components" {
+test "unsetComponents() removes multiple components" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
     const initial_state = Testing.Structure.ABC{};
     const entity = try storage.createEntity(initial_state);
 
-    try storage.removeComponents(entity, .{ Testing.Component.A, Testing.Component.C });
+    try storage.unsetComponents(entity, .{ Testing.Component.A, Testing.Component.C });
 
     try testing.expectEqual(false, storage.hasComponents(entity, .{Testing.Component.A}));
     try testing.expectEqual(true, storage.hasComponents(entity, .{Testing.Component.B}));
@@ -1312,7 +1312,7 @@ test "reproducer: Removing component cause storage to become in invalid state" {
         try testing.expectEqual(instance_handle, actual_state.instance_handle);
     }
 
-    _ = try storage.removeComponents(entity, .{Position});
+    _ = try storage.unsetComponents(entity, .{Position});
 
     {
         const SceneObjectNoPos = struct {
