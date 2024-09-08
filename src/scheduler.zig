@@ -7,7 +7,7 @@ const ResetEvent = std.Thread.ResetEvent;
 
 const QueryType = @import("storage.zig").QueryType;
 const StorageType = @import("storage.zig").StorageType;
-const StorageSubsetType = @import("storage.zig").StorageSubsetType;
+const SubsetType = @import("storage.zig").SubsetType;
 
 const gen_dependency_chain = @import("dependency_chain.zig");
 
@@ -233,13 +233,13 @@ pub fn CreateScheduler(comptime events: anytype) type {
 
                             const param_info = @typeInfo(Param);
                             if (param_info != .Pointer) {
-                                @compileError("System query and substorage arguments must be pointer type");
+                                @compileError("System Query and Subset arguments must be pointer type");
                             }
 
                             break :get_arg_blk switch (param_info.Pointer.child.EcezType) {
                                 QueryType => param_info.Pointer.child.submit(self_job.storage),
-                                StorageSubsetType => param_info.Pointer.child{ .storage = self_job.storage },
-                                else => |Type| @compileError("Unknown EcezType " ++ @typeName(Type)),
+                                SubsetType => param_info.Pointer.child{ .storage = self_job.storage },
+                                else => |Type| @compileError("Unknown EcezType " ++ @typeName(Type)), // This is a ecez bug if hit (i.e not user error)
                             };
                         };
 
@@ -493,12 +493,117 @@ test "system query can mutate components" {
     );
 }
 
+test "system SubStorage can spawn new entites (and no race hazards)" {
+    const Queries = struct {
+        pub const ReadB = StorageStub.Query(struct {
+            b: Testing.Component.B,
+        }, .{});
+
+        pub const WriteB = StorageStub.Query(struct {
+            b: *Testing.Component.B,
+        }, .{});
+
+        pub const WriteA = StorageStub.Query(struct {
+            a: *Testing.Component.A,
+        }, .{});
+    };
+
+    const SubsetA = StorageStub.Subset(.{Testing.Component.A});
+
+    const initial_entity_count = 128;
+    // This would probably be better as data stored in components instead of EventArgument
+    const SpawnedEntities = struct {
+        entities: [initial_entity_count]Entity,
+    };
+
+    const SystemStruct = struct {
+        pub fn incrB(b_query: *Queries.WriteB) void {
+            while (b_query.next()) |item| {
+                item.b.value += 1;
+            }
+        }
+
+        pub fn decrB(b_query: *Queries.WriteB) void {
+            while (b_query.next()) |item| {
+                item.b.value -= 1;
+            }
+        }
+
+        pub fn incrA(a_query: *Queries.WriteA) void {
+            while (a_query.next()) |item| {
+                item.a.value += 1;
+            }
+        }
+
+        pub fn decrA(a_query: *Queries.WriteA) void {
+            while (a_query.next()) |item| {
+                item.a.value -= 1;
+            }
+        }
+
+        pub fn spawnEntityAFromB(b_query: *Queries.ReadB, a_sub: *SubsetA, spawned_entities: *SpawnedEntities) void {
+            for (&spawned_entities.entities) |*entity| {
+                const item = b_query.next().?;
+
+                entity.* = a_sub.createEntity(.{
+                    Testing.Component.A{ .value = item.b.value },
+                }) catch @panic("OOM");
+            }
+        }
+    };
+
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    var scheduler = try CreateScheduler(.{Event(
+        "onFoo",
+        .{
+            SystemStruct.incrB,
+            SystemStruct.decrB,
+            SystemStruct.spawnEntityAFromB,
+            SystemStruct.incrA,
+            SystemStruct.decrA,
+        },
+    )}).init(std.testing.allocator, .{});
+    defer scheduler.deinit();
+
+    // Do this test repeatedlt to ensure it's determenistic (no race hazards)
+    for (0..128) |_| {
+        storage.clearRetainingCapacity();
+
+        var initial_entites: [initial_entity_count]Entity = undefined;
+        for (&initial_entites, 0..) |*entity, iter| {
+            entity.* = try storage.createEntity(.{
+                Testing.Component.B{ .value = @intCast(iter) },
+            });
+        }
+
+        var spawned_entites: SpawnedEntities = undefined;
+        scheduler.dispatchEvent(&storage, .onFoo, &spawned_entites);
+        scheduler.waitEvent(.onFoo);
+
+        for (&initial_entites, 0..) |entity, iter| {
+            try testing.expectEqual(
+                Testing.Component.B{ .value = @intCast(iter) },
+                (try storage.getComponents(entity, BEntityType)).b,
+            );
+        }
+
+        for (spawned_entites.entities, 0..) |entity, iter| {
+            try testing.expectEqual(
+                Testing.Component.A{ .value = @intCast(iter) },
+                (try storage.getComponents(entity, AEntityType)).a,
+            );
+        }
+    }
+}
+
 test "system sub storage can mutate components" {
     const Query = StorageStub.Query(struct {
         entity: Entity,
     }, .{});
 
-    const SubStorage = StorageStub.StorageSubset(.{
+    const SubStorage = StorageStub.Subset(.{
         Testing.Component.A,
         Testing.Component.B,
     });
@@ -551,7 +656,7 @@ test "Dispatch is determenistic (no race conditions)" {
         }, .{});
     };
 
-    const AbSubStorage = StorageStub.StorageSubset(.{ Testing.Component.A, Testing.Component.B });
+    const AbSubStorage = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B });
 
     const SystemStruct = struct {
         pub fn incrA(q: *Queries.MutA) void {

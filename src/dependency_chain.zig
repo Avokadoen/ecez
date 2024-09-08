@@ -1,7 +1,7 @@
 const std = @import("std");
 const storage = @import("storage.zig");
 const QueryType = storage.QueryType;
-const StorageSubsetType = storage.StorageSubsetType;
+const SubsetType = storage.SubsetType;
 
 const Access = struct {
     const Right = enum(u2) {
@@ -59,7 +59,7 @@ pub fn buildDependencyList(
                 access_params_len += 1;
                 switch (TypeParam.EcezType) {
                     QueryType => access_count += TypeParam._include_fields.len,
-                    StorageSubsetType => access_count += TypeParam.component_subset_arr.len,
+                    SubsetType => access_count += TypeParam.component_subset_arr.len,
                     else => |Type| @compileError("Unknown system argume type " ++ @typeName(Type)),
                 }
                 if (TypeParam.EcezType == QueryType) {}
@@ -82,7 +82,7 @@ pub fn buildDependencyList(
                                 access_index += 1;
                             }
                         },
-                        StorageSubsetType => {
+                        SubsetType => {
                             for (TypeParam.component_subset_arr) |Component| {
                                 access[access_index] = Access{
                                     .type = Component,
@@ -264,11 +264,11 @@ test buildDependencyList {
     };
 
     const SubStorages = struct {
-        const A = StorageStub.StorageSubset(.{Testing.Component.A});
-        const B = StorageStub.StorageSubset(.{Testing.Component.B});
-        const C = StorageStub.StorageSubset(.{Testing.Component.C});
-        const AB = StorageStub.StorageSubset(.{ Testing.Component.A, Testing.Component.B });
-        const ABC = StorageStub.StorageSubset(.{ Testing.Component.A, Testing.Component.B, Testing.Component.C });
+        const A = StorageStub.Subset(.{Testing.Component.A});
+        const B = StorageStub.Subset(.{Testing.Component.B});
+        const C = StorageStub.Subset(.{Testing.Component.C});
+        const AB = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B });
+        const ABC = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B, Testing.Component.C });
     };
 
     const SingleQuerySystems = struct {

@@ -88,11 +88,19 @@ pub fn SparseSet(comptime SparseT: type, comptime DenseT: type) type {
         }
 
         pub inline fn isSet(self: Set, sparse: SparseT) bool {
+            if (self.sparse.len <= sparse) {
+                return false;
+            }
+
             return self.sparse[sparse] != sparse_not_set;
         }
 
         // True if sparse was set, false otherwise
         pub fn unset(self: *Set, sparse: SparseT) bool {
+            if (self.sparse.len <= sparse) {
+                return false;
+            }
+
             const entry = self.sparse[sparse];
             if (entry == sparse_not_set) {
                 return false;

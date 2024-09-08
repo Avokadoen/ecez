@@ -12,7 +12,7 @@ const Entity = entity_type.Entity;
 const EntityId = entity_type.EntityId;
 
 pub const StorageType = struct {};
-pub const StorageSubsetType = struct {};
+pub const SubsetType = struct {};
 pub const QueryType = struct {};
 
 pub fn CreateStorage(comptime all_components: anytype) type {
@@ -99,19 +99,15 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 }
             }
 
-            inline for (all_components) |Component| {
-                const sparse_set: *set.SparseSet(EntityId, Component) = &@field(
-                    self.sparse_sets,
-                    @typeName(Component),
-                );
-                try sparse_set.growSparse(self.allocator, this_id + 1);
-            }
-
             inline for (field_info.Struct.fields) |field| {
                 var sparse_set: *set.SparseSet(EntityId, field.type) = &@field(
                     self.sparse_sets,
                     @typeName(field.type),
                 );
+
+                // Ensure that the sparse set has a slot for this entity
+                try sparse_set.growSparse(self.allocator, this_id + 1);
+
                 const component = @field(
                     entity_state,
                     field.name,
@@ -152,6 +148,9 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     self.sparse_sets,
                     @typeName(field.type),
                 );
+
+                // Ensure that the sparse set has a slot for this entity
+                try sparse_set.growSparse(self.allocator, entity.id + 1);
 
                 const component = @field(
                     struct_of_components,
@@ -305,7 +304,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         /// narrow synchronization. In other words, this lets the scheduler see which components
         /// need to be accounted for in a system when present as a system argument. The scheduler
         /// assumes all components has write access
-        pub fn StorageSubset(comptime component_subset: anytype) type {
+        pub fn Subset(comptime component_subset: anytype) type {
 
             // Check if tuple is valid and get array of types instead if valid
             const comp_arr = CompileReflect.verifyComponentTuple(component_subset);
@@ -318,28 +317,24 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             );
 
             return struct {
-                pub const EcezType = StorageSubsetType;
+                pub const EcezType = SubsetType;
                 pub const component_subset_arr = comp_arr;
 
-                pub const ThisStorageSubset = @This();
+                pub const ThisSubset = @This();
 
                 storage: *Storage,
 
-                pub fn createEntity(self: *ThisStorageSubset, entity_state: anytype) error{OutOfMemory}!Entity {
-                    _ = self; // autofix
-                    _ = entity_state; // autofix
-                    @compileError("unimplemented for now");
+                pub fn createEntity(self: *ThisSubset, entity_state: anytype) error{OutOfMemory}!Entity {
+                    comptime CompileReflect.verifyInnerTypesIsInSlice(
+                        " is not part of " ++ simplifiedTypeName(),
+                        &component_subset_arr,
+                        @TypeOf(entity_state),
+                    );
 
-                    // TODO: Queue entity creation, entity counter must be atomic
-                    // Components are added during this function call, without the actual entity/sparse entry
+                    return self.storage.createEntity(entity_state);
                 }
 
-                fn flushEntities(self: *ThisStorageSubset) error{OutOfMemory}!void {
-                    _ = self; // autofix
-                    @compileError("unimplemented for now");
-                }
-
-                pub fn setComponents(self: *const ThisStorageSubset, entity: Entity, struct_of_components: anytype) error{OutOfMemory}!void {
+                pub fn setComponents(self: *const ThisSubset, entity: Entity, struct_of_components: anytype) error{OutOfMemory}!void {
                     comptime CompileReflect.verifyInnerTypesIsInSlice(
                         " is not part of " ++ simplifiedTypeName(),
                         &component_subset_arr,
@@ -349,7 +344,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     return self.storage.setComponents(entity, struct_of_components);
                 }
 
-                pub fn unsetComponents(self: *const ThisStorageSubset, entity: Entity, comptime struct_of_remove_components: anytype) error{OutOfMemory}!void {
+                pub fn unsetComponents(self: *const ThisSubset, entity: Entity, comptime struct_of_remove_components: anytype) error{OutOfMemory}!void {
                     comptime CompileReflect.verifyInnerTypesIsInSlice(
                         " is not part of " ++ simplifiedTypeName(),
                         &component_subset_arr,
@@ -359,7 +354,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     return self.storage.unsetComponents(entity, struct_of_remove_components);
                 }
 
-                pub fn hasComponents(self: *const ThisStorageSubset, entity: Entity, comptime components: anytype) bool {
+                pub fn hasComponents(self: *const ThisSubset, entity: Entity, comptime components: anytype) bool {
                     comptime CompileReflect.verifyInnerTypesIsInSlice(
                         " is not part of " ++ simplifiedTypeName(),
                         &component_subset_arr,
@@ -369,7 +364,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     return self.storage.hasComponents(entity, components);
                 }
 
-                pub fn getComponents(self: *const ThisStorageSubset, entity: Entity, comptime Components: type) error{MissingComponent}!Components {
+                pub fn getComponents(self: *const ThisSubset, entity: Entity, comptime Components: type) error{MissingComponent}!Components {
                     comptime CompileReflect.verifyInnerTypesIsInSlice(
                         " is not part of " ++ simplifiedTypeName(),
                         &component_subset_arr,
@@ -380,8 +375,8 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 }
 
                 fn simplifiedTypeName() [:0]const u8 {
-                    const type_name = @typeName(ThisStorageSubset);
-                    const start_index = std.mem.indexOf(u8, type_name, "StorageSubset").?;
+                    const type_name = @typeName(ThisSubset);
+                    const start_index = std.mem.indexOf(u8, type_name, "Subset").?;
                     return type_name[start_index..];
                 }
             };
@@ -1204,15 +1199,31 @@ test "clearRetainingCapacity() allow storage reuse" {
     try testing.expectEqual(entity_initial_state.a, entity_a.a);
 }
 
-test "StorageSubset createEntity" {
-    // TODO
-}
-
-test "StorageSubset setComponents() can reassign multiple components" {
+test "Subset createEntity" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const Subset = StorageStub.StorageSubset(.{ Testing.Component.A, Testing.Component.B });
+    const Subset = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B });
+    var storage_subset = Subset{
+        .storage = &storage,
+    };
+
+    const initial_state = AbEntityType{
+        .a = Testing.Component.A{ .value = 42 },
+        .b = Testing.Component.B{ .value = 42 },
+    };
+    const entity = try storage_subset.createEntity(initial_state);
+
+    const stored = try storage_subset.getComponents(entity, AbEntityType);
+    try testing.expectEqual(initial_state.a, stored.a);
+    try testing.expectEqual(initial_state.b, stored.b);
+}
+
+test "Subset setComponents() can reassign multiple components" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    const Subset = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B });
     var storage_subset = Subset{
         .storage = &storage,
     };
@@ -1235,11 +1246,11 @@ test "StorageSubset setComponents() can reassign multiple components" {
     try testing.expectEqual(new_b, stored.b);
 }
 
-test "StorageSubset setComponents() can add new components to entity" {
+test "Subset setComponents() can add new components to entity" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const Subset = StorageStub.StorageSubset(.{ Testing.Component.A, Testing.Component.B });
+    const Subset = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B });
     var storage_subset = Subset{
         .storage = &storage,
     };
@@ -1258,11 +1269,11 @@ test "StorageSubset setComponents() can add new components to entity" {
     try testing.expectEqual(new_b, stored.b);
 }
 
-test "StorageSubset unsetComponents() removes the component as expected" {
+test "Subset unsetComponents() removes the component as expected" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const Subset = StorageStub.StorageSubset(.{ Testing.Component.A, Testing.Component.B });
+    const Subset = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B });
     var storage_subset = Subset{
         .storage = &storage,
     };
