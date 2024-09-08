@@ -63,6 +63,7 @@ pub fn serialize(
     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.serializer);
     defer zone.End();
 
+    const number_of_entities = storage.number_of_entities.load(.unordered);
     const total_byte_size = count_byte_size_blk: {
         var total_size: usize = @sizeOf(Chunk.Ezby);
 
@@ -82,7 +83,7 @@ pub fn serialize(
             );
 
             total_size += @sizeOf(Chunk.Comp);
-            total_size += storage.number_of_entities * @sizeOf(EntityId);
+            total_size += number_of_entities * @sizeOf(EntityId);
 
             if (cull_component == false) {
                 total_size += sparse_set.dense_len * @sizeOf(Component);
@@ -103,7 +104,7 @@ pub fn serialize(
         const ezby_chunk = Chunk.Ezby{
             .version_major = version_major,
             .version_minor = version_minor,
-            .number_of_entities = storage.number_of_entities,
+            .number_of_entities = number_of_entities,
         };
         {
             @memcpy(
@@ -208,7 +209,7 @@ pub fn deserialize(
         return error.VersionMismatch;
     }
 
-    storage.number_of_entities = @intCast(ezby.number_of_entities);
+    storage.number_of_entities.store(@intCast(ezby.number_of_entities), .seq_cst);
 
     while (cursor.len != 0) {
         var comp: *Chunk.Comp = undefined;

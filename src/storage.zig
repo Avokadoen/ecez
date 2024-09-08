@@ -28,7 +28,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
         allocator: Allocator,
         sparse_sets: GroupSparseSets = .{},
-        number_of_entities: EntityId = 0,
+        number_of_entities: std.atomic.Value(EntityId) = .{ .raw = 0 },
 
         /// intialize the storage structure
         /// Parameters:
@@ -68,7 +68,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 sparse_set.clearRetainingCapacity();
             }
 
-            self.number_of_entities = 0;
+            self.number_of_entities.store(0, .seq_cst);
         }
 
         /// Create an entity and returns the entity handle
@@ -85,28 +85,26 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             );
 
             const field_info = @typeInfo(@TypeOf(entity_state));
+            const this_id = self.number_of_entities.fetchAdd(1, .acq_rel);
 
             errdefer {
-                self.number_of_entities -= 1;
+                // TODO: subtract here is racy, find a proper way if reclaiming entity as this is technically a minor leak
+                // self.number_of_entities.fetchSub(.AcquireRelease);
                 inline for (field_info.Struct.fields) |field| {
                     var sparse_set: *set.SparseSet(EntityId, field.type) = &@field(
                         self.sparse_sets,
                         @typeName(field.type),
                     );
-                    _ = sparse_set.unset(self.number_of_entities);
+                    _ = sparse_set.unset(this_id);
                 }
             }
-
-            const this_id = self.number_of_entities;
-            const next_id = self.number_of_entities + 1;
-            defer self.number_of_entities = next_id;
 
             inline for (all_components) |Component| {
                 const sparse_set: *set.SparseSet(EntityId, Component) = &@field(
                     self.sparse_sets,
                     @typeName(Component),
                 );
-                try sparse_set.growSparse(self.allocator, next_id);
+                try sparse_set.growSparse(self.allocator, this_id + 1);
             }
 
             inline for (field_info.Struct.fields) |field| {
@@ -479,7 +477,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                 // TODO: this is horrible for cache, we should find the next N entities instead
                 sparse_cursors: EntityId,
-                storage_entity_count_ptr: *const EntityId,
+                storage_entity_count_ptr: *const std.atomic.Value(EntityId),
 
                 search_order: [component_include_count + exclude_fields.len]usize,
                 sparse_sets: CompileReflect.GroupSparseSetsPtr(&query_components),
@@ -532,7 +530,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                                     @typeName(Component),
                                 );
 
-                                const inverse_value = storage.number_of_entities - sparse_set.dense_len;
+                                const inverse_value = storage.number_of_entities.load(.monotonic) - sparse_set.dense_len;
                                 if (inverse_value <= current_min_value and inverse_value >= last_min_value) {
                                     current_index = component_index;
                                 }
@@ -563,7 +561,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     // TODO: this is horrible for cache, we should find the next N entities instead
                     // Find next entity
                     search_next_loop: while (true) {
-                        if (self.sparse_cursors >= self.storage_entity_count_ptr.*) {
+                        if (self.sparse_cursors >= self.storage_entity_count_ptr.load(.monotonic)) {
                             return null;
                         }
 
@@ -618,7 +616,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     // Find next entity
                     for (0..skip_count) |_| {
                         search_next_loop: while (true) {
-                            if (self.sparse_cursors >= self.storage_entity_count_ptr.*) {
+                            if (self.sparse_cursors >= self.storage_entity_count_ptr.load(.monotonic)) {
                                 return;
                             }
 
@@ -643,7 +641,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                             break :search_next_loop; // sparse_cursor is a valid entity!
                         }
 
-                        self.sparse_cursors = @min(self.sparse_cursors + 1, self.storage_entity_count_ptr.*);
+                        self.sparse_cursors = @min(self.sparse_cursors + 1, self.storage_entity_count_ptr.load(.monotonic));
                     }
                 }
 
