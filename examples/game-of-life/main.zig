@@ -30,20 +30,26 @@ const Components = struct {
     pub const LinePos = struct {
         nth: u8,
     };
-    pub const FlushTag = struct {};
+
+    const RenderTarget = struct {
+        output_buffer: []u8,
+    };
+};
+
+// Event argument
+const GridConfig = struct {
+    dimension_x: usize,
+    dimension_y: usize,
+    cell_count: usize,
 };
 
 const Storage = ecez.CreateStorage(.{
     Components.GridPos,
     Components.Health,
     Components.LinePos,
-    Components.FlushTag,
+    Components.RenderTarget,
 });
 
-const EventArg = struct {
-    render_target: *RenderTarget,
-    grid_config: GridConfig,
-};
 const Scheduler = ecez.CreateScheduler(.{ecez.Event("loop", .{
     renderCellSystem,
     renderLineSystem,
@@ -53,6 +59,13 @@ const Scheduler = ecez.CreateScheduler(.{ecez.Event("loop", .{
     flushBufferSystem,
     updateCellSystem,
 })});
+
+const RenderTargetView = Storage.Subset(.{Components.RenderTarget}, .read_and_write);
+
+const EventArgument = struct {
+    grid_config: GridConfig,
+    render_entity: ecez.Entity,
+};
 
 pub fn main() anyerror!void {
     ztracy.SetThreadName("main thread");
@@ -68,11 +81,6 @@ pub fn main() anyerror!void {
     // optionally profile memory usage with tracy
     const allocator = tracy_allocator.allocator();
 
-    // initialize the output buffer on the stack
-    var output_buffer: [dimension_x * dimension_y * characters_per_cell + dimension_y]u8 = undefined;
-    var render_target = RenderTarget{
-        .output_buffer = &output_buffer,
-    };
     const grid_config = GridConfig{
         .dimension_x = dimension_x,
         .dimension_y = dimension_y,
@@ -87,6 +95,12 @@ pub fn main() anyerror!void {
 
     const init_seed: u64 = @intCast(std.time.timestamp());
     var rng = std.rand.DefaultPrng.init(init_seed);
+
+    // initialize the output buffer on the stack
+    var output_buffer: [dimension_x * dimension_y * characters_per_cell + dimension_y]u8 = undefined;
+    const render_entity = try storage.createEntity(.{Components.RenderTarget{
+        .output_buffer = &output_buffer,
+    }});
 
     // create all cells
     {
@@ -120,34 +134,19 @@ pub fn main() anyerror!void {
         }
     }
 
-    // create flush entity
-    _ = try storage.createEntity(.{ .tag = Components.FlushTag{} });
-
-    var event_arg = EventArg{
-        .render_target = &render_target,
-        .grid_config = grid_config,
-    };
-
     while (true) {
         defer ztracy.FrameMark();
 
         // schedule a new update cycle
-        scheduler.dispatchEvent(&storage, .loop, &event_arg);
+        scheduler.dispatchEvent(&storage, .loop, EventArgument{
+            .grid_config = grid_config,
+            .render_entity = render_entity,
+        });
 
         // wait for previous update and render
         scheduler.waitEvent(.loop);
     }
 }
-
-// Shared state
-const RenderTarget = struct {
-    output_buffer: []u8,
-};
-pub const GridConfig = struct {
-    dimension_x: usize,
-    dimension_y: usize,
-    cell_count: usize,
-};
 
 const RenderCellQuery = Storage.Query(
     struct {
@@ -158,11 +157,13 @@ const RenderCellQuery = Storage.Query(
 );
 pub fn renderCellSystem(
     query: *RenderCellQuery,
-    event_arg: *EventArg,
+    render_view: *RenderTargetView,
+    event_arg: EventArgument,
 ) void {
     const zone = ztracy.ZoneNC(@src(), "Render Cell", Color.red);
     defer zone.End();
 
+    const render = render_view.getComponent(event_arg.render_entity, *Components.RenderTarget) catch unreachable;
     while (query.next()) |cell| {
         const cell_x: usize = @intCast(cell.pos.x);
         const cell_y: usize = @intCast(cell.pos.y);
@@ -174,12 +175,12 @@ pub fn renderCellSystem(
         if (alive) {
             const output = "[X]";
             inline for (output, 0..) |o, i| {
-                event_arg.render_target.output_buffer[start + i] = o;
+                render.output_buffer[start + i] = o;
             }
         } else {
             const output = "[ ]";
             inline for (output, 0..) |o, i| {
-                event_arg.render_target.output_buffer[start + i] = o;
+                render.output_buffer[start + i] = o;
             }
         }
     }
@@ -191,15 +192,20 @@ const LinePosQuery = Storage.Query(
     },
     .{},
 );
-pub fn renderLineSystem(query: *LinePosQuery, event_arg: *EventArg) void {
+pub fn renderLineSystem(
+    query: *LinePosQuery,
+    render_view: *RenderTargetView,
+    event_arg: EventArgument,
+) void {
     const zone = ztracy.ZoneNC(@src(), "Render newline", Color.turquoise);
     defer zone.End();
 
+    const render = render_view.getComponent(event_arg.render_entity, *Components.RenderTarget) catch unreachable;
     while (query.next()) |line| {
         const nth: usize = @intCast(line.pos.nth);
 
         const new_line_index = nth * event_arg.grid_config.dimension_x * characters_per_cell + nth - 1;
-        event_arg.render_target.output_buffer[new_line_index] = '\n';
+        render.output_buffer[new_line_index] = '\n';
     }
 }
 
@@ -220,37 +226,15 @@ pub fn busyWorkSystem(query: *GridPosQuery) void {
     }
 }
 
-// flushBufferSystem must wait for systems using RenderCellQuery and LinePosQuery
-const WaitOnRenderCellQuery = Storage.Query(
-    struct {
-        pos: *Components.GridPos,
-        health: *Components.Health,
-    },
-    .{},
-);
-const WaitOnLinePosQuery = Storage.Query(
-    struct {
-        line_pos: *Components.LinePos,
-    },
-    .{},
-);
-const FlushQuery = Storage.Query(
-    struct { flush: Components.FlushTag },
-    .{},
-);
 pub fn flushBufferSystem(
-    query: *FlushQuery,
-    _: *WaitOnRenderCellQuery,
-    _: *WaitOnLinePosQuery,
-    event_arg: *EventArg,
+    render_view: *RenderTargetView,
+    event_arg: EventArgument,
 ) void {
     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.turquoise);
     defer zone.End();
 
-    while (query.next()) |flush| {
-        _ = flush;
-        std.log.info("\n{s}\n\n", .{event_arg.render_target.output_buffer});
-    }
+    const render = render_view.getComponent(event_arg.render_entity, *Components.RenderTarget) catch unreachable;
+    std.log.info("\n{s}\n\n", .{render.output_buffer});
 }
 
 const PosHealthQuery = Storage.Query(
@@ -267,7 +251,7 @@ const HealthQuery = Storage.Query(
 pub fn updateCellSystem(
     pos_health_query: *PosHealthQuery,
     health_query: *HealthQuery,
-    event_arg: *EventArg,
+    event_arg: EventArgument,
 ) void {
     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.turquoise);
     defer zone.End();
@@ -352,11 +336,6 @@ pub fn updateCellSystem(
 }
 
 test "systems produce expected 3x3 grid state" {
-    var output_buffer: [3 * 3 * characters_per_cell + 3]u8 = undefined;
-    // initialize the output buffer on the stack
-    var render_target = RenderTarget{
-        .output_buffer = &output_buffer,
-    };
     const grid_config = GridConfig{
         .dimension_x = 3,
         .dimension_y = 3,
@@ -369,11 +348,16 @@ test "systems produce expected 3x3 grid state" {
     var scheduler = try Scheduler.init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
+    var output_buffer: [3 * 3 * characters_per_cell + 3]u8 = undefined;
+    const render_entity = try storage.createEntity(.{Components.RenderTarget{
+        .output_buffer = &output_buffer,
+    }});
+
     var cell_entities: [3 * 3]ecez.Entity = undefined;
 
-    var event_arg = EventArg{
-        .render_target = &render_target,
+    const event_arg = EventArgument{
         .grid_config = grid_config,
+        .render_entity = render_entity,
     };
 
     { // Still life: Block
@@ -394,7 +378,7 @@ test "systems produce expected 3x3 grid state" {
             });
         }
 
-        scheduler.dispatchEvent(&storage, .loop, &event_arg);
+        scheduler.dispatchEvent(&storage, .loop, event_arg);
         scheduler.waitEvent(.loop);
 
         for ([_]bool{
@@ -432,7 +416,7 @@ test "systems produce expected 3x3 grid state" {
             ) catch unreachable;
         }
 
-        scheduler.dispatchEvent(&storage, .loop, &event_arg);
+        scheduler.dispatchEvent(&storage, .loop, event_arg);
         scheduler.waitEvent(.loop);
 
         for (&cell_entities, state_2) |entity, alive| {
@@ -440,7 +424,7 @@ test "systems produce expected 3x3 grid state" {
             try std.testing.expectEqual(alive, cell.h.alive[0]);
         }
 
-        scheduler.dispatchEvent(&storage, .loop, &event_arg);
+        scheduler.dispatchEvent(&storage, .loop, event_arg);
         scheduler.waitEvent(.loop);
 
         for (&cell_entities, state_1) |entity, alive| {

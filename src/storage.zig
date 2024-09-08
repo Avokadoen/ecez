@@ -404,6 +404,26 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     return self.storage.getComponents(entity, Components);
                 }
 
+                pub fn getComponent(self: *const ThisSubset, entity: Entity, comptime Component: type) error{MissingComponent}!Component {
+                    comptime {
+                        // If this is a read only storage, then we must make sure there is no pointers in Components
+                        if (access == .read_only) {
+                            const components_info = @typeInfo(Component);
+                            if (components_info.Pointer) {
+                                @compileError("Accessing component pointers is illegal in a read only sub storage");
+                            }
+                        }
+
+                        CompileReflect.verifyInnerTypesIsInSlice(
+                            " is not part of " ++ simplifiedTypeName(),
+                            &component_subset_arr,
+                            .{Component},
+                        );
+                    }
+
+                    return self.storage.getComponent(entity, Component);
+                }
+
                 fn simplifiedTypeName() [:0]const u8 {
                     const type_name = @typeName(ThisSubset);
                     const start_index = std.mem.indexOf(u8, type_name, "Subset").?;
