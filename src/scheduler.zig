@@ -512,8 +512,8 @@ test "system SubStorage can spawn new entites (and no race hazards)" {
         }, .{});
     };
 
-    const SubsetA = StorageStub.Subset(.{Testing.Component.A});
-    const SubsetB = StorageStub.Subset(.{Testing.Component.B});
+    const SubsetA = StorageStub.Subset(.{Testing.Component.A}, .read_and_write);
+    const SubsetB = StorageStub.Subset(.{Testing.Component.B}, .read_and_write);
 
     const initial_entity_count = 128;
     // This would probably be better as data stored in components instead of EventArgument
@@ -636,7 +636,7 @@ test "system sub storage can mutate components" {
     const SubStorage = StorageStub.Subset(.{
         Testing.Component.A,
         Testing.Component.B,
-    });
+    }, .read_and_write);
 
     const SystemStruct = struct {
         pub fn mutateStuff(entities: *Query, ab: *SubStorage) void {
@@ -686,7 +686,7 @@ test "Dispatch is determenistic (no race conditions)" {
         }, .{});
     };
 
-    const AbSubStorage = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B });
+    const AbSubStorage = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B }, .read_and_write);
 
     const SystemStruct = struct {
         pub fn incrA(q: *Queries.MutA) void {

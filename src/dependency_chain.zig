@@ -83,10 +83,13 @@ pub fn buildDependencyList(
                             }
                         },
                         SubsetType => {
+                            // if storage subset is specified as read_and_write, then we must assume all access as write, read otherwise
+                            const right = if (TypeParam.track_access == .read_and_write) .write else .read;
+
                             for (TypeParam.component_subset_arr) |Component| {
                                 access[access_index] = Access{
                                     .type = Component,
-                                    .right = .write,
+                                    .right = right,
                                 };
                                 access_index += 1;
                             }
@@ -264,11 +267,17 @@ test buildDependencyList {
     };
 
     const SubStorages = struct {
-        const A = StorageStub.Subset(.{Testing.Component.A});
-        const B = StorageStub.Subset(.{Testing.Component.B});
-        const C = StorageStub.Subset(.{Testing.Component.C});
-        const AB = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B });
-        const ABC = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B, Testing.Component.C });
+        const WriteA = StorageStub.Subset(.{Testing.Component.A}, .read_and_write);
+
+        const WriteB = StorageStub.Subset(.{Testing.Component.B}, .read_and_write);
+
+        const WriteC = StorageStub.Subset(.{Testing.Component.C}, .read_and_write);
+
+        const WriteAB = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B }, .read_and_write);
+
+        const WriteABC = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B, Testing.Component.C }, .read_and_write);
+
+        const ReadABC = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B, Testing.Component.C }, .read_only);
     };
 
     const SingleQuerySystems = struct {
@@ -329,19 +338,22 @@ test buildDependencyList {
     };
 
     const SingleSubStorageSystems = struct {
-        pub fn writeA(a: *SubStorages.A) void {
+        pub fn writeA(a: *SubStorages.WriteA) void {
             _ = a;
         }
-        pub fn writeB(b: *SubStorages.B) void {
+        pub fn writeB(b: *SubStorages.WriteB) void {
             _ = b;
         }
-        pub fn writeC(c: *SubStorages.C) void {
+        pub fn writeC(c: *SubStorages.WriteC) void {
             _ = c;
         }
-        pub fn writeAWriteB(ab: *SubStorages.AB) void {
+        pub fn writeAWriteB(ab: *SubStorages.WriteAB) void {
             _ = ab;
         }
-        pub fn writeAWriteBWriteC(abc: *SubStorages.ABC) void {
+        pub fn writeAWriteBWriteC(abc: *SubStorages.WriteABC) void {
+            _ = abc;
+        }
+        pub fn readAReadBReadC(abc: *SubStorages.ReadABC) void {
             _ = abc;
         }
     };
@@ -1019,6 +1031,40 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{ 5, 3 } }, // 6: readAreadB,
                 Dependency{ .wait_on_indices = &[_]u32{ 5, 3 } }, // 7: readAreadB,
                 Dependency{ .wait_on_indices = &[_]u32{ 7, 6 } }, // 8: writeAwriteB,
+            };
+
+            for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            }
+        }
+
+        // Artibtrary order (1)
+        {
+            const dependencies = comptime buildDependencyList(.{
+                SingleSubStorageSystems.writeA,
+                SingleSubStorageSystems.writeAWriteBWriteC,
+                SingleQuerySystems.readA,
+                SingleQuerySystems.readC,
+                SingleQuerySystems.readB,
+                TwoQuerySystems.readAReadB,
+                TwoQuerySystems.readAReadB,
+                SingleSubStorageSystems.writeAWriteB,
+                SingleSubStorageSystems.writeAWriteBWriteC,
+                TwoQuerySystems.readAReadB,
+                SingleSubStorageSystems.readAReadBReadC,
+            }, 11);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} }, // 0: writeA,
+                Dependency{ .wait_on_indices = &[_]u32{0} }, // 1: writeAWriteBWriteC,
+                Dependency{ .wait_on_indices = &[_]u32{1} }, // 2: readA,
+                Dependency{ .wait_on_indices = &[_]u32{1} }, // 3: readC,
+                Dependency{ .wait_on_indices = &[_]u32{1} }, // 4: readB,
+                Dependency{ .wait_on_indices = &[_]u32{1} }, // 5: readAReadB,
+                Dependency{ .wait_on_indices = &[_]u32{1} }, // 6: readAReadB,
+                Dependency{ .wait_on_indices = &[_]u32{ 6, 5, 4, 2 } }, // 7: writeAWriteB,
+                Dependency{ .wait_on_indices = &[_]u32{ 7, 3 } }, // 8: writeAWriteBWriteC,
+                Dependency{ .wait_on_indices = &[_]u32{8} }, // 9: readAReadB,
+                Dependency{ .wait_on_indices = &[_]u32{8} }, // 10: readAReadBReadC,
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {

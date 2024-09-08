@@ -15,6 +15,11 @@ pub const StorageType = struct {};
 pub const SubsetType = struct {};
 pub const QueryType = struct {};
 
+pub const SubsetAccess = enum {
+    read_only,
+    read_and_write,
+};
+
 pub fn CreateStorage(comptime all_components: anytype) type {
     return struct {
         pub const EcezType = StorageType;
@@ -302,9 +307,8 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///
         /// This is used by the scheduler to track systems that does storage edits and to allow
         /// narrow synchronization. In other words, this lets the scheduler see which components
-        /// need to be accounted for in a system when present as a system argument. The scheduler
-        /// assumes all components has write access
-        pub fn Subset(comptime component_subset: anytype) type {
+        /// need to be accounted for in a system when present as a system argument.
+        pub fn Subset(comptime component_subset: anytype, comptime access: SubsetAccess) type {
 
             // Check if tuple is valid and get array of types instead if valid
             const comp_arr = CompileReflect.verifyComponentTuple(component_subset);
@@ -319,37 +323,50 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             return struct {
                 pub const EcezType = SubsetType;
                 pub const component_subset_arr = comp_arr;
+                pub const track_access = access;
 
                 pub const ThisSubset = @This();
 
                 storage: *Storage,
 
                 pub fn createEntity(self: *ThisSubset, entity_state: anytype) error{OutOfMemory}!Entity {
-                    comptime CompileReflect.verifyInnerTypesIsInSlice(
-                        " is not part of " ++ simplifiedTypeName(),
-                        &component_subset_arr,
-                        @TypeOf(entity_state),
-                    );
+                    comptime {
+                        dissallowInReadOnly(@src());
+
+                        CompileReflect.verifyInnerTypesIsInSlice(
+                            " is not part of " ++ simplifiedTypeName(),
+                            &component_subset_arr,
+                            @TypeOf(entity_state),
+                        );
+                    }
 
                     return self.storage.createEntity(entity_state);
                 }
 
                 pub fn setComponents(self: *const ThisSubset, entity: Entity, struct_of_components: anytype) error{OutOfMemory}!void {
-                    comptime CompileReflect.verifyInnerTypesIsInSlice(
-                        " is not part of " ++ simplifiedTypeName(),
-                        &component_subset_arr,
-                        @TypeOf(struct_of_components),
-                    );
+                    comptime {
+                        dissallowInReadOnly(@src());
+
+                        CompileReflect.verifyInnerTypesIsInSlice(
+                            " is not part of " ++ simplifiedTypeName(),
+                            &component_subset_arr,
+                            @TypeOf(struct_of_components),
+                        );
+                    }
 
                     return self.storage.setComponents(entity, struct_of_components);
                 }
 
                 pub fn unsetComponents(self: *const ThisSubset, entity: Entity, comptime struct_of_remove_components: anytype) error{OutOfMemory}!void {
-                    comptime CompileReflect.verifyInnerTypesIsInSlice(
-                        " is not part of " ++ simplifiedTypeName(),
-                        &component_subset_arr,
-                        struct_of_remove_components,
-                    );
+                    comptime {
+                        dissallowInReadOnly(@src());
+
+                        CompileReflect.verifyInnerTypesIsInSlice(
+                            " is not part of " ++ simplifiedTypeName(),
+                            &component_subset_arr,
+                            struct_of_remove_components,
+                        );
+                    }
 
                     return self.storage.unsetComponents(entity, struct_of_remove_components);
                 }
@@ -365,11 +382,24 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 }
 
                 pub fn getComponents(self: *const ThisSubset, entity: Entity, comptime Components: type) error{MissingComponent}!Components {
-                    comptime CompileReflect.verifyInnerTypesIsInSlice(
-                        " is not part of " ++ simplifiedTypeName(),
-                        &component_subset_arr,
-                        Components,
-                    );
+                    comptime {
+                        // If this is a read only storage, then we must make sure there is no pointers in Components
+                        if (access == .read_only) {
+                            const components_info = @typeInfo(Components);
+                            for (components_info.Struct.fields) |field| {
+                                const field_info = @typeInfo(field.type);
+                                if (field_info.Pointer) {
+                                    @compileError("Accessing component pointers is illegal in a read only sub storage");
+                                }
+                            }
+                        }
+
+                        CompileReflect.verifyInnerTypesIsInSlice(
+                            " is not part of " ++ simplifiedTypeName(),
+                            &component_subset_arr,
+                            Components,
+                        );
+                    }
 
                     return self.storage.getComponents(entity, Components);
                 }
@@ -378,6 +408,12 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     const type_name = @typeName(ThisSubset);
                     const start_index = std.mem.indexOf(u8, type_name, "Subset").?;
                     return type_name[start_index..];
+                }
+
+                fn dissallowInReadOnly(caller: std.builtin.SourceLocation) void {
+                    if (access == .read_only) {
+                        @compileError("can't call " ++ caller.fn_name ++ " on a read only Storage Subset");
+                    }
                 }
             };
         }
@@ -1203,7 +1239,7 @@ test "Subset createEntity" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const Subset = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B });
+    const Subset = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B }, .read_and_write);
     var storage_subset = Subset{
         .storage = &storage,
     };
@@ -1223,7 +1259,7 @@ test "Subset setComponents() can reassign multiple components" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const Subset = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B });
+    const Subset = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B }, .read_and_write);
     var storage_subset = Subset{
         .storage = &storage,
     };
@@ -1250,7 +1286,7 @@ test "Subset setComponents() can add new components to entity" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const Subset = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B });
+    const Subset = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B }, .read_and_write);
     var storage_subset = Subset{
         .storage = &storage,
     };
@@ -1273,7 +1309,7 @@ test "Subset unsetComponents() removes the component as expected" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const Subset = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B });
+    const Subset = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B }, .read_and_write);
     var storage_subset = Subset{
         .storage = &storage,
     };
