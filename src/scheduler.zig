@@ -506,14 +506,20 @@ test "system SubStorage can spawn new entites (and no race hazards)" {
         pub const WriteA = StorageStub.Query(struct {
             a: *Testing.Component.A,
         }, .{});
+
+        pub const ReadA = StorageStub.Query(struct {
+            a: Testing.Component.A,
+        }, .{});
     };
 
     const SubsetA = StorageStub.Subset(.{Testing.Component.A});
+    const SubsetB = StorageStub.Subset(.{Testing.Component.B});
 
     const initial_entity_count = 128;
     // This would probably be better as data stored in components instead of EventArgument
     const SpawnedEntities = struct {
-        entities: [initial_entity_count]Entity,
+        a: [initial_entity_count]Entity,
+        b: [initial_entity_count]Entity,
     };
 
     const SystemStruct = struct {
@@ -542,11 +548,23 @@ test "system SubStorage can spawn new entites (and no race hazards)" {
         }
 
         pub fn spawnEntityAFromB(b_query: *Queries.ReadB, a_sub: *SubsetA, spawned_entities: *SpawnedEntities) void {
-            for (&spawned_entities.entities) |*entity| {
+            for (&spawned_entities.a) |*entity| {
                 const item = b_query.next().?;
 
                 entity.* = a_sub.createEntity(.{
                     Testing.Component.A{ .value = item.b.value },
+                }) catch @panic("OOM");
+            }
+        }
+
+        pub fn spawnEntityBFromA(a_query: *Queries.ReadA, b_sub: *SubsetB, spawned_entities: *SpawnedEntities) void {
+            // Loop reverse to make it more likely for race conditions to cause issues
+            for (0..spawned_entities.b.len) |reverse_index| {
+                const item = a_query.next().?;
+
+                const index = spawned_entities.b.len - reverse_index - 1;
+                spawned_entities.b[index] = b_sub.createEntity(.{
+                    Testing.Component.B{ .value = @intCast(item.a.value) },
                 }) catch @panic("OOM");
             }
         }
@@ -561,6 +579,7 @@ test "system SubStorage can spawn new entites (and no race hazards)" {
             SystemStruct.incrB,
             SystemStruct.decrB,
             SystemStruct.spawnEntityAFromB,
+            SystemStruct.spawnEntityBFromA,
             SystemStruct.incrA,
             SystemStruct.decrA,
         },
@@ -585,14 +604,25 @@ test "system SubStorage can spawn new entites (and no race hazards)" {
         for (&initial_entites, 0..) |entity, iter| {
             try testing.expectEqual(
                 Testing.Component.B{ .value = @intCast(iter) },
-                (try storage.getComponents(entity, BEntityType)).b,
+                try storage.getComponent(entity, Testing.Component.B),
             );
         }
 
-        for (spawned_entites.entities, 0..) |entity, iter| {
+        for (spawned_entites.a, 0..) |entity, iter| {
             try testing.expectEqual(
                 Testing.Component.A{ .value = @intCast(iter) },
-                (try storage.getComponents(entity, AEntityType)).a,
+                try storage.getComponent(entity, Testing.Component.A),
+            );
+        }
+
+        for (spawned_entites.b, 0..) |entity, iter| {
+            // Make sure these entities is not the ones we spawned in this for loop
+            try std.testing.expect(entity.id != iter);
+
+            const reverse = initial_entity_count - iter - 1;
+            try testing.expectEqual(
+                Testing.Component.B{ .value = @intCast(reverse) },
+                try storage.getComponent(entity, Testing.Component.B),
             );
         }
     }
