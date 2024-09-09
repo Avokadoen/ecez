@@ -858,8 +858,6 @@ const testing = std.testing;
 const StorageStub = CreateStorage(Testing.AllComponentsTuple);
 
 // TODO: we cant use tuples here because of https://github.com/ziglang/zig/issues/12963
-const AEntityType = Testing.Structure.A;
-const BEntityType = Testing.Structure.B;
 const AbEntityType = Testing.Structure.AB;
 const AcEntityType = Testing.Structure.AC;
 const BcEntityType = Testing.Structure.BC;
@@ -869,8 +867,8 @@ test "init() + deinit() is idempotent" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const initial_state = AEntityType{
-        .a = Testing.Component.A{},
+    const initial_state = .{
+        Testing.Component.A{},
     };
     const entity0 = try storage.createEntity(initial_state);
     try testing.expectEqual(entity0.id, 0);
@@ -888,7 +886,7 @@ test "createEntity() can create empty entities" {
     const a = Testing.Component.A{ .value = 123 };
     {
         try storage.setComponents(entity, .{a});
-        try testing.expectEqual(a, (try storage.getComponents(entity, AEntityType)).a);
+        try testing.expectEqual(a, try storage.getComponent(entity, Testing.Component.A));
     }
 
     const b = Testing.Component.B{ .value = 8 };
@@ -930,8 +928,8 @@ test "setComponents() update entities component state" {
     const a = Testing.Component.A{ .value = 123 };
     try storage.setComponents(entity, .{a});
 
-    const stored_a = try storage.getComponents(entity, AEntityType);
-    try testing.expectEqual(a, stored_a.a);
+    const stored_a = try storage.getComponent(entity, Testing.Component.A);
+    try testing.expectEqual(a, stored_a);
 }
 
 test "setComponents() with zero sized component works" {
@@ -1015,10 +1013,7 @@ test "unsetComponents() removes all components from entity" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const initial_state = AEntityType{
-        .a = Testing.Component.A{},
-    };
-    const entity = try storage.createEntity(initial_state);
+    const entity = try storage.createEntity(.{Testing.Component.A{}});
 
     try storage.unsetComponents(entity, .{Testing.Component.A});
     try testing.expectEqual(false, storage.hasComponents(entity, .{Testing.Component.A}));
@@ -1221,38 +1216,29 @@ test "clearRetainingCapacity() allow storage reuse" {
 
     var first_entity: Entity = undefined;
 
-    const entity_initial_state = AEntityType{
-        .a = Testing.Component.A{ .value = 123 },
-    };
+    const initial_value: u32 = 123;
     var entity: Entity = undefined;
 
     for (0..100) |i| {
         storage.clearRetainingCapacity();
 
-        var initial_state = AEntityType{
-            .a = Testing.Component.A{ .value = 0 },
-        };
-        _ = try storage.createEntity(initial_state);
-        initial_state.a = Testing.Component.A{ .value = 1 };
-        _ = try storage.createEntity(initial_state);
-        initial_state.a = Testing.Component.A{ .value = 2 };
-        _ = try storage.createEntity(initial_state);
+        _ = try storage.createEntity(.{Testing.Component.A{ .value = 0 }});
+        _ = try storage.createEntity(.{Testing.Component.A{ .value = 1 }});
+        _ = try storage.createEntity(.{Testing.Component.A{ .value = 2 }});
 
         if (i == 0) {
-            first_entity = try storage.createEntity(entity_initial_state);
+            first_entity = try storage.createEntity(.{Testing.Component.A{ .value = initial_value }});
         } else {
-            entity = try storage.createEntity(entity_initial_state);
+            entity = try storage.createEntity(.{Testing.Component.A{ .value = initial_value }});
         }
 
-        initial_state.a = Testing.Component.A{ .value = 3 };
-        _ = try storage.createEntity(initial_state);
-        initial_state.a = Testing.Component.A{ .value = 4 };
-        _ = try storage.createEntity(initial_state);
+        _ = try storage.createEntity(.{Testing.Component.A{ .value = 3 }});
+        _ = try storage.createEntity(.{Testing.Component.A{ .value = 4 }});
     }
 
     try testing.expectEqual(first_entity, entity);
-    const entity_a = try storage.getComponents(entity, AEntityType);
-    try testing.expectEqual(entity_initial_state.a, entity_a.a);
+    const comp_a = try storage.getComponent(entity, Testing.Component.A);
+    try testing.expectEqual(Testing.Component.A{ .value = initial_value }, comp_a);
 }
 
 test "Subset createEntity" {
@@ -1536,8 +1522,8 @@ test "query with single include type and single exclude works" {
     }
 
     for (100..200) |index| {
-        _ = try storage.createEntity(AEntityType{
-            .a = .{ .value = @as(u32, @intCast(index)) },
+        _ = try storage.createEntity(.{
+            Testing.Component.A{ .value = @as(u32, @intCast(index)) },
         });
     }
 
@@ -1578,8 +1564,8 @@ test "query with single include type and multiple exclude works" {
     }
 
     for (200..300) |index| {
-        _ = try storage.createEntity(AEntityType{
-            .a = .{ .value = @as(u32, @intCast(index)) },
+        _ = try storage.createEntity(.{
+            Testing.Component.A{ .value = @as(u32, @intCast(index)) },
         });
     }
 
@@ -1606,8 +1592,8 @@ test "query with entity only works" {
 
     var entities: [200]Entity = undefined;
     for (entities[0..100], 0..) |*entity, index| {
-        entity.* = try storage.createEntity(AEntityType{
-            .a = .{ .value = @as(u32, @intCast(index)) },
+        entity.* = try storage.createEntity(.{
+            Testing.Component.A{ .value = @as(u32, @intCast(index)) },
         });
     }
     for (entities[100..200], 100..) |*entity, index| {
@@ -1640,8 +1626,8 @@ test "query with entity and include and exclude only works" {
 
     var entities: [200]Entity = undefined;
     for (entities[0..100], 0..) |*entity, index| {
-        entity.* = try storage.createEntity(AEntityType{
-            .a = .{ .value = @as(u32, @intCast(index)) },
+        entity.* = try storage.createEntity(.{
+            Testing.Component.A{ .value = @as(u32, @intCast(index)) },
         });
     }
     for (entities[100..200], 100..) |*entity, index| {

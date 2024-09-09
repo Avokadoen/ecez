@@ -476,22 +476,22 @@ test "serialize and deserialized is idempotent" {
     );
 
     for (a_as, a_entities) |a, a_entity| {
-        try testing.expectEqual(a, (try storage.getComponents(a_entity, Testing.Structure.A)).a);
-        try testing.expectError(error.MissingComponent, storage.getComponents(a_entity, Testing.Structure.B));
-        try testing.expectError(error.MissingComponent, storage.getComponents(a_entity, Testing.Structure.C));
+        try testing.expectEqual(a, try storage.getComponent(a_entity, Testing.Component.A));
+        try testing.expectError(error.MissingComponent, storage.getComponent(a_entity, Testing.Component.B));
+        try testing.expectError(error.MissingComponent, storage.getComponent(a_entity, Testing.Component.C));
     }
 
     for (ab_as, ab_bs, ab_entities) |ab_a, ab_b, ab_entity| {
         const ab = try storage.getComponents(ab_entity, Testing.Structure.AB);
         try testing.expectEqual(ab_a, ab.a);
         try testing.expectEqual(ab_b, ab.b);
-        try testing.expectError(error.MissingComponent, storage.getComponents(ab_entity, Testing.Structure.C));
+        try testing.expectError(error.MissingComponent, storage.getComponent(ab_entity, Testing.Component.C));
     }
 
     for (ac_as, ac_entities) |ac_a, ac_entity| {
         const ac = try storage.getComponents(ac_entity, Testing.Structure.AC);
         try testing.expectEqual(ac_a, ac.a);
-        try testing.expectError(error.MissingComponent, storage.getComponents(ac_entity, Testing.Structure.B));
+        try testing.expectError(error.MissingComponent, storage.getComponent(ac_entity, Testing.Component.B));
         try testing.expectEqual(ac_cs, ac.c);
     }
 
@@ -655,28 +655,26 @@ test "serialize with culled_component_types config can be deserialized by other 
         );
 
         for (a_entities) |a_entity| {
-            try testing.expectError(error.MissingComponent, bc_storage.getComponents(a_entity, Testing.Structure.A));
-            try testing.expectError(error.MissingComponent, bc_storage.getComponents(a_entity, Testing.Structure.B));
-            try testing.expectError(error.MissingComponent, bc_storage.getComponents(a_entity, Testing.Structure.C));
+            try testing.expectError(error.MissingComponent, bc_storage.getComponent(a_entity, Testing.Component.A));
+            try testing.expectError(error.MissingComponent, bc_storage.getComponent(a_entity, Testing.Component.B));
+            try testing.expectError(error.MissingComponent, bc_storage.getComponent(a_entity, Testing.Component.C));
         }
 
         for (ab_bs, ab_entities) |ab_b, ab_entity| {
-            const b = try bc_storage.getComponents(ab_entity, Testing.Structure.B);
-            try testing.expectError(error.MissingComponent, bc_storage.getComponents(ab_entity, Testing.Structure.A));
-            try testing.expectEqual(ab_b, b.b);
-            try testing.expectError(error.MissingComponent, bc_storage.getComponents(ab_entity, Testing.Structure.C));
+            try testing.expectError(error.MissingComponent, bc_storage.getComponent(ab_entity, Testing.Component.A));
+            try testing.expectEqual(ab_b, try bc_storage.getComponent(ab_entity, Testing.Component.B));
+            try testing.expectError(error.MissingComponent, bc_storage.getComponent(ab_entity, Testing.Component.C));
         }
 
         for (ac_entities) |ac_entity| {
-            const c = try bc_storage.getComponents(ac_entity, Testing.Structure.C);
-            try testing.expectError(error.MissingComponent, bc_storage.getComponents(ac_entity, Testing.Structure.A));
-            try testing.expectError(error.MissingComponent, bc_storage.getComponents(ac_entity, Testing.Structure.B));
-            try testing.expectEqual(ac_cs, c.c);
+            try testing.expectError(error.MissingComponent, bc_storage.getComponent(ac_entity, Testing.Component.A));
+            try testing.expectError(error.MissingComponent, bc_storage.getComponent(ac_entity, Testing.Component.B));
+            try testing.expectEqual(ac_cs, try bc_storage.getComponent(ac_entity, Testing.Component.C));
         }
 
         for (abc_bs, abc_entities) |abc_b, abc_entity| {
             const bc = try bc_storage.getComponents(abc_entity, Testing.Structure.BC);
-            try testing.expectError(error.MissingComponent, bc_storage.getComponents(abc_entity, Testing.Structure.A));
+            try testing.expectError(error.MissingComponent, bc_storage.getComponent(abc_entity, Testing.Component.A));
             try testing.expectEqual(abc_b, bc.b);
             try testing.expectEqual(ac_cs, bc.c);
         }
@@ -704,29 +702,28 @@ test "serialize with culled_component_types config can be deserialized by other 
         );
 
         for (a_as, a_entities) |a, a_entity| {
-            try testing.expectEqual(a, (try ac_storage.getComponents(a_entity, Testing.Structure.A)).a);
-            try testing.expectError(error.MissingComponent, ac_storage.getComponents(a_entity, Testing.Structure.B));
-            try testing.expectError(error.MissingComponent, ac_storage.getComponents(a_entity, Testing.Structure.C));
+            try testing.expectEqual(a, try ac_storage.getComponent(a_entity, Testing.Component.A));
+            try testing.expectError(error.MissingComponent, ac_storage.getComponent(a_entity, Testing.Component.B));
+            try testing.expectError(error.MissingComponent, ac_storage.getComponent(a_entity, Testing.Component.C));
         }
 
         for (ab_as, ab_entities) |ab_a, ab_entity| {
-            const ab = try ac_storage.getComponents(ab_entity, Testing.Structure.A);
-            try testing.expectEqual(ab_a, ab.a);
-            try testing.expectError(error.MissingComponent, ac_storage.getComponents(ab_entity, Testing.Structure.B));
-            try testing.expectError(error.MissingComponent, ac_storage.getComponents(ab_entity, Testing.Structure.C));
+            try testing.expectEqual(ab_a, try ac_storage.getComponent(ab_entity, Testing.Component.A));
+            try testing.expectError(error.MissingComponent, ac_storage.getComponent(ab_entity, Testing.Component.B));
+            try testing.expectError(error.MissingComponent, ac_storage.getComponent(ab_entity, Testing.Component.C));
         }
 
         for (ac_as, ac_entities) |ac_a, ac_entity| {
             const ac = try ac_storage.getComponents(ac_entity, Testing.Structure.AC);
             try testing.expectEqual(ac_a, ac.a);
-            try testing.expectError(error.MissingComponent, ac_storage.getComponents(ac_entity, Testing.Structure.B));
+            try testing.expectError(error.MissingComponent, ac_storage.getComponent(ac_entity, Testing.Component.B));
             try testing.expectEqual(ac_cs, ac.c);
         }
 
         for (abc_as, abc_entities) |abc_a, abc_entity| {
             const ac = try ac_storage.getComponents(abc_entity, Testing.Structure.AC);
             try testing.expectEqual(abc_a, ac.a);
-            try testing.expectError(error.MissingComponent, ac_storage.getComponents(abc_entity, Testing.Structure.B));
+            try testing.expectError(error.MissingComponent, ac_storage.getComponent(abc_entity, Testing.Component.B));
             try testing.expectEqual(ac_cs, ac.c);
         }
     }
@@ -753,30 +750,29 @@ test "serialize with culled_component_types config can be deserialized by other 
         );
 
         for (a_as, a_entities) |a, a_entity| {
-            try testing.expectEqual(a, (try ab_storage.getComponents(a_entity, Testing.Structure.A)).a);
-            try testing.expectError(error.MissingComponent, ab_storage.getComponents(a_entity, Testing.Structure.B));
-            try testing.expectError(error.MissingComponent, ab_storage.getComponents(a_entity, Testing.Structure.C));
+            try testing.expectEqual(a, try ab_storage.getComponent(a_entity, Testing.Component.A));
+            try testing.expectError(error.MissingComponent, ab_storage.getComponent(a_entity, Testing.Component.B));
+            try testing.expectError(error.MissingComponent, ab_storage.getComponent(a_entity, Testing.Component.C));
         }
 
         for (ab_as, ab_bs, ab_entities) |ab_a, ab_b, ab_entity| {
             const ab = try ab_storage.getComponents(ab_entity, Testing.Structure.AB);
             try testing.expectEqual(ab_a, ab.a);
             try testing.expectEqual(ab_b, ab.b);
-            try testing.expectError(error.MissingComponent, ab_storage.getComponents(ab_entity, Testing.Structure.C));
+            try testing.expectError(error.MissingComponent, ab_storage.getComponent(ab_entity, Testing.Component.C));
         }
 
         for (ac_as, ac_entities) |ac_a, ac_entity| {
-            const ac = try ab_storage.getComponents(ac_entity, Testing.Structure.A);
-            try testing.expectEqual(ac_a, ac.a);
-            try testing.expectError(error.MissingComponent, ab_storage.getComponents(ac_entity, Testing.Structure.B));
-            try testing.expectError(error.MissingComponent, ab_storage.getComponents(ac_entity, Testing.Structure.C));
+            try testing.expectEqual(ac_a, ab_storage.getComponent(ac_entity, Testing.Component.A));
+            try testing.expectError(error.MissingComponent, ab_storage.getComponent(ac_entity, Testing.Component.B));
+            try testing.expectError(error.MissingComponent, ab_storage.getComponent(ac_entity, Testing.Component.C));
         }
 
         for (abc_as, abc_bs, abc_entities) |abc_a, abc_b, abc_entity| {
             const abc = try ab_storage.getComponents(abc_entity, Testing.Structure.AB);
             try testing.expectEqual(abc_a, abc.a);
             try testing.expectEqual(abc_b, abc.b);
-            try testing.expectError(error.MissingComponent, ab_storage.getComponents(abc_entity, Testing.Structure.C));
+            try testing.expectError(error.MissingComponent, ab_storage.getComponent(abc_entity, Testing.Component.C));
         }
     }
 
@@ -802,29 +798,27 @@ test "serialize with culled_component_types config can be deserialized by other 
         );
 
         for (a_entities) |a_entity| {
-            try testing.expectError(error.MissingComponent, b_storage.getComponents(a_entity, Testing.Structure.A));
-            try testing.expectError(error.MissingComponent, b_storage.getComponents(a_entity, Testing.Structure.B));
-            try testing.expectError(error.MissingComponent, b_storage.getComponents(a_entity, Testing.Structure.C));
+            try testing.expectError(error.MissingComponent, b_storage.getComponent(a_entity, Testing.Component.A));
+            try testing.expectError(error.MissingComponent, b_storage.getComponent(a_entity, Testing.Component.B));
+            try testing.expectError(error.MissingComponent, b_storage.getComponent(a_entity, Testing.Component.C));
         }
 
         for (ab_bs, ab_entities) |ab_b, ab_entity| {
-            const b = try b_storage.getComponents(ab_entity, Testing.Structure.B);
-            try testing.expectError(error.MissingComponent, b_storage.getComponents(ab_entity, Testing.Structure.A));
-            try testing.expectEqual(ab_b, b.b);
-            try testing.expectError(error.MissingComponent, b_storage.getComponents(ab_entity, Testing.Structure.C));
+            try testing.expectError(error.MissingComponent, b_storage.getComponent(ab_entity, Testing.Component.A));
+            try testing.expectEqual(ab_b, try b_storage.getComponent(ab_entity, Testing.Component.B));
+            try testing.expectError(error.MissingComponent, b_storage.getComponent(ab_entity, Testing.Component.C));
         }
 
         for (ac_entities) |ac_entity| {
-            try testing.expectError(error.MissingComponent, b_storage.getComponents(ac_entity, Testing.Structure.A));
-            try testing.expectError(error.MissingComponent, b_storage.getComponents(ac_entity, Testing.Structure.B));
-            try testing.expectError(error.MissingComponent, b_storage.getComponents(ac_entity, Testing.Structure.C));
+            try testing.expectError(error.MissingComponent, b_storage.getComponent(ac_entity, Testing.Component.A));
+            try testing.expectError(error.MissingComponent, b_storage.getComponent(ac_entity, Testing.Component.B));
+            try testing.expectError(error.MissingComponent, b_storage.getComponent(ac_entity, Testing.Component.C));
         }
 
         for (abc_bs, abc_entities) |abc_b, abc_entity| {
-            const b = try b_storage.getComponents(abc_entity, Testing.Structure.B);
-            try testing.expectError(error.MissingComponent, b_storage.getComponents(abc_entity, Testing.Structure.A));
-            try testing.expectEqual(abc_b, b.b);
-            try testing.expectError(error.MissingComponent, b_storage.getComponents(abc_entity, Testing.Structure.C));
+            try testing.expectError(error.MissingComponent, b_storage.getComponent(abc_entity, Testing.Component.A));
+            try testing.expectEqual(abc_b, try b_storage.getComponent(abc_entity, Testing.Component.B));
+            try testing.expectError(error.MissingComponent, b_storage.getComponent(abc_entity, Testing.Component.C));
         }
     }
 }

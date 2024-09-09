@@ -445,9 +445,6 @@ const testing = std.testing;
 const CreateStorage = @import("storage.zig").CreateStorage;
 const Entity = @import("entity_type.zig").Entity;
 
-// TODO: we cant use tuples here because of https://github.com/ziglang/zig/issues/12963
-const AEntityType = Testing.Structure.A;
-const BEntityType = Testing.Structure.B;
 const AbEntityType = Testing.Structure.AB;
 const AcEntityType = Testing.Structure.AC;
 const BcEntityType = Testing.Structure.BC;
@@ -489,7 +486,7 @@ test "system query can mutate components" {
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 3 },
-        (try storage.getComponents(entity, AEntityType)).a,
+        try storage.getComponent(entity, Testing.Component.A),
     );
 }
 
@@ -641,9 +638,11 @@ test "system sub storage can mutate components" {
     const SystemStruct = struct {
         pub fn mutateStuff(entities: *Query, ab: *SubStorage) void {
             while (entities.next()) |item| {
-                const a = (ab.getComponents(item.entity, Testing.Structure.A) catch @panic("oof")).a;
+                const a = ab.getComponent(item.entity, Testing.Component.A) catch @panic("oof");
 
-                ab.setComponents(item.entity, .{Testing.Component.B{ .value = @intCast(a.value) }}) catch @panic("oof");
+                ab.setComponents(item.entity, .{
+                    Testing.Component.B{ .value = @intCast(a.value) },
+                }) catch @panic("oof");
             }
         }
     };
@@ -667,7 +666,7 @@ test "system sub storage can mutate components" {
 
     try testing.expectEqual(
         Testing.Component.B{ .value = 42 },
-        (try storage.getComponents(entity, BEntityType)).b,
+        try storage.getComponent(entity, Testing.Component.B),
     );
 }
 
@@ -939,10 +938,7 @@ test "systems can accepts event related data" {
     }).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
-    const initial_state = AEntityType{
-        .a = .{ .value = 0 },
-    };
-    const entity = try storage.createEntity(initial_state);
+    const entity = try storage.createEntity(.{Testing.Component.A{ .value = 0 }});
 
     const value = 42;
     scheduler.dispatchEvent(&storage, .onFoo, AddValue{ .v = value });
@@ -950,7 +946,7 @@ test "systems can accepts event related data" {
 
     try testing.expectEqual(
         Testing.Component.A{ .value = value },
-        (try storage.getComponents(entity, Testing.Structure.A)).a,
+        try storage.getComponent(entity, Testing.Component.A),
     );
 }
 
@@ -983,10 +979,7 @@ test "systems can mutate event argument" {
     defer scheduler.deinit();
 
     const value = 42;
-    const initial_state = AEntityType{
-        .a = .{ .value = value },
-    };
-    _ = try storage.createEntity(initial_state);
+    _ = try storage.createEntity(.{Testing.Component.A{ .value = value }});
 
     var event_argument = AddValue{ .v = 0 };
     scheduler.dispatchEvent(&storage, .onFoo, &event_argument);
@@ -1032,17 +1025,14 @@ test "system can contain two queries" {
     })}).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
-    const initial_state = AEntityType{
-        .a = Testing.Component.A{ .value = fail_value },
-    };
-    const entity = try storage.createEntity(initial_state);
+    const entity = try storage.createEntity(.{Testing.Component.A{ .value = fail_value }});
 
     scheduler.dispatchEvent(&storage, .onFoo, .{});
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = pass_value },
-        (try storage.getComponents(entity, Testing.Structure.A)).a,
+        try storage.getComponent(entity, Testing.Component.A),
     );
 }
 
@@ -1082,19 +1072,14 @@ test "event caching works" {
     }).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
-    const entity1 = blk: {
-        const initial_state = AEntityType{
-            .a = .{ .value = 0 },
-        };
-        break :blk try storage.createEntity(initial_state);
-    };
+    const entity1 = try storage.createEntity(.{Testing.Component.A{ .value = 0 }});
 
     scheduler.dispatchEvent(&storage, .onIncA, .{});
     scheduler.waitEvent(.onIncA);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 1 },
-        (try storage.getComponents(entity1, Testing.Structure.A)).a,
+        try storage.getComponent(entity1, Testing.Component.A),
     );
 
     // move entity to archetype A, B
@@ -1105,7 +1090,7 @@ test "event caching works" {
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 2 },
-        (try storage.getComponents(entity1, Testing.Structure.A)).a,
+        try storage.getComponent(entity1, Testing.Component.A),
     );
 
     scheduler.dispatchEvent(&storage, .onIncB, .{});
@@ -1113,7 +1098,7 @@ test "event caching works" {
 
     try testing.expectEqual(
         Testing.Component.B{ .value = 1 },
-        (try storage.getComponents(entity1, Testing.Structure.B)).b,
+        try storage.getComponent(entity1, Testing.Component.B),
     );
 
     const entity2 = blk: {
@@ -1130,7 +1115,7 @@ test "event caching works" {
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 1 },
-        (try storage.getComponents(entity2, Testing.Structure.A)).a,
+        try storage.getComponent(entity2, Testing.Component.A),
     );
 
     scheduler.dispatchEvent(&storage, .onIncB, .{});
@@ -1138,7 +1123,7 @@ test "event caching works" {
 
     try testing.expectEqual(
         Testing.Component.B{ .value = 1 },
-        (try storage.getComponents(entity2, Testing.Structure.B)).b,
+        try storage.getComponent(entity2, Testing.Component.B),
     );
 }
 
@@ -1200,9 +1185,7 @@ test "reproducer: Dispatcher does not include new components to systems previous
     var scheduler = try Scheduler.init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
-    const inital_state = AEntityType{
-        .a = .{ .value = 1 },
-    };
+    const inital_state = .{Testing.Component.A{ .value = 1 }};
     _ = try storage.createEntity(inital_state);
     _ = try storage.createEntity(inital_state);
 
