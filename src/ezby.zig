@@ -503,6 +503,96 @@ test "serialize and deserialized is idempotent" {
     }
 }
 
+test "serialize and deserialized with types of higher alignment works" {
+    const Vector = struct { v: @Vector(8, u64) };
+
+    const TestStorage = @import("storage.zig").CreateStorage(.{
+        Testing.Component.A,
+        Testing.Component.B,
+        Vector,
+    });
+
+    var storage = try TestStorage.init(std.testing.allocator);
+    defer storage.deinit();
+
+    const test_data_count = 128;
+
+    var a_as: [test_data_count]Testing.Component.A = undefined;
+    var a_entities: [test_data_count]Entity = undefined;
+    for (&a_as, &a_entities, 0..) |*a, *entity, index| {
+        a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
+        entity.* = try storage.createEntity(.{a.*});
+    }
+
+    var ab_as: [test_data_count]Testing.Component.A = undefined;
+    var ab_bs: [test_data_count]Testing.Component.B = undefined;
+    var ab_entities: [test_data_count]Entity = undefined;
+    for (&ab_as, &ab_bs, &ab_entities, 0..) |*a, *b, *entity, index| {
+        a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
+        b.* = Testing.Component.B{ .value = @as(u8, @intCast(index)) };
+        entity.* = try storage.createEntity(.{ a.*, b.* });
+    }
+
+    var av_as: [test_data_count]Testing.Component.A = undefined;
+    var av_vs: [test_data_count]Vector = undefined;
+    var av_entities: [test_data_count]Entity = undefined;
+    for (&av_as, &av_vs, &av_entities, 0..) |*a, *v, *entity, index| {
+        a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
+        v.* = Vector{ .v = @splat(index) };
+        entity.* = try storage.createEntity(.{ a.*, v.* });
+    }
+
+    var abv_as: [test_data_count]Testing.Component.A = undefined;
+    var abv_bs: [test_data_count]Testing.Component.B = undefined;
+    var abv_vs: [test_data_count]Vector = undefined;
+    var abv_entities: [test_data_count]Entity = undefined;
+    for (&abv_as, &abv_bs, &abv_vs, &abv_entities, 0..) |*a, *b, *v, *entity, index| {
+        a.* = Testing.Component.A{ .value = @as(u32, @intCast(index)) };
+        b.* = Testing.Component.B{ .value = @as(u8, @intCast(index)) };
+        v.* = Vector{ .v = @splat(index) };
+        entity.* = try storage.createEntity(.{ a.*, b.*, v.* });
+    }
+
+    const bytes = try serialize(
+        testing.allocator,
+        TestStorage,
+        storage,
+        .{},
+    );
+    defer testing.allocator.free(bytes);
+
+    try deserialize(
+        TestStorage,
+        &storage,
+        bytes,
+    );
+
+    for (a_as, a_entities) |a, a_entity| {
+        try testing.expectEqual(a, try storage.getComponent(a_entity, Testing.Component.A));
+        try testing.expectError(error.MissingComponent, storage.getComponent(a_entity, Vector));
+        try testing.expectError(error.MissingComponent, storage.getComponent(a_entity, Testing.Component.B));
+    }
+
+    for (av_as, av_vs, av_entities) |av_a, av_v, av_entity| {
+        try testing.expectEqual(av_a, try storage.getComponent(av_entity, Testing.Component.A));
+        try testing.expectError(error.MissingComponent, storage.getComponent(av_entity, Testing.Component.B));
+        try testing.expectEqual(av_v, try storage.getComponent(av_entity, Vector));
+    }
+
+    for (ab_as, ab_bs, ab_entities) |ab_a, ab_b, ab_entity| {
+        const ab = try storage.getComponents(ab_entity, Testing.Structure.AB);
+        try testing.expectEqual(ab_a, ab.a);
+        try testing.expectEqual(ab_b, ab.b);
+        try testing.expectError(error.MissingComponent, storage.getComponent(ab_entity, Vector));
+    }
+
+    for (abv_as, abv_bs, abv_vs, abv_entities) |abv_a, abv_b, abv_v, abv_entity| {
+        try testing.expectEqual(abv_a, try storage.getComponent(abv_entity, Testing.Component.A));
+        try testing.expectEqual(abv_b, try storage.getComponent(abv_entity, Testing.Component.B));
+        try testing.expectEqual(abv_v, try storage.getComponent(abv_entity, Vector));
+    }
+}
+
 test "serialize with culled_component_types config can be deserialized by other storage type" {
     var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
