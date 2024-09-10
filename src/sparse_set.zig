@@ -9,10 +9,13 @@ pub fn SparseSet(comptime SparseT: type, comptime DenseT: type) type {
         const Set = @This();
 
         // TODO: make 1 bit per entity (tradeof with o(1))
+        sparse_len: usize = 0,
+        // Len of the slice is "capacity"
         sparse: []SparseT = &[0]SparseT{},
 
         // TODO: even though the same pattern exist in std arraylist, I am not comfortable with stack addr to realloc
         dense_len: usize = 0,
+        // Len of slice is "capacity"
         dense: []DenseT = &[0]DenseT{},
 
         pub fn deinit(self: *Set, allocator: Allocator) void {
@@ -28,6 +31,8 @@ pub fn SparseSet(comptime SparseT: type, comptime DenseT: type) type {
         }
 
         pub fn growSparse(self: *Set, allocator: Allocator, min_size: usize) error{OutOfMemory}!void {
+            self.sparse_len = @max(self.sparse_len, min_size);
+
             if (self.sparse.len >= min_size) {
                 return;
             }
@@ -125,6 +130,10 @@ pub fn SparseSet(comptime SparseT: type, comptime DenseT: type) type {
         }
 
         pub fn get(self: Set, sparse: SparseT) ?*DenseT {
+            if (sparse >= self.sparse_len) {
+                return null;
+            }
+
             const entry = self.sparse[sparse];
             if (entry == sparse_not_set) {
                 return null;
@@ -140,6 +149,7 @@ pub fn SparseSet(comptime SparseT: type, comptime DenseT: type) type {
 
         pub fn clearRetainingCapacity(self: *Set) void {
             @memset(self.sparse, sparse_not_set);
+            self.sparse_len = 0;
             self.dense_len = 0;
         }
 
