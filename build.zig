@@ -78,9 +78,10 @@ pub fn build(b: *std.Build) void {
         name: []const u8,
     };
 
-    inline for ([_]Example{.{
-        .name = "game-of-life",
-    }}) |example| {
+    inline for ([_]Example{
+        .{ .name = "game-of-life" },
+        .{ .name = "readme" },
+    }) |example| {
         const path = b.path("examples/" ++ example.name ++ "/main.zig");
         const exe = b.addExecutable(.{
             .name = example.name,

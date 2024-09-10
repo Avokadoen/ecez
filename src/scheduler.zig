@@ -5,8 +5,11 @@ const ztracy = @import("ztracy");
 const ThreadPool = @import("StdThreadPool.zig");
 const ResetEvent = std.Thread.ResetEvent;
 
-const meta = @import("meta.zig");
-const SystemMetadata = meta.SystemMetadata;
+const QueryType = @import("storage.zig").QueryType;
+const StorageType = @import("storage.zig").StorageType;
+const SubsetType = @import("storage.zig").SubsetType;
+
+const gen_dependency_chain = @import("dependency_chain.zig");
 
 const Color = @import("misc.zig").Color;
 
@@ -16,29 +19,28 @@ pub const Config = struct {
 
 /// Allow the user to attach systems to a storage. The user can then trigger events on the scheduler to execute
 /// the systems in a multithreaded environment
-pub fn CreateScheduler(
-    comptime Storage: type,
-    comptime events: anytype,
-) type {
-    const event_count = meta.countAndVerifyEvents(events);
+pub fn CreateScheduler(comptime events: anytype) type {
+    const event_count = CompileReflect.countAndVerifyEvents(events);
 
-    // Store each individual WaitGroup
+    // Store each individual ResetEvent
     const EventsInFlight = blk: {
         // TODO: move to meta
         const Type = std.builtin.Type;
         var fields: [event_count]Type.StructField = undefined;
         inline for (&fields, events, 0..) |*field, event, i| {
-            const default_value = [_]ResetEvent{.{}} ** event.system_count;
+            const system_count = CompileReflect.countAndVerifySystems(event);
+
+            const default_value = [_]ResetEvent{.{}} ** system_count;
             var num_buf: [8:0]u8 = undefined;
             const name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable;
             num_buf[name.len] = 0;
 
             field.* = Type.StructField{
                 .name = name[0.. :0],
-                .type = [event.system_count]ResetEvent,
+                .type = [system_count]ResetEvent,
                 .default_value = @ptrCast(&default_value),
                 .is_comptime = false,
-                .alignment = @alignOf([event.system_count]ResetEvent),
+                .alignment = @alignOf([system_count]ResetEvent),
             };
         }
 
@@ -50,63 +52,13 @@ pub fn CreateScheduler(
         } });
     };
 
-    // Access the dependencies of a system [event_index][system_index] => array
-    const DependencyRelations = blk: {
-        const Type = std.builtin.Type;
-        var fields: [event_count]Type.StructField = undefined;
-        inline for (&fields, events, 0..) |*field, event, event_index| {
-            var system_fields: [event.system_count]Type.StructField = undefined;
-            inline for (&system_fields, 0..) |*system_field, system_index| {
-                var num_buf: [8:0]u8 = undefined;
-                const name = std.fmt.bufPrint(&num_buf, "{d}", .{system_index}) catch unreachable;
-                num_buf[name.len] = 0;
-
-                const default_value = event.systems_info.getDependencySubIndices(system_index);
-                const field_type = @TypeOf(default_value);
-                system_field.* = Type.StructField{
-                    .name = name[0.. :0],
-                    .type = field_type,
-                    .default_value = @ptrCast(&default_value),
-                    .is_comptime = true,
-                    .alignment = @alignOf(field_type),
-                };
-            }
-
-            var num_buf: [8:0]u8 = undefined;
-            const name = std.fmt.bufPrint(&num_buf, "{d}", .{event_index}) catch unreachable;
-            num_buf[name.len] = 0;
-
-            // For each system in event, create an array of dependency indices
-            const EventSystemDepField = @Type(Type{ .Struct = .{
-                .layout = .auto,
-                .fields = &system_fields,
-                .decls = &[0]Type.Declaration{},
-                .is_tuple = true,
-            } });
-            const default_value = EventSystemDepField{};
-            field.* = Type.StructField{
-                .name = name[0.. :0],
-                .type = EventSystemDepField,
-                .default_value = @ptrCast(&default_value),
-                .is_comptime = true,
-                .alignment = @alignOf(EventSystemDepField),
-            };
-        }
-
-        break :blk @Type(Type{ .Struct = .{
-            .layout = .auto,
-            .fields = &fields,
-            .decls = &[0]Type.Declaration{},
-            .is_tuple = true,
-        } });
-    };
-
-    const dependency_tracker: DependencyRelations = DependencyRelations{};
+    // Calculate dependencies
+    const Dependencies = CompileReflect.DependencyListsType(events, event_count){};
 
     return struct {
         const Scheduler = @This();
 
-        pub const EventsEnum = meta.GenerateEventsEnum(event_count, events);
+        pub const EventsEnum = CompileReflect.GenerateEventEnum(events);
 
         thread_pool: *ThreadPool,
         events_in_flight: EventsInFlight,
@@ -158,48 +110,47 @@ pub fn CreateScheduler(
         /// // trigger mouse handle
         /// scheduler.dispatchEvent(&storage, .onMouse, @as(MouseArg, mouse));
         /// ```
-        pub fn dispatchEvent(self: *Scheduler, storage: *Storage, comptime event: EventsEnum, event_argument: anytype) void {
+        pub fn dispatchEvent(self: *Scheduler, storage: anytype, comptime event: EventsEnum, event_argument: anytype) void {
             const tracy_zone_name = comptime std.fmt.comptimePrint("dispatchEvent {s}", .{@tagName(event)});
             const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.scheduler);
             defer zone.End();
 
+            const Storage = get_storage_type_blk: {
+                const storage_ptr = @typeInfo(@TypeOf(storage));
+                if (storage_ptr != .Pointer) {
+                    @compileError(@src().fn_name ++ " expected argument storage to be pointer to a ecez.Storage");
+                }
+
+                const child_type = storage_ptr.Pointer.child;
+                const is_storage_type = check_if_storage_type_blk: {
+                    if (@hasDecl(child_type, "EcezType") == false) {
+                        break :check_if_storage_type_blk false;
+                    }
+
+                    if (child_type.EcezType != StorageType) {
+                        break :check_if_storage_type_blk false;
+                    }
+
+                    break :check_if_storage_type_blk true;
+                };
+
+                if (is_storage_type == false) {
+                    @compileError(@src().fn_name ++ " got storage of unkown type " ++ @typeName(@TypeOf(storage)) ++ ", expected *ecez.CreateStorage");
+                }
+
+                break :get_storage_type_blk child_type;
+            };
+
             const event_index = @intFromEnum(event);
             const event_in_flight = &self.events_in_flight[event_index];
             const triggered_event = events[event_index];
-            const event_systems_dependencies = dependency_tracker[event_index];
 
-            comptime meta.disallowEventArgAsComponent(triggered_event.EventArgument, &Storage.component_type_array);
+            const event_dependencies = @field(Dependencies, triggered_event._name);
 
-            inline for (triggered_event.systems_info.metadata, 0..) |metadata, system_index| {
-                const component_query_types = comptime metadata.componentQueryArgTypes();
-
-                // TODO: verify systems and arguments in type initialization
-                // verify that argument order is matching the storage order
-                comptime Storage.validateComponentOrderAndValidity(component_query_types);
-
-                const include_bitmask = include_bits_blk: {
-                    comptime var bitmask = 0;
-                    inline for (component_query_types) |Component| {
-                        bitmask |= 1 << Storage.Container.componentIndex(Component);
-                    }
-                    break :include_bits_blk bitmask;
-                };
-
-                const exclude_bitmask = comptime include_bit_blk: {
-                    var bitmask: Storage.ComponentMask.Bits = 0;
-                    for (metadata.excludeComponents()) |Component| {
-                        bitmask |= 1 << Storage.Container.componentIndex(Component);
-                    }
-                    break :include_bit_blk bitmask;
-                };
-
+            inline for (triggered_event._systems, event_dependencies, 0..) |system, system_dependencies, system_index| {
                 const DispatchJob = EventDispatchJob(
-                    triggered_event.systems_info.functions[system_index],
-                    *const triggered_event.systems_info.function_types[system_index],
-                    metadata,
-                    include_bitmask,
-                    exclude_bitmask,
-                    component_query_types,
+                    system,
+                    Storage,
                     @TypeOf(event_argument),
                 );
 
@@ -213,9 +164,9 @@ pub fn CreateScheduler(
                 std.debug.assert(event_in_flight[system_index].isSet());
 
                 // NOTE: Work around compiler crash: dont use reference to empty structs
-                const dependencies = comptime if (event_systems_dependencies[system_index].len == 0) [0]u32{} else event_systems_dependencies[system_index];
+                const dependencies = comptime if (system_dependencies.wait_on_indices.len == 0) &[0]u32{} else system_dependencies.wait_on_indices;
                 self.thread_pool.spawnRe(
-                    &dependencies,
+                    dependencies,
                     event_in_flight,
                     system_index,
                     DispatchJob.exec,
@@ -248,129 +199,245 @@ pub fn CreateScheduler(
         }
 
         fn EventDispatchJob(
-            comptime func: *const anyopaque,
-            comptime FuncType: type,
-            comptime metadata: SystemMetadata,
-            comptime include_bitmask: Storage.ComponentMask.Bits,
-            comptime exclude_bitmask: Storage.ComponentMask.Bits,
-            comptime component_query_types: []const type,
+            comptime func: anytype,
+            comptime Storage: type,
             comptime EventArgument: type,
         ) type {
             return struct {
                 const DispatchJob = @This();
 
-                storage: *Storage,
                 event_argument: EventArgument,
+                storage: *Storage,
 
                 pub fn exec(self_job: DispatchJob) void {
                     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
                     defer zone.End();
 
-                    if (metadata == .flush_storage_edit_queue) {
-                        // if this is a debug build we do not want inline (to get better error messages), otherwise inline systems for performance
-                        const system_call_modidifer: std.builtin.CallModifier = if (@import("builtin").mode == .Debug) .never_inline else .always_inline;
+                    const FuncType = @TypeOf(func);
+                    const param_types = comptime get_param_types_blk: {
+                        const func_info = @typeInfo(FuncType);
+                        var types: [func_info.Fn.params.len]type = undefined;
+                        for (&types, func_info.Fn.params) |*Type, param| {
+                            Type.* = param.type.?;
+                        }
 
-                        const system_ptr: FuncType = @ptrCast(func);
-                        @call(system_call_modidifer, system_ptr.*, .{self_job.storage});
-
-                        return;
-                    }
-
-                    const param_types = comptime metadata.paramArgTypes();
-                    var arguments: std.meta.Tuple(param_types) = undefined;
-
-                    var storage_buffer: [component_query_types.len][]u8 = undefined;
-                    var storage = Storage.OpaqueArchetype.StorageData{
-                        .inner_len = undefined,
-                        .outer = &storage_buffer,
+                        break :get_param_types_blk types;
                     };
 
-                    var system_invocation_count = comptime if (metadata.hasInvocationCount()) meta.InvocationCount{ .number = 0 } else {};
-                    var tree_cursor = Storage.Container.BinaryTree.IterCursor.fromRoot();
-                    tree_iter_loop: while (self_job.storage.container.tree.iterate(
-                        include_bitmask,
-                        exclude_bitmask,
-                        &tree_cursor,
-                    )) |archetype_index| {
-                        self_job.storage.container.archetypes.items[archetype_index].getStorageData(&storage, include_bitmask);
-
-                        const entities = self_job.storage.container.archetypes.items[archetype_index].entities.keys();
-                        for (0..storage.inner_len) |inner_index| {
-                            defer {
-                                if (comptime metadata.hasInvocationCount()) system_invocation_count.number += 1;
+                    var arguments: std.meta.Tuple(&param_types) = undefined;
+                    inline for (param_types, &arguments) |Param, *argument| {
+                        var arg = get_arg_blk: {
+                            if (Param == EventArgument) {
+                                break :get_arg_blk self_job.event_argument;
                             }
 
-                            inline for (
-                                param_types,
-                                comptime metadata.paramCategories(),
-                                &arguments,
-                                0..,
-                            ) |
-                                Param,
-                                param_category,
-                                *argument,
-                                nth_argument,
-                            | {
-                                switch (param_category) {
-                                    .component_value => {
-                                        // get size of the parameter type
-                                        const param_size = @sizeOf(Param);
-                                        if (param_size > 0) {
-                                            const component_index = comptime if (metadata.hasEntityArgument()) nth_argument - 1 else nth_argument;
-
-                                            const from = inner_index * param_size;
-                                            const to = from + param_size;
-                                            const bytes = storage.outer[component_index][from..to];
-                                            argument.* = @as(*Param, @ptrCast(@alignCast(bytes))).*;
-                                        }
-                                    },
-                                    .component_ptr => {
-                                        const component_index = comptime if (metadata.hasEntityArgument()) nth_argument - 1 else nth_argument;
-                                        const CompQueryType = component_query_types[component_index];
-
-                                        // get size of the pointer child type (Param == *CompQueryType)
-                                        const param_size = @sizeOf(CompQueryType);
-                                        if (param_size > 0) {
-                                            const from = inner_index * param_size;
-                                            const to = from + param_size;
-                                            const bytes = storage.outer[component_index][from..to];
-                                            argument.* = @as(*CompQueryType, @ptrCast(@alignCast(bytes)));
-                                        }
-                                    },
-                                    .entity => argument.* = entities[inner_index],
-                                    .query_ptr => {
-                                        const Iter = @typeInfo(Param).Pointer.child;
-                                        var iter = Iter.init(self_job.storage.container.archetypes.items, self_job.storage.container.tree);
-                                        argument.* = &iter;
-                                    },
-                                    .invocation_number_value => argument.* = system_invocation_count,
-                                    .event_argument => argument.* = self_job.event_argument,
-                                    .storage_edit_queue => argument.* = &self_job.storage.storage_queue,
-                                    .exclude_entities_with => argument.* = Param{},
-                                }
+                            const param_info = @typeInfo(Param);
+                            if (param_info != .Pointer) {
+                                @compileError("System Query and Subset arguments must be pointer type");
                             }
 
-                            // if this is a debug build we do not want inline (to get better error messages), otherwise inline systems for performance
-                            const system_call_modidifer: std.builtin.CallModifier = if (@import("builtin").mode == .Debug) .never_inline else .always_inline;
+                            break :get_arg_blk switch (param_info.Pointer.child.EcezType) {
+                                QueryType => param_info.Pointer.child.submit(self_job.storage),
+                                SubsetType => param_info.Pointer.child{ .storage = self_job.storage },
+                                else => |Type| @compileError("Unknown EcezType " ++ @typeName(Type)), // This is a ecez bug if hit (i.e not user error)
+                            };
+                        };
 
-                            if (comptime metadata.returnSystemCommand()) {
-                                const system_ptr: FuncType = @ptrCast(func);
-                                const return_command: meta.ReturnCommand = @call(system_call_modidifer, system_ptr.*, arguments);
-
-                                if (return_command == .@"break") {
-                                    break :tree_iter_loop;
-                                }
-                            } else {
-                                const system_ptr: FuncType = @ptrCast(func);
-                                @call(system_call_modidifer, system_ptr.*, arguments);
-                            }
+                        // TODO: store all queries on self_job struct to ensure lifetime
+                        if (Param == EventArgument) {
+                            argument.* = self_job.event_argument;
+                        } else {
+                            argument.* = &arg;
                         }
                     }
+
+                    // if this is a debug build we do not want inline (to get better error messages), otherwise inline systems for performance
+                    const system_call_modidifer: std.builtin.CallModifier = if (@import("builtin").mode == .Debug) .never_inline else .always_inline;
+                    @call(system_call_modidifer, func, arguments);
                 }
             };
         }
     };
 }
+
+pub const EventType = struct {};
+
+pub fn Event(comptime name: []const u8, comptime systems: anytype) type {
+    const systems_fields = @typeInfo(@TypeOf(systems));
+    if (systems_fields != .Struct) {
+        @compileError("Event expect systems to be a tuple of systems");
+    }
+
+    for (systems_fields.Struct.fields, 0..) |system_field, system_index| {
+        const system_field_info = @typeInfo(system_field.type);
+        if (system_field_info != .Fn) {
+            const error_msg = std.fmt.comptimePrint("Event must be populated with functions, system number '{d}' was {s}", .{
+                system_index,
+                @typeName(system_field.type),
+            });
+            @compileError(error_msg);
+        }
+    }
+
+    return struct {
+        const ThisEvent = @This();
+
+        pub const EcezType = EventType;
+        pub const _name = name;
+        pub const _systems = systems;
+
+        // TODO: validate given a storage
+        pub fn getSystemCount() u32 {
+            comptime var system_count = 0;
+            const systems_info = @typeInfo(@TypeOf(ThisEvent._systems));
+            system_loop: inline for (systems_info.Struct.fields) |field_system| {
+                const system_info = @typeInfo(field_system.type);
+                if (system_info != .Fn) {
+                    continue :system_loop;
+                }
+                system_count += 1;
+            }
+
+            return system_count;
+        }
+    };
+}
+
+// TODO: move scheduler and dependency_chain to same folder. Move this logic in this folder out of this file
+pub const CompileReflect = struct {
+    pub fn countAndVerifyEvents(comptime events: anytype) u32 {
+        const events_info = events_info_blk: {
+            const info: std.builtin.Type = @typeInfo(@TypeOf(events));
+            if (info != .Struct) {
+                @compileError("expected events to be a struct of Event");
+            }
+            break :events_info_blk info.Struct;
+        };
+
+        inline for (events_info.fields, 0..) |events_fields, event_index| {
+            if (events_fields.default_value == null) {
+                @compileError(std.fmt.comptimePrint("event number {d} is not an event. Events must be created with ecez.Event()", .{event_index}));
+            }
+
+            const this_event = @as(*const events_fields.type, @ptrCast(events_fields.default_value.?)).*;
+            const has_EcezType = @hasField(this_event, "EcezType");
+            const has_name = @hasField(this_event, "_name");
+            const has_systems = @hasField(this_event, "_systems");
+
+            const has_expected_decls = has_EcezType and has_name and has_systems;
+            if (has_expected_decls) {
+                @compileError(@typeName(events[event_index]) ++ " Event missing expected decal. Events must be created with ecez.Event()");
+            }
+
+            if (this_event.EcezType != EventType) {
+                @compileError(std.fmt.comptimePrint("event number {d} is not an event. Events must be created with ecez.Event()", .{event_index}));
+            }
+        }
+
+        return events_info.fields.len;
+    }
+    test "countAndVerifyEvents return correct event count" {
+        const event1 = Event("a", .{countAndVerifyEvents});
+        const event2 = Event("b", .{std.debug.assert});
+        const event3 = Event("c", .{std.debug.assert});
+        const event_count = countAndVerifyEvents(.{ event1, event2, event3 });
+        try std.testing.expectEqual(3, event_count);
+    }
+
+    pub fn countAndVerifySystems(comptime event: anytype) u32 {
+        {
+            const info: std.builtin.Type = @typeInfo(event);
+            if (info != .Struct) {
+                @compileError("expected events to be a struct of Event");
+            }
+        }
+
+        comptime var system_count = 0;
+        const systems_info = @typeInfo(@TypeOf(event._systems));
+        system_loop: inline for (systems_info.Struct.fields) |field_system| {
+            const system_info = @typeInfo(field_system.type);
+            if (system_info != .Fn) {
+                continue :system_loop;
+            }
+
+            // Ensure arguments are queries
+            const params = system_info.Fn.params;
+            for (params) |param| {
+                if (param.is_generic) {
+                    @compileError("system of type " ++ @typeName(field_system.type) ++ " has generic parameter, expected ecez storage query, or event argument");
+                }
+
+                if (param.type == null) {
+                    @compileError("system of type " ++ @typeName(field_system.type) ++ " is missing type, expected ecez storage query, or event argument");
+                }
+
+                // TODO: verify that system has EventArgument, or Query, or ???
+                // const ParamType = param.type.?;
+                // const has_EcezType = @hasField(ParamType, "EcezType");
+                // if (has_EcezType == false or ParamType.EcezType != QueryType) {
+                //     @compileError("system of type " ++ @typeName(field_system.type) ++ " has parameter of type '" ++ @typeName(ParamType) ++ "' expected ecez storage query");
+                // }
+            }
+
+            system_count += 1;
+        }
+
+        return system_count;
+    }
+    test "countAndVerifySystems return correct system count" {
+        const event1 = Event("a", .{std.debug.assert});
+        const event2 = Event("b", .{ std.debug.assert, std.debug.assert });
+        const event3 = Event("c", .{ std.debug.assert, std.debug.assert, std.debug.assert });
+
+        try std.testing.expectEqual(1, comptime countAndVerifySystems(event1));
+        try std.testing.expectEqual(2, comptime countAndVerifySystems(event2));
+        try std.testing.expectEqual(3, comptime countAndVerifySystems(event3));
+    }
+
+    pub fn GenerateEventEnum(comptime events: anytype) type {
+        const events_info = @typeInfo(@TypeOf(events)).Struct;
+
+        var enum_fields: [events_info.fields.len]std.builtin.Type.EnumField = undefined;
+        inline for (&enum_fields, events_info.fields, 0..) |*enum_field, events_fields, enum_value| {
+            const this_event = @as(*const events_fields.type, @ptrCast(events_fields.default_value.?)).*;
+            enum_field.name = this_event._name[0.. :0];
+            enum_field.value = enum_value;
+        }
+
+        const enum_info = std.builtin.Type{ .Enum = .{
+            .tag_type = u32,
+            .fields = &enum_fields,
+            .decls = &[_]std.builtin.Type.Declaration{},
+            .is_exhaustive = true,
+        } };
+
+        return @Type(enum_info);
+    }
+
+    pub fn DependencyListsType(comptime events: anytype, comptime event_count: u32) type {
+        var dependency_lists_type_fields: [event_count]std.builtin.Type.StructField = undefined;
+        for (&dependency_lists_type_fields, events) |*dependency_lists_type_field, event| {
+            const system_count = event.getSystemCount();
+            const DependecyArrayType = [system_count]gen_dependency_chain.Dependency;
+            const value = gen_dependency_chain.buildDependencyList(event._systems, system_count);
+
+            dependency_lists_type_field.* = .{
+                .name = event._name[0.. :0],
+                .type = DependecyArrayType,
+                .default_value = @ptrCast(&value),
+                .is_comptime = true,
+                .alignment = @alignOf(DependecyArrayType),
+            };
+        }
+
+        return @Type(std.builtin.Type{ .Struct = .{
+            .layout = .auto,
+            .fields = &dependency_lists_type_fields,
+            .decls = &[_]std.builtin.Type.Declaration{},
+            .is_tuple = false,
+        } });
+    }
+};
 
 const Testing = @import("Testing.zig");
 const testing = std.testing;
@@ -378,48 +445,35 @@ const testing = std.testing;
 const CreateStorage = @import("storage.zig").CreateStorage;
 const Entity = @import("entity_type.zig").Entity;
 
-const Event = meta.Event;
-const DependOn = meta.DependOn;
-const InvocationCount = meta.InvocationCount;
-
-// TODO: we cant use tuples here because of https://github.com/ziglang/zig/issues/12963
-const AEntityType = Testing.Archetype.A;
-const BEntityType = Testing.Archetype.B;
-const AbEntityType = Testing.Archetype.AB;
-const AcEntityType = Testing.Archetype.AC;
-const BcEntityType = Testing.Archetype.BC;
-const AbcEntityType = Testing.Archetype.ABC;
+const AbEntityType = Testing.Structure.AB;
+const AcEntityType = Testing.Structure.AC;
+const BcEntityType = Testing.Structure.BC;
+const AbcEntityType = Testing.Structure.ABC;
 
 const StorageStub = CreateStorage(Testing.AllComponentsTuple);
 
-test "event can have no entities or even archetype to work with" {
+test "system query can mutate components" {
+    const Query = StorageStub.Query(struct {
+        a: *Testing.Component.A,
+        b: Testing.Component.B,
+    }, .{});
+
     const SystemStruct = struct {
-        pub fn mutateStuff(a: *Testing.Component.A, b: Testing.Component.B) void {
-            a.value += @as(u32, @intCast(b.value));
+        pub fn mutateStuff(ab: *Query) void {
+            while (ab.next()) |ent_ab| {
+                ent_ab.a.value += ent_ab.b.value;
+            }
         }
     };
+
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(std.testing.allocator, .{});
+    var scheduler = try CreateScheduler(.{Event("onFoo", .{SystemStruct.mutateStuff})}).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
     scheduler.dispatchEvent(&storage, .onFoo, .{});
     scheduler.waitEvent(.onFoo);
-}
-
-test "event can mutate components" {
-    const SystemStruct = struct {
-        pub fn mutateStuff(a: *Testing.Component.A, b: Testing.Component.B) void {
-            a.value += @as(u32, @intCast(b.value));
-        }
-    };
-
-    var storage = try StorageStub.init(testing.allocator);
-    defer storage.deinit();
-
-    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(std.testing.allocator, .{});
-    defer scheduler.deinit();
 
     const initial_state = AbEntityType{
         .a = Testing.Component.A{ .value = 1 },
@@ -436,135 +490,384 @@ test "event can mutate components" {
     );
 }
 
-test "event exclude types exclude entities" {
-    const SystemStructNoBC = struct {
-        pub fn mutateA(a: *Testing.Component.A, e: meta.ExcludeEntitiesWith(.{ Testing.Component.B, Testing.Component.C })) void {
-            _ = e;
-            a.value += 1;
-        }
+test "system SubStorage can spawn new entites (and no race hazards)" {
+    const Queries = struct {
+        pub const ReadB = StorageStub.Query(struct {
+            b: Testing.Component.B,
+        }, .{});
+
+        pub const WriteB = StorageStub.Query(struct {
+            b: *Testing.Component.B,
+        }, .{});
+
+        pub const WriteA = StorageStub.Query(struct {
+            a: *Testing.Component.A,
+        }, .{});
+
+        pub const ReadA = StorageStub.Query(struct {
+            a: Testing.Component.A,
+        }, .{});
     };
 
-    const SystemStructNoB = struct {
-        pub fn mutateA(a: *Testing.Component.A, e: meta.ExcludeEntitiesWith(.{Testing.Component.B})) void {
-            _ = e;
-            a.value += 1;
+    const SubsetA = StorageStub.Subset(.{Testing.Component.A}, .read_and_write);
+    const SubsetB = StorageStub.Subset(.{Testing.Component.B}, .read_and_write);
+
+    const initial_entity_count = 128;
+    // This would probably be better as data stored in components instead of EventArgument
+    const SpawnedEntities = struct {
+        a: [initial_entity_count]Entity,
+        b: [initial_entity_count]Entity,
+    };
+
+    const SystemStruct = struct {
+        pub fn incrB(b_query: *Queries.WriteB) void {
+            while (b_query.next()) |item| {
+                item.b.value += 1;
+            }
+        }
+
+        pub fn decrB(b_query: *Queries.WriteB) void {
+            while (b_query.next()) |item| {
+                item.b.value -= 1;
+            }
+        }
+
+        pub fn incrA(a_query: *Queries.WriteA) void {
+            while (a_query.next()) |item| {
+                item.a.value += 1;
+            }
+        }
+
+        pub fn decrA(a_query: *Queries.WriteA) void {
+            while (a_query.next()) |item| {
+                item.a.value -= 1;
+            }
+        }
+
+        pub fn spawnEntityAFromB(b_query: *Queries.ReadB, a_sub: *SubsetA, spawned_entities: *SpawnedEntities) void {
+            for (&spawned_entities.a) |*entity| {
+                const item = b_query.next().?;
+
+                entity.* = a_sub.createEntity(.{
+                    Testing.Component.A{ .value = item.b.value },
+                }) catch @panic("OOM");
+            }
+        }
+
+        pub fn spawnEntityBFromA(a_query: *Queries.ReadA, b_sub: *SubsetB, spawned_entities: *SpawnedEntities) void {
+            // Loop reverse to make it more likely for race conditions to cause issues
+            for (0..spawned_entities.b.len) |reverse_index| {
+                const item = a_query.next().?;
+
+                const index = spawned_entities.b.len - reverse_index - 1;
+                spawned_entities.b[index] = b_sub.createEntity(.{
+                    Testing.Component.B{ .value = @intCast(item.a.value) },
+                }) catch @panic("OOM");
+            }
         }
     };
 
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = try CreateScheduler(
-        StorageStub,
+    var scheduler = try CreateScheduler(.{Event(
+        "onFoo",
         .{
-            Event("exclude_b_c", .{SystemStructNoBC}, .{}),
-            Event("exclude_b", .{SystemStructNoB}, .{}),
+            SystemStruct.incrB,
+            SystemStruct.decrB,
+            SystemStruct.spawnEntityAFromB,
+            SystemStruct.spawnEntityBFromA,
+            SystemStruct.incrA,
+            SystemStruct.decrA,
         },
-    ).init(testing.allocator, .{});
+    )}).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
-    const a_entity = try storage.createEntity(AEntityType{
-        .a = Testing.Component.A{ .value = 0 },
-    });
-    const ab_entity = try storage.createEntity(AbEntityType{
-        .a = Testing.Component.A{ .value = 0 },
-        .b = Testing.Component.B{},
-    });
-    const ac_entity = try storage.createEntity(AcEntityType{
-        .a = Testing.Component.A{ .value = 0 },
-        .c = Testing.Component.C{},
-    });
-    const abc_entity = try storage.createEntity(AbcEntityType{
-        .a = Testing.Component.A{ .value = 0 },
-        .b = Testing.Component.B{},
-        .c = Testing.Component.C{},
-    });
+    // Do this test repeatedlt to ensure it's determenistic (no race hazards)
+    for (0..128) |_| {
+        storage.clearRetainingCapacity();
 
-    scheduler.dispatchEvent(&storage, .exclude_b_c, .{});
-    scheduler.waitEvent(.exclude_b_c);
+        var initial_entites: [initial_entity_count]Entity = undefined;
+        for (&initial_entites, 0..) |*entity, iter| {
+            entity.* = try storage.createEntity(.{
+                Testing.Component.B{ .value = @intCast(iter) },
+            });
+        }
+
+        var spawned_entites: SpawnedEntities = undefined;
+        scheduler.dispatchEvent(&storage, .onFoo, &spawned_entites);
+        scheduler.waitEvent(.onFoo);
+
+        for (&initial_entites, 0..) |entity, iter| {
+            try testing.expectEqual(
+                Testing.Component.B{ .value = @intCast(iter) },
+                try storage.getComponent(entity, Testing.Component.B),
+            );
+        }
+
+        for (spawned_entites.a, 0..) |entity, iter| {
+            try testing.expectEqual(
+                Testing.Component.A{ .value = @intCast(iter) },
+                try storage.getComponent(entity, Testing.Component.A),
+            );
+        }
+
+        for (spawned_entites.b, 0..) |entity, iter| {
+            // Make sure these entities is not the ones we spawned in this for loop
+            try std.testing.expect(entity.id != iter);
+
+            const reverse = initial_entity_count - iter - 1;
+            try testing.expectEqual(
+                Testing.Component.B{ .value = @intCast(reverse) },
+                try storage.getComponent(entity, Testing.Component.B),
+            );
+        }
+    }
+}
+
+test "system sub storage can mutate components" {
+    const Query = StorageStub.Query(struct {
+        entity: Entity,
+    }, .{});
+
+    const SubStorage = StorageStub.Subset(.{
+        Testing.Component.A,
+        Testing.Component.B,
+    }, .read_and_write);
+
+    const SystemStruct = struct {
+        pub fn mutateStuff(entities: *Query, ab: *SubStorage) void {
+            while (entities.next()) |item| {
+                const a = ab.getComponent(item.entity, Testing.Component.A) catch @panic("oof");
+
+                ab.setComponents(item.entity, .{
+                    Testing.Component.B{ .value = @intCast(a.value) },
+                }) catch @panic("oof");
+            }
+        }
+    };
+
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    var scheduler = try CreateScheduler(.{Event("onFoo", .{SystemStruct.mutateStuff})}).init(std.testing.allocator, .{});
+    defer scheduler.deinit();
+
+    scheduler.dispatchEvent(&storage, .onFoo, .{});
+    scheduler.waitEvent(.onFoo);
+
+    const initial_state = AbEntityType{
+        .a = Testing.Component.A{ .value = 42 },
+    };
+    const entity = try storage.createEntity(initial_state);
+
+    scheduler.dispatchEvent(&storage, .onFoo, .{});
+    scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
-        Testing.Component.A{ .value = 1 },
-        try storage.getComponent(a_entity, Testing.Component.A),
-    );
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 0 },
-        try storage.getComponent(ab_entity, Testing.Component.A),
-    );
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 0 },
-        try storage.getComponent(ac_entity, Testing.Component.A),
-    );
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 0 },
-        try storage.getComponent(abc_entity, Testing.Component.A),
-    );
-
-    scheduler.dispatchEvent(&storage, .exclude_b, .{});
-    scheduler.waitEvent(.exclude_b);
-
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 2 },
-        try storage.getComponent(a_entity, Testing.Component.A),
-    );
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 0 },
-        try storage.getComponent(ab_entity, Testing.Component.A),
-    );
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 1 },
-        try storage.getComponent(ac_entity, Testing.Component.A),
-    );
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 0 },
-        try storage.getComponent(abc_entity, Testing.Component.A),
+        Testing.Component.B{ .value = 42 },
+        try storage.getComponent(entity, Testing.Component.B),
     );
 }
 
-test "DependOn support structs" {
-    const SystemStruct1 = struct {
-        pub fn func1(a: *Testing.Component.A) void {
-            a.value += 1;
-        }
+test "Dispatch is determenistic (no race conditions)" {
+    const Queries = struct {
+        const MutA = StorageStub.Query(struct {
+            a: *Testing.Component.A,
+        }, .{});
 
-        pub fn func2(a: *Testing.Component.B) void {
-            a.value += 1;
-        }
+        const MutB = StorageStub.Query(struct {
+            b: *Testing.Component.B,
+        }, .{});
+
+        const EntityQuery = StorageStub.Query(struct {
+            entity: Entity,
+        }, .{});
     };
 
-    const SystemStruct2 = struct {
-        pub fn func3(a: *Testing.Component.A) void {
-            a.value *= 2;
+    const AbSubStorage = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B }, .read_and_write);
+
+    const SystemStruct = struct {
+        pub fn incrA(q: *Queries.MutA) void {
+            while (q.next()) |item| {
+                item.a.value += 1;
+            }
         }
 
-        pub fn func4(a: *Testing.Component.B) void {
-            a.value *= 2;
-        }
-    };
-
-    const SystemStruct3 = struct {
-        pub fn func5(a: *Testing.Component.A) void {
-            a.value += 1;
+        pub fn incrB(q: *Queries.MutB) void {
+            while (q.next()) |item| {
+                item.b.value += 1;
+            }
         }
 
-        pub fn func6(a: *Testing.Component.B) void {
-            a.value += 1;
+        pub fn doubleA(q: *Queries.MutA) void {
+            while (q.next()) |item| {
+                item.a.value *= 2;
+            }
+        }
+
+        pub fn doubleB(q: *Queries.MutB) void {
+            while (q.next()) |item| {
+                item.b.value *= 2;
+            }
+        }
+
+        pub fn storageIncrAIncrB(entities: *Queries.EntityQuery, sub: *AbSubStorage) void {
+            while (entities.next()) |item| {
+                const ab = sub.getComponents(item.entity, struct {
+                    a: *Testing.Component.A,
+                    b: *Testing.Component.B,
+                }) catch @panic("oof");
+
+                ab.a.value += 1;
+                ab.b.value += 1;
+            }
+        }
+
+        pub fn storageDoubleADoubleB(entities: *Queries.EntityQuery, sub: *AbSubStorage) void {
+            while (entities.next()) |item| {
+                const ab = sub.getComponents(item.entity, struct {
+                    a: *Testing.Component.A,
+                    b: *Testing.Component.B,
+                }) catch @panic("oof");
+
+                ab.a.value *= 2;
+                ab.b.value *= 2;
+            }
+        }
+
+        pub fn storageZeroAZeroB(entities: *Queries.EntityQuery, sub: *AbSubStorage) void {
+            while (entities.next()) |item| {
+                sub.setComponents(item.entity, .{
+                    Testing.Component.A{ .value = 0 },
+                    Testing.Component.B{ .value = 0 },
+                }) catch @panic("oof");
+            }
         }
     };
 
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = try CreateScheduler(StorageStub, .{
-        Event("onFoo", .{
-            SystemStruct1,
-            DependOn(SystemStruct2, .{SystemStruct1}),
-            DependOn(SystemStruct3, .{SystemStruct2}),
-        }, .{}),
+    // Run the test many times, expect the same result
+    for (0..128) |_| {
+        defer storage.clearRetainingCapacity();
+
+        var scheduler = try CreateScheduler(.{
+            Event("onFoo", .{
+                SystemStruct.storageZeroAZeroB,
+                SystemStruct.incrA,
+                SystemStruct.doubleA,
+                SystemStruct.incrA,
+                SystemStruct.incrB,
+                SystemStruct.doubleB,
+                SystemStruct.incrB,
+                SystemStruct.storageDoubleADoubleB,
+                SystemStruct.storageIncrAIncrB,
+            }),
+        }).init(std.testing.allocator, .{});
+        defer scheduler.deinit();
+
+        const initial_state = Testing.Structure.AB{
+            .a = Testing.Component.A{ .value = 42 },
+            .b = Testing.Component.B{ .value = 42 },
+        };
+        var entities: [128]Entity = undefined;
+        for (&entities) |*entity| {
+            entity.* = try storage.createEntity(initial_state);
+        }
+
+        // (((0 + 1) * 2) + 1) * 2 + 1 = 7
+        const expected_value = 7;
+
+        scheduler.dispatchEvent(&storage, .onFoo, .{});
+        scheduler.waitEvent(.onFoo);
+
+        for (entities) |entity| {
+            const ab = try storage.getComponents(entity, Testing.Structure.AB);
+            try testing.expectEqual(
+                Testing.Component.A{ .value = expected_value },
+                ab.a,
+            );
+            try testing.expectEqual(
+                Testing.Component.B{ .value = expected_value },
+                ab.b,
+            );
+        }
+
+        // (((0 + 1) * 2) + 1) * 2 + 1 = 7
+        scheduler.dispatchEvent(&storage, .onFoo, .{});
+        scheduler.waitEvent(.onFoo);
+
+        for (entities) |entity| {
+            const ab = try storage.getComponents(entity, Testing.Structure.AB);
+            try testing.expectEqual(
+                Testing.Component.A{ .value = expected_value },
+                ab.a,
+            );
+            try testing.expectEqual(
+                Testing.Component.B{ .value = expected_value },
+                ab.b,
+            );
+        }
+    }
+}
+
+test "Dispatch with multiple events works" {
+    const Queries = struct {
+        const MutA = StorageStub.Query(struct {
+            a: *Testing.Component.A,
+        }, .{});
+
+        const MutB = StorageStub.Query(struct {
+            b: *Testing.Component.B,
+        }, .{});
+    };
+
+    const SystemStruct = struct {
+        pub fn incrA(q: *Queries.MutA) void {
+            while (q.next()) |item| {
+                item.a.value += 1;
+            }
+        }
+
+        pub fn incrB(q: *Queries.MutB) void {
+            while (q.next()) |item| {
+                item.b.value += 1;
+            }
+        }
+
+        pub fn doubleA(q: *Queries.MutA) void {
+            while (q.next()) |item| {
+                item.a.value *= 2;
+            }
+        }
+
+        pub fn doubleB(q: *Queries.MutB) void {
+            while (q.next()) |item| {
+                item.b.value *= 2;
+            }
+        }
+    };
+
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    var scheduler = try CreateScheduler(.{
+        Event("onA", .{
+            SystemStruct.incrA,
+            SystemStruct.doubleA,
+            SystemStruct.incrA,
+        }),
+        Event("onB", .{
+            SystemStruct.incrB,
+            SystemStruct.doubleB,
+            SystemStruct.incrB,
+        }),
     }).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
-    const initial_state = Testing.Archetype.AB{
+    const initial_state = Testing.Structure.AB{
         .a = Testing.Component.A{ .value = 0 },
         .b = Testing.Component.B{ .value = 0 },
     };
@@ -574,350 +877,55 @@ test "DependOn support structs" {
     }
 
     // ((0 + 1) * 2) + 1 = 3
-    scheduler.dispatchEvent(&storage, .onFoo, .{});
-    scheduler.waitEvent(.onFoo);
+    scheduler.dispatchEvent(&storage, .onA, .{});
+    scheduler.dispatchEvent(&storage, .onB, .{});
+    scheduler.waitIdle();
 
     // ((3 + 1) * 2) + 1 = 9
-    scheduler.dispatchEvent(&storage, .onFoo, .{});
-    scheduler.waitEvent(.onFoo);
+    scheduler.dispatchEvent(&storage, .onA, .{});
+    scheduler.dispatchEvent(&storage, .onB, .{});
+    scheduler.waitIdle();
 
     // ((9 + 1) * 2) + 1 = 21
-    scheduler.dispatchEvent(&storage, .onFoo, .{});
-    scheduler.waitEvent(.onFoo);
+    scheduler.dispatchEvent(&storage, .onA, .{});
+    scheduler.dispatchEvent(&storage, .onB, .{});
+    scheduler.waitIdle();
 
     // ((21 + 1) * 2) + 1 = 45
-    scheduler.dispatchEvent(&storage, .onFoo, .{});
-    scheduler.waitEvent(.onFoo);
+    scheduler.dispatchEvent(&storage, .onA, .{});
+    scheduler.dispatchEvent(&storage, .onB, .{});
+    scheduler.waitIdle();
 
     const expected_value = 45;
     for (entities) |entity| {
+        const ab = try storage.getComponents(entity, Testing.Structure.AB);
         try testing.expectEqual(
             Testing.Component.A{ .value = expected_value },
-            try storage.getComponent(entity, Testing.Component.A),
+            ab.a,
         );
         try testing.expectEqual(
             Testing.Component.B{ .value = expected_value },
-            try storage.getComponent(entity, Testing.Component.B),
-        );
-    }
-}
-
-// https://github.com/Avokadoen/ecez/issues/162
-// test "events can be registered through struct or individual function(s)" {
-//     const SystemStruct1 = struct {
-//         pub fn func1(a: *Testing.Component.A) void {
-//             a.value += 1;
-//         }
-
-//         pub fn func2(a: *Testing.Component.A) void {
-//             a.value += 1;
-//         }
-//     };
-
-//     const SystemStruct2 = struct {
-//         pub fn func3(a: *Testing.Component.B) void {
-//             a.value += 1;
-//         }
-//     };
-
-//     var storage = try StorageStub.init(testing.allocator);
-//     defer storage.deinit();
-
-//     var scheduler = try CreateScheduler(StorageStub, .{
-//         Event("onFoo", .{
-//             SystemStruct1.func1,
-//             DependOn(SystemStruct1.func2, .{SystemStruct1.func1}),
-//             SystemStruct2,
-//         }, .{}),
-//     }).init(std.testing.allocator, .{});
-//     defer scheduler.deinit();
-
-//     const initial_state = Testing.Archetype.AB{
-//         .a = Testing.Component.A{ .value = 0 },
-//         .b = Testing.Component.B{ .value = 0 },
-//     };
-//     const entity = try storage.createEntity(initial_state);
-
-//     scheduler.dispatchEvent(&storage, .onFoo, .{});
-//     scheduler.waitEvent(.onFoo);
-
-//     try testing.expectEqual(
-//         Testing.Component.A{ .value = 2 },
-//         try storage.getComponent(entity, Testing.Component.A),
-//     );
-//     try testing.expectEqual(
-//         Testing.Component.B{ .value = 1 },
-//         try storage.getComponent(entity, Testing.Component.B),
-//     );
-// }
-
-test "events call systems" {
-    // define a system type
-    const SystemType = struct {
-        pub fn systemOne(a: *Testing.Component.A) void {
-            a.value += 1;
-        }
-        pub fn systemTwo(b: *Testing.Component.B) void {
-            b.value += 1;
-        }
-    };
-
-    const SystemThree = struct {
-        pub fn func(a: *Testing.Component.A) void {
-            a.value += 1;
-        }
-    };
-
-    var storage = try StorageStub.init(testing.allocator);
-    defer storage.deinit();
-
-    var scheduler = try CreateScheduler(StorageStub, .{
-        Event("onFoo", .{SystemType}, .{}),
-        Event("onBar", .{SystemThree}, .{}),
-    }).init(std.testing.allocator, .{});
-    defer scheduler.deinit();
-
-    const entity1 = blk: {
-        const initial_state = AbEntityType{
-            .a = Testing.Component.A{ .value = 0 },
-            .b = Testing.Component.B{ .value = 0 },
-        };
-        break :blk try storage.createEntity(initial_state);
-    };
-
-    const entity2 = blk: {
-        const initial_state = AEntityType{
-            .a = Testing.Component.A{ .value = 2 },
-        };
-        break :blk try storage.createEntity(initial_state);
-    };
-
-    scheduler.dispatchEvent(&storage, .onFoo, .{});
-    scheduler.waitEvent(.onFoo);
-
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 1 },
-        try storage.getComponent(entity1, Testing.Component.A),
-    );
-    try testing.expectEqual(
-        Testing.Component.B{ .value = 1 },
-        try storage.getComponent(entity1, Testing.Component.B),
-    );
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 3 },
-        try storage.getComponent(entity2, Testing.Component.A),
-    );
-
-    scheduler.dispatchEvent(&storage, .onBar, .{});
-    scheduler.waitEvent(.onBar);
-
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 2 },
-        try storage.getComponent(entity1, Testing.Component.A),
-    );
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 4 },
-        try storage.getComponent(entity2, Testing.Component.A),
-    );
-}
-
-test "systems can access edit queue" {
-    const A = Testing.Component.A;
-    const B = Testing.Component.B;
-
-    // define a system type
-    const SystemType1 = struct {
-        // foreach entity with A
-        pub fn system(entity: Entity, a: A, edit_queue: *StorageStub.StorageEditQueue) void {
-            // remove A
-            edit_queue.queueRemoveComponent(entity, A) catch unreachable;
-            // add B with a.value + 1
-            edit_queue.queueSetComponent(entity, B{ .value = @intCast(a.value + 1) }) catch unreachable;
-        }
-    };
-
-    var storage = try StorageStub.init(testing.allocator);
-    defer storage.deinit();
-
-    const OnFooEvent = Event("onFoo", .{
-        SystemType1,
-        meta.FlushEditQueue(StorageStub),
-    }, .{});
-    var scheduler = try CreateScheduler(StorageStub, .{OnFooEvent}).init(std.testing.allocator, .{});
-    defer scheduler.deinit();
-
-    var entities: [128]Entity = undefined;
-    for (&entities, 0..) |*entity, index| {
-        const initial_state = AEntityType{
-            .a = A{ .value = @intCast(index) },
-        };
-        entity.* = try storage.createEntity(initial_state);
-    }
-
-    scheduler.dispatchEvent(&storage, .onFoo, .{});
-    scheduler.waitEvent(.onFoo);
-
-    for (entities, 0..) |entity, index| {
-        try testing.expect(storage.hasComponent(entity, Testing.Component.A) == false);
-        try testing.expectEqual(B{ .value = @intCast(index + 1) }, try storage.getComponent(entity, Testing.Component.B));
-    }
-}
-
-test "systems can access current entity" {
-    // define a system type
-    const SystemType = struct {
-        pub fn systemOne(entity: Entity, a: *Testing.Component.A) void {
-            a.value += @as(u32, @intCast(entity.id));
-        }
-    };
-
-    var storage = try StorageStub.init(testing.allocator);
-    defer storage.deinit();
-
-    var scheduler = try CreateScheduler(
-        StorageStub,
-        .{Event("onFoo", .{SystemType}, .{})},
-    ).init(testing.allocator, .{});
-    defer scheduler.deinit();
-
-    var entities: [100]Entity = undefined;
-    for (&entities, 0..) |*entity, iter| {
-        const initial_state = AEntityType{
-            .a = .{ .value = @as(u32, @intCast(iter)) },
-        };
-        entity.* = try storage.createEntity(initial_state);
-    }
-
-    scheduler.dispatchEvent(&storage, .onFoo, .{});
-    scheduler.waitEvent(.onFoo);
-
-    for (entities) |entity| {
-        try testing.expectEqual(
-            Testing.Component.A{ .value = @as(u32, @intCast(entity.id)) * 2 },
-            try storage.getComponent(entity, Testing.Component.A),
-        );
-    }
-}
-
-test "systems entity access remain correct after single removeComponent" {
-    // define a system type
-    const SystemType = struct {
-        pub fn systemOne(entity: Entity, a: *Testing.Component.A) void {
-            a.value += @as(u32, @intCast(entity.id));
-        }
-    };
-
-    var storage = try StorageStub.init(testing.allocator);
-    defer storage.deinit();
-
-    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemType}, .{})}).init(std.testing.allocator, .{});
-    defer scheduler.deinit();
-
-    var entities: [100]Entity = undefined;
-    for (&entities, 0..) |*entity, iter| {
-        const initial_state = AEntityType{
-            .a = .{ .value = @as(u32, @intCast(iter)) },
-        };
-        entity.* = try storage.createEntity(initial_state);
-    }
-
-    scheduler.dispatchEvent(&storage, .onFoo, .{});
-    scheduler.waitEvent(.onFoo);
-
-    for (entities[0..50]) |entity| {
-        try testing.expectEqual(
-            Testing.Component.A{ .value = @as(u32, @intCast(entity.id)) * 2 },
-            try storage.getComponent(entity, Testing.Component.A),
-        );
-    }
-    for (entities[51..100]) |entity| {
-        try testing.expectEqual(
-            Testing.Component.A{ .value = @as(u32, @intCast(entity.id)) * 2 },
-            try storage.getComponent(entity, Testing.Component.A),
+            ab.b,
         );
     }
 }
 
 test "systems can accepts event related data" {
-    const MouseInput = struct {
-        x: u32,
-        y: u32,
+    const AddValue = struct {
+        v: u32,
     };
+
+    const Queries = struct {
+        const MutA = StorageStub.Query(struct {
+            a: *Testing.Component.A,
+        }, .{});
+    };
+
     // define a system type
-    const SystemType = struct {
-        pub fn systemOne(a: *Testing.Component.A, mouse: MouseInput) void {
-            a.value = mouse.x + mouse.y;
-        }
-    };
-
-    var storage = try StorageStub.init(testing.allocator);
-    defer storage.deinit();
-
-    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemType}, MouseInput)}).init(std.testing.allocator, .{});
-    defer scheduler.deinit();
-
-    const initial_state = AEntityType{
-        .a = .{ .value = 0 },
-    };
-    const entity = try storage.createEntity(initial_state);
-
-    scheduler.dispatchEvent(&storage, .onFoo, MouseInput{ .x = 40, .y = 2 });
-    scheduler.waitEvent(.onFoo);
-
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 42 },
-        try storage.getComponent(entity, Testing.Component.A),
-    );
-}
-
-test "event can mutate event extra argument" {
-    const MouseEvent = struct {
-        value: u32,
-    };
-    const SystemStruct = struct {
-        pub fn eventSystem(a: *Testing.Component.A, mouse_event: *MouseEvent) void {
-            mouse_event.value = a.value;
-        }
-    };
-
-    var storage = try StorageStub.init(testing.allocator);
-    defer storage.deinit();
-
-    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, MouseEvent)}).init(std.testing.allocator, .{});
-    defer scheduler.deinit();
-
-    const initial_state = AEntityType{
-        .a = Testing.Component.A{ .value = 42 },
-    };
-    _ = try storage.createEntity(initial_state);
-
-    var mouse_event = MouseEvent{ .value = 0 };
-
-    // make sure test is not modified in an illegal manner
-    try testing.expect(initial_state.a.value != mouse_event.value);
-
-    scheduler.dispatchEvent(&storage, .onFoo, &mouse_event);
-    scheduler.waitEvent(.onFoo);
-
-    try testing.expectEqual(initial_state.a.value, mouse_event.value);
-}
-
-test "event can request single query with component" {
-    const QueryA = StorageStub.Query(
-        struct { a: Testing.Component.A },
-        .{},
-    ).Iter;
-
-    const pass_value = 99;
-    const fail_value = 100;
-
-    const SystemStruct = struct {
-        pub fn eventSystem(a: *Testing.Component.A, query: *QueryA) void {
-            const item = query.next().?;
-            if (a.value == item.a.value) {
-                a.value = pass_value;
-            } else {
-                a.value = fail_value;
+    const System = struct {
+        pub fn addToA(q: *Queries.MutA, add_value: AddValue) void {
+            while (q.next()) |item| {
+                item.a.value += add_value.v;
             }
         }
     };
@@ -925,32 +933,39 @@ test "event can request single query with component" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(std.testing.allocator, .{});
+    var scheduler = try CreateScheduler(.{
+        Event("onFoo", .{System.addToA}),
+    }).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
-    const initial_state = AEntityType{
-        .a = Testing.Component.A{ .value = 42 },
-    };
-    const entity = try storage.createEntity(initial_state);
+    const entity = try storage.createEntity(.{Testing.Component.A{ .value = 0 }});
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{});
+    const value = 42;
+    scheduler.dispatchEvent(&storage, .onFoo, AddValue{ .v = value });
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
-        Testing.Component.A{ .value = pass_value },
+        Testing.Component.A{ .value = value },
         try storage.getComponent(entity, Testing.Component.A),
     );
 }
 
-test "event exit system loop" {
-    const SystemStruct = struct {
-        pub fn eventSystem(a: *Testing.Component.A) meta.ReturnCommand {
-            if (a.value == 1) {
-                a.value = 42;
-                return meta.ReturnCommand.@"break";
-            } else {
-                a.value = 42;
-                return meta.ReturnCommand.@"continue";
+test "systems can mutate event argument" {
+    const AddValue = struct {
+        v: u32,
+    };
+
+    const Queries = struct {
+        const ImmutA = StorageStub.Query(struct {
+            a: Testing.Component.A,
+        }, .{});
+    };
+
+    // define a system type
+    const System = struct {
+        pub fn addToA(q: *Queries.ImmutA, add_value: *AddValue) void {
+            while (q.next()) |item| {
+                add_value.v += item.a.value;
             }
         }
     };
@@ -958,53 +973,40 @@ test "event exit system loop" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(std.testing.allocator, .{});
+    var scheduler = try CreateScheduler(.{
+        Event("onFoo", .{System.addToA}),
+    }).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
-    const entity0 = try storage.createEntity(AEntityType{
-        .a = Testing.Component.A{ .value = 0 },
-    });
-    const entity1 = try storage.createEntity(AEntityType{
-        .a = Testing.Component.A{ .value = 1 },
-    });
-    const entity2 = try storage.createEntity(AEntityType{
-        .a = Testing.Component.A{ .value = 2 },
-    });
+    const value = 42;
+    _ = try storage.createEntity(.{Testing.Component.A{ .value = value }});
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{});
+    var event_argument = AddValue{ .v = 0 };
+    scheduler.dispatchEvent(&storage, .onFoo, &event_argument);
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
-        Testing.Component.A{ .value = 42 },
-        try storage.getComponent(entity0, Testing.Component.A),
-    );
-
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 42 },
-        try storage.getComponent(entity1, Testing.Component.A),
-    );
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 2 },
-        try storage.getComponent(entity2, Testing.Component.A),
+        value,
+        event_argument.v,
     );
 }
 
-test "event can request two queries without components" {
-    const QueryAMut = StorageStub.Query(
-        struct { a: *Testing.Component.A },
-        .{},
-    ).Iter;
+test "system can contain two queries" {
+    const Queries = struct {
+        const MutA = StorageStub.Query(struct {
+            a: *Testing.Component.A,
+        }, .{});
 
-    const QueryAConst = StorageStub.Query(
-        struct { a: Testing.Component.A },
-        .{},
-    ).Iter;
+        const ImmutA = StorageStub.Query(struct {
+            a: *Testing.Component.A,
+        }, .{});
+    };
 
     const pass_value = 99;
     const fail_value = 100;
 
     const SystemStruct = struct {
-        pub fn eventSystem(query_mut: *QueryAMut, query_const: *QueryAConst) void {
+        pub fn eventSystem(query_mut: *Queries.MutA, query_const: *Queries.ImmutA) void {
             const mut_item = query_mut.next().?;
             const const_item = query_const.next().?;
             if (mut_item.a.value == const_item.a.value) {
@@ -1018,13 +1020,12 @@ test "event can request two queries without components" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(std.testing.allocator, .{});
+    var scheduler = try CreateScheduler(.{Event("onFoo", .{
+        SystemStruct.eventSystem,
+    })}).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
-    const initial_state = AEntityType{
-        .a = Testing.Component.A{ .value = 42 },
-    };
-    const entity = try storage.createEntity(initial_state);
+    const entity = try storage.createEntity(.{Testing.Component.A{ .value = fail_value }});
 
     scheduler.dispatchEvent(&storage, .onFoo, .{});
     scheduler.waitEvent(.onFoo);
@@ -1035,94 +1036,70 @@ test "event can request two queries without components" {
     );
 }
 
-test "event can access invocation number" {
-    const SystemStruct = struct {
-        pub fn eventSystem(a: *Testing.Component.A, invocation_number: InvocationCount) void {
-            a.value = @intCast(invocation_number.number);
-        }
-    };
-
-    var storage = try StorageStub.init(testing.allocator);
-    defer storage.deinit();
-
-    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(std.testing.allocator, .{});
-    defer scheduler.deinit();
-
-    var entities: [100]Entity = undefined;
-    for (&entities) |*entity| {
-        const initial_state = AEntityType{
-            .a = Testing.Component.A{ .value = 0 },
-        };
-        entity.* = try storage.createEntity(initial_state);
-    }
-
-    scheduler.dispatchEvent(&storage, .onFoo, .{});
-    scheduler.waitEvent(.onFoo);
-
-    for (entities, 0..) |entity, index| {
-        try testing.expectEqual(
-            Testing.Component.A{ .value = @intCast(index) },
-            try storage.getComponent(entity, Testing.Component.A),
-        );
-    }
-}
-
 // NOTE: we don't use a cache anymore, but the test can stay for now since it might be good for
 //       detecting potential regressions
 test "event caching works" {
-    const System1 = struct {
-        pub fn system(a: *Testing.Component.A) void {
-            a.value += 1;
-        }
+    const Queries = struct {
+        const MutA = StorageStub.Query(struct {
+            a: *Testing.Component.A,
+        }, .{});
+
+        const MutB = StorageStub.Query(struct {
+            b: *Testing.Component.B,
+        }, .{});
     };
-    const System2 = struct {
-        pub fn system(b: *Testing.Component.B) void {
-            b.value += 1;
+
+    const Systems = struct {
+        pub fn incA(q: *Queries.MutA) void {
+            while (q.next()) |item| {
+                item.a.value += 1;
+            }
+        }
+
+        pub fn incB(q: *Queries.MutB) void {
+            while (q.next()) |item| {
+                item.b.value += 1;
+            }
         }
     };
 
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = try CreateScheduler(StorageStub, .{
-        Event("onEvent1", .{System1}, .{}),
-        Event("onEvent2", .{System2}, .{}),
+    var scheduler = try CreateScheduler(.{
+        Event("onIncA", .{Systems.incA}),
+        Event("onIncB", .{Systems.incB}),
     }).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
-    const entity1 = blk: {
-        const initial_state = AEntityType{
-            .a = .{ .value = 0 },
-        };
-        break :blk try storage.createEntity(initial_state);
-    };
+    const entity1 = try storage.createEntity(.{Testing.Component.A{ .value = 0 }});
 
-    scheduler.dispatchEvent(&storage, .onEvent1, .{});
-    scheduler.waitEvent(.onEvent1);
+    scheduler.dispatchEvent(&storage, .onIncA, .{});
+    scheduler.waitEvent(.onIncA);
 
-    try testing.expectEqual(Testing.Component.A{ .value = 1 }, try storage.getComponent(
-        entity1,
-        Testing.Component.A,
-    ));
+    try testing.expectEqual(
+        Testing.Component.A{ .value = 1 },
+        try storage.getComponent(entity1, Testing.Component.A),
+    );
 
     // move entity to archetype A, B
-    try storage.setComponent(entity1, Testing.Component.B{ .value = 0 });
+    try storage.setComponents(entity1, .{Testing.Component.B{ .value = 0 }});
 
-    scheduler.dispatchEvent(&storage, .onEvent1, .{});
-    scheduler.waitEvent(.onEvent1);
+    scheduler.dispatchEvent(&storage, .onIncA, .{});
+    scheduler.waitEvent(.onIncA);
 
-    try testing.expectEqual(Testing.Component.A{ .value = 2 }, try storage.getComponent(
-        entity1,
-        Testing.Component.A,
-    ));
+    try testing.expectEqual(
+        Testing.Component.A{ .value = 2 },
+        try storage.getComponent(entity1, Testing.Component.A),
+    );
 
-    scheduler.dispatchEvent(&storage, .onEvent2, .{});
-    scheduler.waitEvent(.onEvent2);
+    scheduler.dispatchEvent(&storage, .onIncB, .{});
+    scheduler.waitEvent(.onIncB);
 
-    try testing.expectEqual(Testing.Component.B{ .value = 1 }, try storage.getComponent(
-        entity1,
-        Testing.Component.B,
-    ));
+    try testing.expectEqual(
+        Testing.Component.B{ .value = 1 },
+        try storage.getComponent(entity1, Testing.Component.B),
+    );
 
     const entity2 = blk: {
         const initial_state = AbcEntityType{
@@ -1133,16 +1110,16 @@ test "event caching works" {
         break :blk try storage.createEntity(initial_state);
     };
 
-    scheduler.dispatchEvent(&storage, .onEvent1, .{});
-    scheduler.waitEvent(.onEvent1);
+    scheduler.dispatchEvent(&storage, .onIncA, .{});
+    scheduler.waitEvent(.onIncA);
 
     try testing.expectEqual(
         Testing.Component.A{ .value = 1 },
         try storage.getComponent(entity2, Testing.Component.A),
     );
 
-    scheduler.dispatchEvent(&storage, .onEvent2, .{});
-    scheduler.waitEvent(.onEvent2);
+    scheduler.dispatchEvent(&storage, .onIncB, .{});
+    scheduler.waitEvent(.onIncB);
 
     try testing.expectEqual(
         Testing.Component.B{ .value = 1 },
@@ -1151,147 +1128,31 @@ test "event caching works" {
 }
 
 test "Event with no archetypes does not crash" {
-    const SystemStruct = struct {
-        pub fn event1System(a: *Testing.Component.A) void {
-            a.value += 1;
+    const Queries = struct {
+        const MutA = StorageStub.Query(struct {
+            a: *Testing.Component.A,
+        }, .{});
+    };
+
+    const Systems = struct {
+        pub fn incA(q: *Queries.MutA) void {
+            while (q.next()) |item| {
+                item.a.value += 1;
+            }
         }
     };
 
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{SystemStruct}, .{})}).init(std.testing.allocator, .{});
+    var scheduler = try CreateScheduler(.{Event("onFoo", .{
+        Systems.incA,
+    })}).init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
     for (0..100) |_| {
         scheduler.dispatchEvent(&storage, .onFoo, .{});
         scheduler.waitEvent(.onFoo);
-    }
-}
-
-test "DependOn makes a events race free" {
-    const AddSystem1 = struct {
-        pub fn system(a: *Testing.Component.A, b: Testing.Component.B) void {
-            std.time.sleep(std.time.ns_per_us * 3);
-            a.value += @as(u32, @intCast(b.value));
-        }
-    };
-
-    const MultiplySystem2 = struct {
-        pub fn system(a: *Testing.Component.A, b: Testing.Component.B) void {
-            std.time.sleep(std.time.ns_per_us * 2);
-            a.value *= @as(u32, @intCast(b.value));
-        }
-    };
-
-    const AddSystem3 = struct {
-        pub fn system(a: *Testing.Component.A, b: Testing.Component.B) void {
-            std.time.sleep(std.time.ns_per_us);
-            a.value += @as(u32, @intCast(b.value));
-        }
-    };
-
-    const MultiplySystem4 = struct {
-        pub fn system(a: *Testing.Component.A, b: Testing.Component.B) void {
-            a.value *= @as(u32, @intCast(b.value));
-        }
-    };
-
-    var storage = try StorageStub.init(testing.allocator);
-    defer storage.deinit();
-
-    var scheduler = try CreateScheduler(StorageStub, .{
-        Event("onEvent", .{
-            AddSystem1,
-            DependOn(MultiplySystem2, .{AddSystem1}),
-            DependOn(AddSystem3, .{MultiplySystem2}),
-            DependOn(MultiplySystem4, .{AddSystem3}),
-        }, .{}),
-    }).init(std.testing.allocator, .{});
-    defer scheduler.deinit();
-
-    const entity_count = 10_000;
-    var entities: [entity_count]Entity = undefined;
-
-    const inital_state = AbEntityType{
-        .a = .{ .value = 3 },
-        .b = .{ .value = 2 },
-    };
-    for (&entities) |*entity| {
-        entity.* = try storage.createEntity(inital_state);
-    }
-
-    scheduler.dispatchEvent(&storage, .onEvent, .{});
-    scheduler.waitEvent(.onEvent);
-
-    scheduler.dispatchEvent(&storage, .onEvent, .{});
-    scheduler.waitEvent(.onEvent);
-
-    for (entities) |entity| {
-        // (((3  + 2) * 2) + 2) * 2 =  24
-        // (((24 + 2) * 2) + 2) * 2 = 108
-        try testing.expectEqual(
-            Testing.Component.A{ .value = 108 },
-            try storage.getComponent(entity, Testing.Component.A),
-        );
-    }
-}
-
-test "event DependOn events can have multiple dependencies" {
-    const AddSystem1 = struct {
-        pub fn system(a: *Testing.Component.A) void {
-            std.time.sleep(std.time.ns_per_us);
-            a.value += 1;
-        }
-    };
-
-    const AddSystem2 = struct {
-        pub fn system(b: *Testing.Component.B) void {
-            std.time.sleep(std.time.ns_per_us);
-            b.value += 1;
-        }
-    };
-
-    const MultiplySystem3 = struct {
-        pub fn system(a: *Testing.Component.A, b: Testing.Component.B) void {
-            a.value *= @as(u32, @intCast(b.value));
-        }
-    };
-
-    var storage = try StorageStub.init(testing.allocator);
-    defer storage.deinit();
-
-    var scheduler = try CreateScheduler(StorageStub, .{Event("onFoo", .{
-        AddSystem1,
-        AddSystem2,
-        DependOn(MultiplySystem3, .{ AddSystem1, AddSystem2 }),
-    }, .{})}).init(std.testing.allocator, .{});
-    defer scheduler.deinit();
-
-    const entity_count = 100;
-    var entities: [entity_count]Entity = undefined;
-
-    const inital_state = AbEntityType{
-        .a = .{ .value = 3 },
-        .b = .{ .value = 2 },
-    };
-    for (&entities) |*entity| {
-        entity.* = try storage.createEntity(inital_state);
-    }
-
-    scheduler.dispatchEvent(&storage, .onFoo, .{});
-    scheduler.waitEvent(.onFoo);
-
-    scheduler.dispatchEvent(&storage, .onFoo, .{});
-    scheduler.waitEvent(.onFoo);
-
-    for (entities) |entity| {
-        // (3 + 1) * (2 + 1) = 12
-        // (12 + 1) * (3 + 1) = 52
-        try testing.expectEqual(
-            Testing.Component.A{ .value = 52 },
-            try storage.getComponent(entity, Testing.Component.A),
-        );
     }
 }
 
@@ -1301,14 +1162,22 @@ test "reproducer: Dispatcher does not include new components to systems previous
         count: u32,
     };
 
-    const OnFooSystem = struct {
-        pub fn system(a: *Testing.Component.A, tracker: *Tracker) void {
-            tracker.count += a.value;
+    const Queries = struct {
+        const ImmutA = StorageStub.Query(struct {
+            a: Testing.Component.A,
+        }, .{});
+    };
+
+    const Systems = struct {
+        pub fn addToTracker(q: *Queries.ImmutA, tracker: *Tracker) void {
+            while (q.next()) |item| {
+                tracker.count += item.a.value;
+            }
         }
     };
 
     const RepStorage = CreateStorage(Testing.AllComponentsTuple);
-    const Scheduler = CreateScheduler(RepStorage, .{Event("onFoo", .{OnFooSystem}, Tracker)});
+    const Scheduler = CreateScheduler(.{Event("onFoo", .{Systems.addToTracker})});
 
     var storage = try RepStorage.init(testing.allocator);
     defer storage.deinit();
@@ -1316,9 +1185,7 @@ test "reproducer: Dispatcher does not include new components to systems previous
     var scheduler = try Scheduler.init(std.testing.allocator, .{});
     defer scheduler.deinit();
 
-    const inital_state = AEntityType{
-        .a = .{ .value = 1 },
-    };
+    const inital_state = .{Testing.Component.A{ .value = 1 }};
     _ = try storage.createEntity(inital_state);
     _ = try storage.createEntity(inital_state);
 
