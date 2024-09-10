@@ -36,7 +36,9 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         number_of_entities: std.atomic.Value(EntityId) = .{ .raw = 0 },
 
         /// intialize the storage structure
+        ///
         /// Parameters:
+        ///
         ///     - allocator: allocator used when initiating entities
         pub fn init(allocator: Allocator) error{OutOfMemory}!Storage {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
@@ -47,6 +49,8 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             };
         }
 
+        /// deinitalize the storage and any memory tied to it.
+        ///
         pub fn deinit(self: *Storage) void {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
@@ -77,7 +81,9 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         }
 
         /// Create an entity and returns the entity handle
+        ///
         /// Parameters:
+        ///
         ///     - entity_state: the components that the new entity should be assigned
         pub fn createEntity(self: *Storage, entity_state: anytype) error{OutOfMemory}!Entity {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
@@ -130,7 +136,9 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         }
 
         /// Reassign a component value owned by entity
+        ///
         /// Parameters:
+        ///
         ///     - entity:               the entity that should be assigned the component value
         ///     - struct_of_components: the new component values
         pub fn setComponents(self: *Storage, entity: Entity, struct_of_components: anytype) error{OutOfMemory}!void {
@@ -170,7 +178,9 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         }
 
         /// Unset components owned by entity
+        ///
         /// Parameters:
+        ///
         ///     - entity:    the entity being mutated
         ///     - components: the components to remove in a tuple/struct
         pub fn unsetComponents(self: *Storage, entity: Entity, comptime struct_of_remove_components: anytype) error{OutOfMemory}!void {
@@ -199,9 +209,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             }
         }
 
-        /// Check if an entity has a set components
+        /// Check if an entity has a set of components
+        ///
         /// Parameters:
-        ///     - entity:    the entity to check for type Components
+        ///
+        ///     - entity:     the entity to check for type Components
         ///     - components: a tuple of component types to check after
         pub fn hasComponents(self: Storage, entity: Entity, comptime components: anytype) bool {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
@@ -234,7 +246,9 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         }
 
         /// Fetch an entity's component data
+        ///
         /// Parameters:
+        ///
         ///     - entity:    the entity to retrieve Component from
         ///     - Components: a struct type where fields are compoents that that belong to entity
         pub fn getComponents(self: *const Storage, entity: Entity, comptime Components: type) error{MissingComponent}!Components {
@@ -272,7 +286,9 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         }
 
         /// Fetch an entity's component data
+        ///
         /// Parameters:
+        ///
         ///     - entity:    the entity to retrieve Component from
         ///     - Components: a struct type where fields are compoents that that belong to entity
         pub fn getComponent(self: *const Storage, entity: Entity, comptime Component: type) error{MissingComponent}!Component {

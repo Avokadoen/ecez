@@ -24,6 +24,8 @@ zig build run-game-of-life
 
 ```
 
+You should also checkout [src/main.zig](https://github.com/Avokadoen/ecez/blob/main/src/main.zig) which has the public API. From there you can follow the deifinition to get more details.
+
 ## Zig documentation
 
 You can generate the ecez API documentation using `zig build docs`. This will produce some web resources in `zig-out/doc/ecez`. 

@@ -1,17 +1,17 @@
 const entity_type = @import("entity_type.zig");
 const scheduler = @import("scheduler.zig");
 
+/// Ecez's entity type. Use this to apply changes to an entity that exist in a given storage.
+pub const Entity = entity_type.Entity;
+
 /// Use this function to create the ecs storage
 pub const CreateStorage = @import("storage.zig").CreateStorage;
 
 /// Use this function to create a system scheduler
 pub const CreateScheduler = scheduler.CreateScheduler;
 
-pub const Entity = entity_type.Entity;
-
-pub const EntityId = entity_type.EntityId;
-
-/// Mark an event by name, systems to execute and any unique event data the systems need
+/// Events are a set of systems that should execute when triggered.
+/// Mark an event by name and systems to execute
 pub const Event = scheduler.Event;
 
 /// Ezby can be used to serialize and deserialize storages
