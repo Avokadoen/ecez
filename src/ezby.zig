@@ -78,16 +78,16 @@ pub fn serialize(
                 break :check_if_cull_needed_blk false;
             };
 
-            const sparse_set: set.SparseSet(EntityId, Component) = @field(
-                storage.sparse_sets,
-                @typeName(Component),
-            );
-
             total_size += @sizeOf(Chunk.Comp);
-            total_size += sparse_set.sparse_len * @sizeOf(EntityId);
+
+            {
+                const sparse_set = storage.getSparseSetConstPtr(Component);
+                total_size += sparse_set.sparse_len * @sizeOf(EntityId);
+            }
 
             if (cull_component == false) {
-                total_size += sparse_set.dense_len * @sizeOf(Component);
+                const dense_set = storage.getDenseSetConstPtr(Component);
+                total_size += dense_set.dense_len * @sizeOf(Component);
             }
 
             // Align comp chunk
@@ -121,8 +121,8 @@ pub fn serialize(
         }
 
         inline for (Storage.component_type_array, 0..) |Component, comp_index| {
-            const SparseSet = set.SparseSet(EntityId, Component);
-            const sparse_set: SparseSet = storage.getSparseSetValue(Component);
+            const sparse_set = storage.getSparseSetConstPtr(Component);
+            const dense_set = storage.getDenseSetConstPtr(Component);
 
             const cull_component = comptime check_if_cull_needed_blk: {
                 for (comptime_config.culled_component_types) |CullComponent| {
@@ -135,7 +135,7 @@ pub fn serialize(
 
             const comp_chunk = Chunk.Comp{
                 .entity_count = if (cull_component) 0 else @intCast(sparse_set.sparse_len),
-                .comp_count = if (cull_component) 0 else @intCast(sparse_set.dense_len),
+                .comp_count = if (cull_component) 0 else @intCast(dense_set.dense_len),
                 .type_size = @sizeOf(Component),
                 .type_alignment = @alignOf(Component),
                 .type_name_hash = hashfn(@typeName(Component)),
@@ -159,7 +159,7 @@ pub fn serialize(
                     byte_cursor += size_of_entities;
 
                     if (cull_component) {
-                        std.debug.assert(SparseSet.sparse_not_set == std.math.maxInt(EntityId));
+                        std.debug.assert(set.Sparse.not_set == std.math.maxInt(EntityId));
                         const not_set_byte = 0b1111_1111;
                         @memset(sparse_bytes, not_set_byte);
                     } else {
@@ -182,7 +182,7 @@ pub fn serialize(
 
                         @memcpy(
                             dense_bytes,
-                            std.mem.sliceAsBytes(sparse_set.dense[0..comp_chunk.comp_count]),
+                            std.mem.sliceAsBytes(dense_set.dense[0..comp_chunk.comp_count]),
                         );
                     }
                 }
@@ -242,18 +242,20 @@ pub fn deserialize(
                 std.debug.assert(comp.type_size == @sizeOf(Component));
                 std.debug.assert(comp.type_alignment == @alignOf(Component));
 
-                const sparse_set: *set.SparseSet(EntityId, Component) = storage.getSparseSetPtr(Component);
-                sparse_set.dense_len = comp.comp_count;
+                const sparse_set = storage.getSparseSetPtr(Component);
+                const dense_set = storage.getDenseSetPtr(Component);
+
+                dense_set.dense_len = comp.comp_count;
 
                 // Set sparse
-                try sparse_set.growSparse(storage.allocator, comp.entity_count);
+                try sparse_set.grow(storage.allocator, comp.entity_count);
                 @memcpy(sparse_set.sparse[0..entity_ids.len], entity_ids);
 
                 if (@sizeOf(Component) > 0) {
                     const component_data = std.mem.bytesAsSlice(Component, component_bytes);
                     // set dense
-                    try sparse_set.growDense(storage.allocator, comp.comp_count);
-                    @memcpy(sparse_set.dense[0..component_data.len], component_data);
+                    try dense_set.grow(storage.allocator, comp.comp_count);
+                    @memcpy(dense_set.dense[0..component_data.len], component_data);
                 }
             }
         }

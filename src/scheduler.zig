@@ -146,7 +146,6 @@ pub fn CreateScheduler(comptime events: anytype) type {
             const triggered_event = events[event_index];
 
             const event_dependencies = @field(Dependencies, triggered_event._name);
-
             inline for (triggered_event._systems, event_dependencies, 0..) |system, system_dependencies, system_index| {
                 const DispatchJob = EventDispatchJob(
                     system,
