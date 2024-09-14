@@ -606,27 +606,10 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
                     defer zone.End();
 
-                    // TODO: this is horrible for cache, we should find the next N entities instead
                     // Find next entity
-                    search_next_loop: while (true) {
-                        if (self.sparse_cursors >= self.storage_entity_count_ptr.load(.monotonic)) {
-                            return null;
-                        }
-
-                        for (self.search_order) |this_search| {
-                            const is_include = this_search < component_include_count;
-                            const entry_is_set = self.sparse_sets[this_search].isSet(self.sparse_cursors);
-
-                            // Check if we should skip entry:
-                            // Skip if is set is false and it's a include entry, if its exclude then it should be set in order to skip
-                            if (entry_is_set != is_include) {
-                                self.sparse_cursors += 1;
-                                continue :search_next_loop;
-                            }
-                        }
-
-                        break :search_next_loop; // sparse_cursor is a valid entity!
-                    }
+                    const entity_count = self.storage_entity_count_ptr.load(.monotonic);
+                    self.gotoFirstSet(entity_count) orelse return null;
+                    defer self.sparse_cursors += 1;
 
                     var result: ResultItem = undefined;
                     // if entity is first field
@@ -648,7 +631,6 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                         }
                     }
 
-                    self.sparse_cursors += 1;
                     return result;
                 }
 
@@ -656,35 +638,39 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
                     defer zone.End();
 
+                    const entity_count = self.storage_entity_count_ptr.load(.monotonic);
                     // TODO: this is horrible for cache, we should find the next N entities instead
                     // Find next entity
                     for (0..skip_count) |_| {
-                        search_next_loop: while (true) {
-                            if (self.sparse_cursors >= self.storage_entity_count_ptr.load(.monotonic)) {
-                                return;
-                            }
-
-                            for (self.search_order) |this_search| {
-                                const is_include = this_search < component_include_count;
-                                const entry_is_set = self.sparse_sets[this_search].isSet(self.sparse_cursors);
-
-                                // Check if we should skip entry:
-                                // Skip if is set is false and it's a include entry, if its exclude then it should be set in order to skip
-                                if (entry_is_set != is_include) {
-                                    self.sparse_cursors += 1;
-                                    continue :search_next_loop;
-                                }
-                            }
-
-                            break :search_next_loop; // sparse_cursor is a valid entity!
-                        }
-
+                        self.gotoFirstSet(entity_count) orelse return;
                         self.sparse_cursors = self.sparse_cursors + 1;
                     }
                 }
 
                 pub fn reset(self: *ThisQuery) void {
                     self.sparse_cursors = 0;
+                }
+
+                fn gotoFirstSet(self: *ThisQuery, entity_count: EntityId) ?void {
+                    search_next_loop: while (true) {
+                        if (self.sparse_cursors >= entity_count) {
+                            return null;
+                        }
+
+                        for (self.search_order) |this_search| {
+                            const is_include = this_search < component_include_count;
+                            const entry_is_set = self.sparse_sets[this_search].isSet(self.sparse_cursors);
+
+                            // Check if we should skip entry:
+                            // Skip if is set is false and it's a include entry, if its exclude then it should be set in order to skip
+                            if (entry_is_set != is_include) {
+                                self.sparse_cursors += 1;
+                                continue :search_next_loop;
+                            }
+                        }
+
+                        return; // sparse_cursor is a valid entity!
+                    }
                 }
 
                 fn indexOfQueryComponent(comptime Component: type) comptime_int {
