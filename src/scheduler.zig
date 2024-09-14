@@ -197,6 +197,18 @@ pub fn CreateScheduler(comptime events: anytype) type {
             }
         }
 
+        /// Dump the dependency chain of systems to see which systems will wait on which previous systems
+        pub fn dumpDependencyChain(comptime event: EventsEnum) []const gen_dependency_chain.Dependency {
+            if (@inComptime() == false) {
+                @compileError(@src().fn_name ++ " should be called in comptime only");
+            }
+
+            const event_index = @intFromEnum(event);
+            const triggered_event = events[event_index];
+            const event_dependencies = @field(Dependencies, triggered_event._name);
+            return &event_dependencies;
+        }
+
         fn EventDispatchJob(
             comptime func: anytype,
             comptime Storage: type,
@@ -906,6 +918,93 @@ test "Dispatch with multiple events works" {
             Testing.Component.B{ .value = expected_value },
             ab.b,
         );
+    }
+}
+
+test "dumpDependencyChain" {
+    const Queries = struct {
+        const MutA = StorageStub.Query(struct {
+            a: *Testing.Component.A,
+        }, .{});
+
+        const MutB = StorageStub.Query(struct {
+            b: *Testing.Component.B,
+        }, .{});
+    };
+
+    const SystemStruct = struct {
+        pub fn incrA(q: *Queries.MutA) void {
+            while (q.next()) |item| {
+                item.a.value += 1;
+            }
+        }
+
+        pub fn incrB(q: *Queries.MutB) void {
+            while (q.next()) |item| {
+                item.b.value += 1;
+            }
+        }
+
+        pub fn doubleA(q: *Queries.MutA) void {
+            while (q.next()) |item| {
+                item.a.value *= 2;
+            }
+        }
+
+        pub fn doubleB(q: *Queries.MutB) void {
+            while (q.next()) |item| {
+                item.b.value *= 2;
+            }
+        }
+    };
+
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    const Scheduler = CreateScheduler(.{
+        Event("onA", .{
+            SystemStruct.incrA,
+            SystemStruct.doubleA,
+            SystemStruct.incrA,
+        }),
+        Event("onB", .{
+            SystemStruct.incrB,
+            SystemStruct.incrA,
+            SystemStruct.doubleB,
+            SystemStruct.incrB,
+        }),
+    });
+
+    {
+        const expectedDumpOnA = [_]gen_dependency_chain.Dependency{
+            .{ .wait_on_indices = &[_]u32{} },
+            .{ .wait_on_indices = &[_]u32{0} },
+            .{ .wait_on_indices = &[_]u32{1} },
+        };
+        const actualDumpOnA = comptime Scheduler.dumpDependencyChain(.onA);
+        for (&expectedDumpOnA, actualDumpOnA) |expected, actual| {
+            try std.testing.expectEqualSlices(
+                u32,
+                expected.wait_on_indices,
+                actual.wait_on_indices,
+            );
+        }
+    }
+    {
+        const expectedDumpOnB = [_]gen_dependency_chain.Dependency{
+            .{ .wait_on_indices = &[_]u32{} },
+            .{ .wait_on_indices = &[_]u32{} },
+            .{ .wait_on_indices = &[_]u32{0} },
+            .{ .wait_on_indices = &[_]u32{2} },
+        };
+        const actualDumpOnB = comptime Scheduler.dumpDependencyChain(.onB);
+        for (&expectedDumpOnB, actualDumpOnB) |expected, actual| {
+            try std.testing.expectEqualSlices(
+                u32,
+                expected.wait_on_indices,
+                actual.wait_on_indices,
+            );
+        }
     }
 }
 
