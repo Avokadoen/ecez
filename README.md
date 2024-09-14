@@ -85,7 +85,7 @@ const my_living_entity = try storage.createEntity(.{
 });
 
 // You can unset components (remove)
-try storage.unsetComponents(my_living_entity, .{Component.Health});
+storage.unsetComponents(my_living_entity, .{Component.Health});
 
 // We can check if entity has component
 std.debug.assert(storage.hasComponents(my_living_entity, .{Component.Health}) == false);
