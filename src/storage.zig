@@ -529,16 +529,62 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 break :reflect_on_query_blk raw_component_types;
             };
 
+            if (query_components.len == 0) {
+                if (include_start_index == 0) {
+                    @compileError("Empty result struct is invalid query result");
+                }
+
+                // Entity only query
+                return struct {
+                    pub const _include_fields = include_fields;
+                    pub const EcezType = QueryType;
+
+                    pub const ThisQuery = @This();
+
+                    sparse_cursors: EntityId,
+                    storage_entity_count_ptr: *const std.atomic.Value(EntityId),
+
+                    pub fn submit(storage: *Storage) ThisQuery {
+                        return ThisQuery{
+                            .sparse_cursors = 0,
+                            .storage_entity_count_ptr = &storage.number_of_entities,
+                        };
+                    }
+
+                    pub fn next(self: *ThisQuery) ?ResultItem {
+                        const entity_count = self.storage_entity_count_ptr.load(.monotonic);
+                        if (self.sparse_cursors >= entity_count) {
+                            return null;
+                        }
+                        defer self.sparse_cursors += 1;
+
+                        var result: ResultItem = undefined;
+                        @field(result, include_fields[0].name) = Entity{ .id = self.sparse_cursors };
+                        return result;
+                    }
+
+                    pub fn skip(self: *ThisQuery, skip_count: u32) void {
+                        self.sparse_cursors += skip_count;
+                    }
+
+                    pub fn reset(self: *ThisQuery) void {
+                        self.sparse_cursors = 0;
+                    }
+                };
+            }
+
             return struct {
                 pub const _include_fields = include_fields;
                 pub const EcezType = QueryType;
 
                 pub const ThisQuery = @This();
 
-                // TODO: this is horrible for cache, we should find the next N entities instead
-                sparse_cursors: EntityId,
+                const look_ahead = 64;
+
                 storage_entity_count_ptr: *const std.atomic.Value(EntityId),
 
+                sparse_cursors: EntityId,
+                cached_sparse_lookups: u64 = 0,
                 search_order: [query_components.len]usize,
 
                 sparse_sets: [query_components.len]*set.Sparse,
@@ -606,15 +652,25 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
                     defer zone.End();
 
-                    // Find next entity
-                    const entity_count = self.storage_entity_count_ptr.load(.monotonic);
-                    self.gotoFirstSet(entity_count) orelse return null;
-                    defer self.sparse_cursors += 1;
+                    if (self.cached_sparse_lookups == 0) {
+                        const entity_count = self.storage_entity_count_ptr.load(.monotonic);
+                        self.gotoFirstSet(entity_count) orelse return null;
+                    }
+
+                    std.debug.assert(self.cached_sparse_lookups != 0);
+                    const next_bit: u6 = @intCast(@ctz(self.cached_sparse_lookups));
+                    defer {
+                        self.cached_sparse_lookups &= ~(@as(u64, 1) << next_bit);
+                        if (self.cached_sparse_lookups == 0) {
+                            self.sparse_cursors += look_ahead;
+                        }
+                    }
+                    const cursor = self.sparse_cursors + next_bit;
 
                     var result: ResultItem = undefined;
                     // if entity is first field
                     if (include_start_index > 0) {
-                        @field(result, include_fields[0].name) = Entity{ .id = self.sparse_cursors };
+                        @field(result, include_fields[0].name) = Entity{ .id = cursor };
                     }
 
                     inline for (include_fields[include_start_index..include_end_index]) |incl_field| {
@@ -623,7 +679,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                         const sparse_set = self.sparse_sets[comp_index];
                         const dense_set = @field(self.dense_sets, @typeName(component_to_get.type));
-                        const component_ptr = set.get(sparse_set, dense_set, self.sparse_cursors).?;
+                        const component_ptr = set.get(sparse_set, dense_set, cursor).?;
 
                         switch (component_to_get.attr) {
                             .ptr => @field(result, incl_field.name) = component_ptr,
@@ -641,35 +697,92 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     const entity_count = self.storage_entity_count_ptr.load(.monotonic);
                     // TODO: this is horrible for cache, we should find the next N entities instead
                     // Find next entity
-                    for (0..skip_count) |_| {
+                    var skips: u32 = 0;
+                    while (skips < skip_count) {
                         self.gotoFirstSet(entity_count) orelse return;
-                        self.sparse_cursors = self.sparse_cursors + 1;
+
+                        const current_result = @popCount(self.cached_sparse_lookups);
+                        if ((skips + current_result) > skip_count) {
+                            while (skips != skip_count) {
+                                const next_bit: u6 = @intCast(@ctz(self.cached_sparse_lookups));
+                                self.cached_sparse_lookups &= ~(@as(u64, 1) << next_bit);
+                                skips += 1;
+                            }
+                            return;
+                        }
+
+                        skips += current_result;
+                        self.cached_sparse_lookups = 0;
+                        self.sparse_cursors += look_ahead;
                     }
                 }
 
                 pub fn reset(self: *ThisQuery) void {
                     self.sparse_cursors = 0;
+                    self.cached_sparse_lookups = 0;
                 }
 
                 fn gotoFirstSet(self: *ThisQuery, entity_count: EntityId) ?void {
+                    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
+                    defer zone.End();
+
+                    const BVec = @Vector(look_ahead, bool);
+                    const EVec = @Vector(look_ahead, EntityId);
+
                     search_next_loop: while (true) {
                         if (self.sparse_cursors >= entity_count) {
                             return null;
                         }
 
+                        var entity_is_set_vec: BVec = @splat(true);
                         for (self.search_order) |this_search| {
-                            const is_include = this_search < component_include_count;
-                            const entry_is_set = self.sparse_sets[this_search].isSet(self.sparse_cursors);
+                            var sparse_slots: EVec = @splat(set.Sparse.not_set);
+                            if (self.sparse_sets[this_search].sparse.len >= self.sparse_cursors + look_ahead) {
+                                const slice_from = self.sparse_cursors;
+                                const slice_to = self.sparse_cursors + look_ahead;
+                                const sparse_slice = self.sparse_sets[this_search].sparse[slice_from..slice_to];
+                                sparse_slots = sparse_slice[0..look_ahead].*;
+                            } else if (self.sparse_sets[this_search].sparse.len > self.sparse_cursors and self.sparse_sets[this_search].sparse.len < self.sparse_cursors + look_ahead) {
+                                const slice_from = self.sparse_cursors;
+                                const slice_to = self.sparse_sets[this_search].sparse.len;
+                                const sparse_slice = self.sparse_sets[this_search].sparse[slice_from..slice_to];
 
-                            // Check if we should skip entry:
-                            // Skip if is set is false and it's a include entry, if its exclude then it should be set in order to skip
-                            if (entry_is_set != is_include) {
-                                self.sparse_cursors += 1;
-                                continue :search_next_loop;
+                                for (sparse_slice, 0..) |sparse, vector_index| {
+                                    sparse_slots[vector_index] = sparse;
+                                }
                             }
+
+                            const not_set_vector: EVec = @splat(set.Sparse.not_set);
+                            const is_set_vector: BVec = sparse_slots != not_set_vector;
+
+                            const is_include_vector: BVec = @splat(this_search < component_include_count);
+
+                            // "entity_is_set_vec = entity_is_set_vec & (is_set_vector == is_include_vector)"
+                            entity_is_set_vec = @select(bool, entity_is_set_vec, is_set_vector == is_include_vector, entity_is_set_vec);
                         }
 
-                        return; // sparse_cursor is a valid entity!
+                        // If there is not a single set entry at this point, skip.
+                        if (@reduce(.Or, entity_is_set_vec) == false) {
+                            self.sparse_cursors += look_ahead;
+                            continue :search_next_loop;
+                        }
+
+                        self.cached_sparse_lookups = reduce_entity_is_set_vec_blk: {
+                            const bit_components = comptime get_bits_blk: {
+                                var bits: EVec = undefined;
+                                for (0..look_ahead) |bit| {
+                                    bits[bit] = 1 << @as(u6, @intCast(bit));
+                                }
+
+                                break :get_bits_blk bits;
+                            };
+                            const zero_components: EVec = @splat(0);
+                            const kept_bits = @select(EntityId, entity_is_set_vec, bit_components, zero_components);
+
+                            break :reduce_entity_is_set_vec_blk @intCast(@reduce(.Or, kept_bits));
+                        };
+
+                        return; // some entries in entity_is_set_vec is set
                     }
                 }
 
