@@ -529,6 +529,62 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 break :reflect_on_query_blk raw_component_types;
             };
 
+            if (query_components.len == 0) {
+                if (include_start_index == 0) {
+                    @compileError("Empty result struct is invalid query result");
+                }
+
+                // Entity only query
+                return struct {
+                    pub const _include_fields = include_fields;
+                    pub const EcezType = QueryType;
+
+                    pub const ThisQuery = @This();
+
+                    sparse_cursors: EntityId,
+                    storage_entity_count_ptr: *const std.atomic.Value(EntityId),
+
+                    pub fn submit(storage: *Storage) ThisQuery {
+                        const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
+                        defer zone.End();
+
+                        return ThisQuery{
+                            .sparse_cursors = 0,
+                            .storage_entity_count_ptr = &storage.number_of_entities,
+                        };
+                    }
+
+                    pub fn next(self: *ThisQuery) ?ResultItem {
+                        const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
+                        defer zone.End();
+
+                        const entity_count = self.storage_entity_count_ptr.load(.monotonic);
+                        if (self.sparse_cursors >= entity_count) {
+                            return null;
+                        }
+                        defer self.sparse_cursors += 1;
+
+                        var result: ResultItem = undefined;
+                        @field(result, include_fields[0].name) = Entity{ .id = self.sparse_cursors };
+                        return result;
+                    }
+
+                    pub fn skip(self: *ThisQuery, skip_count: u32) void {
+                        const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
+                        defer zone.End();
+
+                        self.sparse_cursors += skip_count;
+                    }
+
+                    pub fn reset(self: *ThisQuery) void {
+                        const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
+                        defer zone.End();
+
+                        self.sparse_cursors = 0;
+                    }
+                };
+            }
+
             return struct {
                 pub const _include_fields = include_fields;
                 pub const EcezType = QueryType;
@@ -545,6 +601,9 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 dense_sets: CompileReflect.GroupDenseSetsPtr(&query_components),
 
                 pub fn submit(storage: *Storage) ThisQuery {
+                    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
+                    defer zone.End();
+
                     var dense_sets: CompileReflect.GroupDenseSetsPtr(&query_components) = undefined;
                     var sparse_sets: [query_components.len]*set.Sparse = undefined;
                     inline for (query_components, &sparse_sets) |Component, *sparse_set| {
