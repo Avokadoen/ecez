@@ -26,8 +26,8 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
         // a flat array of the type of each field in the components tuple
         pub const component_type_array = CompileReflect.verifyComponentTuple(all_components);
-
         pub const GroupDenseSets = CompileReflect.GroupDenseSets(&component_type_array);
+        pub const ComponentCache = CompileReflect.BitMaskFromComponents(&component_type_array);
 
         const Storage = @This();
 
@@ -37,6 +37,9 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         dense_sets: GroupDenseSets,
 
         number_of_entities: std.atomic.Value(EntityId) = .{ .raw = 0 },
+
+        composition_cache_lock: std.Thread.RwLock,
+        composition_cache: std.ArrayListUnmanaged(ComponentCache.Bits),
 
         /// intialize the storage structure
         ///
@@ -56,6 +59,8 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 .allocator = allocator,
                 .sparse_sets = sparse_sets,
                 .dense_sets = .{},
+                .composition_cache_lock = .{},
+                .composition_cache = .{},
             };
         }
 
@@ -72,6 +77,8 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             for (&self.sparse_sets) |*sparse_set| {
                 sparse_set.deinit(self.allocator);
             }
+
+            self.composition_cache.deinit(self.allocator);
         }
 
         /// Clear storage memory for reuse. **All entities will become invalid**.
@@ -87,6 +94,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             }
 
             self.number_of_entities.store(0, .seq_cst);
+            self.composition_cache.clearRetainingCapacity();
         }
 
         /// Create an entity and returns the entity handle
@@ -109,13 +117,29 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             // This will "leak" a handle if grow fails, but if it fails, then the app has more issues anyways.
             const this_id = self.number_of_entities.fetchAdd(1, .acq_rel);
 
+            comptime var composition_bits: ComponentCache.Bits = 0;
             // Ensure capacity first to avoid errdefer
             inline for (field_info.Struct.fields) |field| {
+                comptime {
+                    const component_shift: ComponentCache.Shift = @intCast(indexOfStorageComponent(field.type));
+                    composition_bits |= @as(ComponentCache.Bits, 1) << component_shift;
+                }
+
                 var sparse_set = self.getSparseSetPtr(field.type);
                 var dense_set = self.getDenseSetPtr(field.type);
 
                 try sparse_set.grow(self.allocator, this_id + 1);
                 try dense_set.grow(self.allocator, dense_set.dense_len + 1);
+            }
+
+            {
+                self.composition_cache_lock.lock();
+                defer self.composition_cache_lock.unlock();
+
+                try self.composition_cache.ensureTotalCapacity(self.allocator, this_id + 1);
+                self.composition_cache.items.len = @max(self.composition_cache.items.len, this_id + 1);
+
+                self.composition_cache.items[this_id] = composition_bits;
             }
 
             inline for (field_info.Struct.fields) |field| {
@@ -157,13 +181,27 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
             const field_info = @typeInfo(@TypeOf(struct_of_components));
 
+            comptime var composition_bits: ComponentCache.Bits = 0;
             // Ensure capacity first to avoid errdefer
             inline for (field_info.Struct.fields) |field| {
+                comptime {
+                    const component_shift: ComponentCache.Shift = @intCast(indexOfStorageComponent(field.type));
+                    composition_bits |= @as(ComponentCache.Bits, 1) << component_shift;
+                }
+
                 var sparse_set = self.getSparseSetPtr(field.type);
                 var dense_set = self.getDenseSetPtr(field.type);
 
                 try dense_set.grow(self.allocator, entity.id + 1);
                 try sparse_set.grow(self.allocator, entity.id + 1);
+            }
+
+            {
+                // Lock is required in case of createEntity growing storage
+                self.composition_cache_lock.lockShared();
+                defer self.composition_cache_lock.unlockShared();
+
+                self.composition_cache.items[entity.id] |= composition_bits;
             }
 
             inline for (field_info.Struct.fields) |field| {
@@ -200,8 +238,14 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             );
 
             const field_info = @typeInfo(@TypeOf(struct_of_remove_components));
+            comptime var composition_bits: ComponentCache.Bits = 0;
+            // Ensure capacity first to avoid errdefer
             inline for (field_info.Struct.fields) |field| {
                 const ComponentToRemove = @field(struct_of_remove_components, field.name);
+                comptime {
+                    const component_shift: ComponentCache.Shift = @intCast(indexOfStorageComponent(ComponentToRemove));
+                    composition_bits |= @as(ComponentCache.Bits, 1) << component_shift;
+                }
 
                 const sparse_set = self.getSparseSetPtr(ComponentToRemove);
                 const dense_set = self.getDenseSetPtr(ComponentToRemove);
@@ -211,6 +255,14 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     dense_set,
                     entity.id,
                 );
+            }
+
+            {
+                // Lock is required in case of createEntity growing storage
+                self.composition_cache_lock.lockShared();
+                defer self.composition_cache_lock.unlockShared();
+
+                self.composition_cache.items[entity.id] &= ~composition_bits;
             }
         }
 
@@ -502,7 +554,8 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             };
             const component_include_count = include_end_index - include_start_index;
 
-            const query_components = reflect_on_query_blk: {
+            const query_components, const include_bits, const exclude_bits = reflect_on_query_blk: {
+                var inc_bits: ComponentCache.Bits = 0;
                 var raw_component_types: [component_include_count + exclude_fields.len]type = undefined;
                 inline for (
                     raw_component_types[0..component_include_count],
@@ -513,8 +566,12 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 | {
                     const request = CompileReflect.compactComponentRequest(incl_field.type);
                     query_component.* = request.type;
+
+                    const component_shift: ComponentCache.Shift = @intCast(indexOfStorageComponent(request.type));
+                    inc_bits |= @as(ComponentCache.Bits, 1) << component_shift;
                 }
 
+                var exc_bits: ComponentCache.Bits = 0;
                 inline for (
                     raw_component_types[component_include_count .. component_include_count + exclude_fields.len],
                     0..,
@@ -524,9 +581,12 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 | {
                     const request = CompileReflect.compactComponentRequest(exclude_types[excl_index]);
                     query_component.* = request.type;
+
+                    const component_shift: ComponentCache.Shift = @intCast(indexOfStorageComponent(request.type));
+                    exc_bits |= @as(ComponentCache.Bits, 1) << component_shift;
                 }
 
-                break :reflect_on_query_blk raw_component_types;
+                break :reflect_on_query_blk .{ raw_component_types, inc_bits, exc_bits };
             };
 
             if (query_components.len == 0) {
@@ -595,6 +655,9 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 sparse_cursors: EntityId,
                 storage_entity_count_ptr: *const std.atomic.Value(EntityId),
 
+                composition_cache_lock: *std.Thread.RwLock,
+                composition_cache: *const std.ArrayListUnmanaged(ComponentCache.Bits),
+
                 search_order: [query_components.len]usize,
 
                 sparse_sets: [query_components.len]*set.Sparse,
@@ -653,8 +716,10 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     }
 
                     return ThisQuery{
-                        .sparse_cursors = 0,
                         .storage_entity_count_ptr = &storage.number_of_entities,
+                        .composition_cache_lock = &storage.composition_cache_lock,
+                        .composition_cache = &storage.composition_cache,
+                        .sparse_cursors = 0,
                         .search_order = search_order,
                         .sparse_sets = sparse_sets,
                         .dense_sets = dense_sets,
@@ -667,7 +732,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                     // Find next entity
                     const entity_count = self.storage_entity_count_ptr.load(.monotonic);
-                    self.gotoFirstSet(entity_count) orelse return null;
+                    self.gotoNthSet(entity_count, 0) orelse return null;
                     defer self.sparse_cursors += 1;
 
                     var result: ResultItem = undefined;
@@ -700,36 +765,35 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     const entity_count = self.storage_entity_count_ptr.load(.monotonic);
                     // TODO: this is horrible for cache, we should find the next N entities instead
                     // Find next entity
-                    for (0..skip_count) |_| {
-                        self.gotoFirstSet(entity_count) orelse return;
-                        self.sparse_cursors = self.sparse_cursors + 1;
-                    }
+                    self.gotoNthSet(entity_count, skip_count) orelse return;
                 }
 
                 pub fn reset(self: *ThisQuery) void {
                     self.sparse_cursors = 0;
                 }
 
-                fn gotoFirstSet(self: *ThisQuery, entity_count: EntityId) ?void {
-                    search_next_loop: while (true) {
-                        if (self.sparse_cursors >= entity_count) {
-                            return null;
-                        }
+                inline fn gotoNthSet(self: *ThisQuery, entity_count: EntityId, n: usize) ?void {
+                    if (self.sparse_cursors >= entity_count) {
+                        return null;
+                    }
 
-                        for (self.search_order) |this_search| {
-                            const is_include = this_search < component_include_count;
-                            const entry_is_set = self.sparse_sets[this_search].isSet(self.sparse_cursors);
+                    {
+                        self.composition_cache_lock.lockShared();
+                        defer self.composition_cache_lock.unlockShared();
 
-                            // Check if we should skip entry:
-                            // Skip if is set is false and it's a include entry, if its exclude then it should be set in order to skip
-                            if (entry_is_set != is_include) {
-                                self.sparse_cursors += 1;
-                                continue :search_next_loop;
+                        var found: usize = 0;
+                        for (self.composition_cache.items[self.sparse_cursors..], self.sparse_cursors..) |this_search, new_cursor| {
+                            if ((include_bits & this_search) == include_bits and (exclude_bits & this_search) == 0) {
+                                if (found >= n) {
+                                    self.sparse_cursors = new_cursor;
+                                    return;
+                                }
+                                found += 1;
                             }
                         }
-
-                        return; // sparse_cursor is a valid entity!
                     }
+
+                    return null;
                 }
 
                 fn indexOfQueryComponent(comptime Component: type) comptime_int {
@@ -786,7 +850,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 }
             }
 
-            @compileError(@typeName(Component) ++ " is not a compoenent in this storage");
+            @compileError(@typeName(Component) ++ " is not a component in this storage");
         }
     };
 }
@@ -906,6 +970,34 @@ pub const CompileReflect = struct {
 
             @compileError(@typeName(InnerType) ++ fmt_error_msg);
         }
+    }
+
+    pub fn BitMaskFromComponents(comptime submitted_components: []const type) type {
+        return struct {
+            // A single integer that represent the full path of an opaque archetype
+            pub const Bits = @Type(std.builtin.Type{ .Int = .{
+                .signedness = .unsigned,
+                .bits = submitted_components.len,
+            } });
+
+            pub const Shift = @Type(std.builtin.Type{ .Int = .{
+                .signedness = .unsigned,
+                .bits = std.math.log2_int_ceil(Bits, submitted_components.len),
+            } });
+
+            pub fn bitsFromComponents(comptime other_components: []const type) Bits {
+                comptime var bits: Bits = 0;
+                outer_for: inline for (other_components) |OtherComponent| {
+                    inline for (submitted_components, 0..) |MaskComponent, bit_offset| {
+                        if (MaskComponent == OtherComponent) {
+                            bits |= 1 << bit_offset;
+                            continue :outer_for;
+                        }
+                    }
+                    @compileError(@tagName(OtherComponent) ++ " is not part of submitted components");
+                }
+            }
+        };
     }
 };
 
