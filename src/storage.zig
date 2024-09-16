@@ -592,10 +592,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 pub const ThisQuery = @This();
 
                 // TODO: this is horrible for cache, we should find the next N entities instead
-                sparse_cursors: EntityId,
                 storage_entity_count_ptr: *const std.atomic.Value(EntityId),
 
                 search_order: [query_components.len]usize,
+                sparse_cursors: EntityId,
+                set_cache: u64,
 
                 sparse_sets: [query_components.len]*set.Sparse,
                 dense_sets: CompileReflect.GroupDenseSetsPtr(&query_components),
@@ -653,6 +654,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     }
 
                     return ThisQuery{
+                        .set_cache = 0,
                         .sparse_cursors = 0,
                         .storage_entity_count_ptr = &storage.number_of_entities,
                         .search_order = search_order,
@@ -666,14 +668,25 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     defer zone.End();
 
                     // Find next entity
-                    const entity_count = self.storage_entity_count_ptr.load(.monotonic);
-                    self.gotoFirstSet(entity_count) orelse return null;
-                    defer self.sparse_cursors += 1;
+                    if (@popCount(self.set_cache) == 0) {
+                        const entity_count = self.storage_entity_count_ptr.load(.monotonic);
+                        self.gotoFirstSet(entity_count) orelse return null;
+                        std.debug.assert(@popCount(self.set_cache) != 0);
+                    }
 
+                    const next_cached: u6 = @intCast(@ctz(self.set_cache));
+                    defer {
+                        self.set_cache &= ~(@as(u64, 1) << next_cached);
+                        if (@popCount(self.set_cache) == 0) {
+                            self.sparse_cursors += 64;
+                        }
+                    }
+
+                    const entity = self.sparse_cursors + next_cached;
                     var result: ResultItem = undefined;
                     // if entity is first field
                     if (include_start_index > 0) {
-                        @field(result, include_fields[0].name) = Entity{ .id = self.sparse_cursors };
+                        @field(result, include_fields[0].name) = Entity{ .id = entity };
                     }
 
                     inline for (include_fields[include_start_index..include_end_index]) |incl_field| {
@@ -682,7 +695,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                         const sparse_set = self.sparse_sets[comp_index];
                         const dense_set = @field(self.dense_sets, @typeName(component_to_get.type));
-                        const component_ptr = set.get(sparse_set, dense_set, self.sparse_cursors).?;
+                        const component_ptr = set.get(sparse_set, dense_set, entity).?;
 
                         switch (component_to_get.attr) {
                             .ptr => @field(result, incl_field.name) = component_ptr,
@@ -698,32 +711,82 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     defer zone.End();
 
                     const entity_count = self.storage_entity_count_ptr.load(.monotonic);
+
+                    var skipped: EntityId = 0;
+
+                    { // In the event iterator is in a partial cache iter
+                        const in_cache = @popCount(self.set_cache);
+                        if (skipped + in_cache > skip_count) {
+                            for (0..skip_count - skipped) |_| {
+                                const next_bit: u6 = @intCast(@ctz(self.set_cache));
+                                self.set_cache &= ~(@as(u64, 1) << next_bit);
+                            }
+                            return;
+                        } else {
+                            skipped += in_cache;
+                        }
+                    }
+
                     // TODO: this is horrible for cache, we should find the next N entities instead
                     // Find next entity
-                    for (0..skip_count) |_| {
+                    while (skipped < skip_count) {
                         self.gotoFirstSet(entity_count) orelse return;
-                        self.sparse_cursors = self.sparse_cursors + 1;
+                        const in_cache = @popCount(self.set_cache);
+                        if (skipped + in_cache > skip_count) {
+                            for (0..skip_count - skipped) |_| {
+                                const next_bit: u6 = @intCast(@ctz(self.set_cache));
+                                self.set_cache &= ~(@as(u64, 1) << next_bit);
+                            }
+                            return;
+                        }
+
+                        self.sparse_cursors += 64;
+                        skipped += in_cache;
                     }
                 }
 
                 pub fn reset(self: *ThisQuery) void {
                     self.sparse_cursors = 0;
+                    self.set_cache = 0;
                 }
 
                 fn gotoFirstSet(self: *ThisQuery, entity_count: EntityId) ?void {
                     search_next_loop: while (true) {
+                        self.set_cache = std.math.maxInt(u64);
+
                         if (self.sparse_cursors >= entity_count) {
                             return null;
                         }
 
                         for (self.search_order) |this_search| {
                             const is_include = this_search < component_include_count;
-                            const entry_is_set = self.sparse_sets[this_search].isSet(self.sparse_cursors);
+
+                            var iter_count: usize = 0;
+                            if (self.sparse_cursors < self.sparse_sets[this_search].sparse_len) {
+                                iter_count = @min(@bitSizeOf(@TypeOf(self.set_cache)), self.sparse_sets[this_search].sparse_len - self.sparse_cursors);
+                                for (self.sparse_sets[this_search].sparse[self.sparse_cursors .. self.sparse_cursors + iter_count], 0..) |sparse, sparse_index| {
+                                    const entry_is_set = sparse != set.Sparse.not_set;
+                                    const entity_valid: u64 = @intFromBool(entry_is_set == is_include);
+
+                                    const bit_shift = @as(u6, @intCast(sparse_index));
+                                    const entry_mask = ~(@as(u64, 1) << bit_shift);
+                                    self.set_cache &= entry_mask | (entity_valid << bit_shift);
+                                }
+                            }
+
+                            for (iter_count..64) |sparse_index| {
+                                const entry_is_set = false;
+                                const entity_valid: u64 = @intFromBool(entry_is_set == is_include);
+
+                                const bit_shift = @as(u6, @intCast(sparse_index));
+                                const entry_mask = ~(@as(u64, 1) << bit_shift);
+                                self.set_cache &= entry_mask | (entity_valid << bit_shift);
+                            }
 
                             // Check if we should skip entry:
                             // Skip if is set is false and it's a include entry, if its exclude then it should be set in order to skip
-                            if (entry_is_set != is_include) {
-                                self.sparse_cursors += 1;
+                            if (@popCount(self.set_cache) == 0) {
+                                self.sparse_cursors += 64;
                                 continue :search_next_loop;
                             }
                         }
