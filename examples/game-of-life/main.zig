@@ -432,4 +432,72 @@ test "systems produce expected 3x3 grid state" {
             try std.testing.expectEqual(alive, cell.h.alive[1]);
         }
     }
+
+    { // 2 edge lines, len 2, y axis
+        const state_1 = [_]bool{
+            false, false, false,
+            true,  false, true,
+            true,  false, true,
+        };
+
+        const state_2 = [_]bool{
+            false, false, false,
+            false, false, false,
+            false, false, false,
+        };
+
+        for (&cell_entities, state_1) |entity, alive| {
+            storage.setComponents(
+                entity,
+                .{
+                    Components.Health{
+                        .alive = [_]bool{ alive, alive },
+                        .active_cell_index = 0,
+                    },
+                },
+            ) catch unreachable;
+        }
+
+        scheduler.dispatchEvent(&storage, .loop, event_arg);
+        scheduler.waitEvent(.loop);
+
+        for (&cell_entities, state_2) |entity, alive| {
+            const cell = try storage.getComponents(entity, struct { h: Components.Health });
+            try std.testing.expectEqual(alive, cell.h.alive[0]);
+        }
+    }
+
+    { // middle line, len 2, y axis
+        const state_1 = [_]bool{
+            false, false, false,
+            false, true,  false,
+            false, true,  false,
+        };
+
+        const state_2 = [_]bool{
+            false, false, false,
+            false, false, false,
+            false, false, false,
+        };
+
+        for (&cell_entities, state_1) |entity, alive| {
+            storage.setComponents(
+                entity,
+                .{
+                    Components.Health{
+                        .alive = [_]bool{ alive, alive },
+                        .active_cell_index = 0,
+                    },
+                },
+            ) catch unreachable;
+        }
+
+        scheduler.dispatchEvent(&storage, .loop, event_arg);
+        scheduler.waitEvent(.loop);
+
+        for (&cell_entities, state_2) |entity, alive| {
+            const cell = try storage.getComponents(entity, struct { h: Components.Health });
+            try std.testing.expectEqual(alive, cell.h.alive[0]);
+        }
+    }
 }
