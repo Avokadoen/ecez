@@ -91,7 +91,7 @@ pub fn main() anyerror!void {
     var storage = try Storage.init(allocator);
     defer storage.deinit();
 
-    var scheduler = try Scheduler.init(allocator, .{ .thread_count = 2 });
+    var scheduler = try Scheduler.init(allocator, .{});
     defer scheduler.deinit();
 
     const init_seed: u64 = @intCast(std.time.timestamp());
