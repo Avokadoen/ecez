@@ -619,6 +619,59 @@ test "system SubStorage can spawn new entites (and no race hazards)" {
     }
 }
 
+test "Thread count 0 works" {
+    const SystemStruct = struct {
+        pub fn incrB(b_query: *Queries.WriteB) void {
+            while (b_query.next()) |item| {
+                item.b.value += 1;
+            }
+        }
+
+        pub fn decrB(b_query: *Queries.WriteB) void {
+            while (b_query.next()) |item| {
+                item.b.value -= 1;
+            }
+        }
+
+        pub fn incrA(a_query: *Queries.WriteA) void {
+            while (a_query.next()) |item| {
+                item.a.value += 1;
+            }
+        }
+
+        pub fn decrA(a_query: *Queries.WriteA) void {
+            while (a_query.next()) |item| {
+                item.a.value -= 1;
+            }
+        }
+    };
+
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    var scheduler = try CreateScheduler(.{Event(
+        "onFoo",
+        .{
+            SystemStruct.incrB,
+            SystemStruct.decrB,
+            SystemStruct.incrA,
+            SystemStruct.decrA,
+        },
+    )}).init(std.testing.allocator, .{
+        .thread_count = 0,
+    });
+    defer scheduler.deinit();
+
+    for (0..128) |iter| {
+        _ = try storage.createEntity(.{
+            Testing.Component.B{ .value = @intCast(iter) },
+        });
+    }
+
+    scheduler.dispatchEvent(&storage, .onFoo, .{});
+    scheduler.waitEvent(.onFoo);
+}
+
 test "system sub storage can mutate components" {
     const SubStorage = StorageStub.Subset(.{
         Testing.Component.A,

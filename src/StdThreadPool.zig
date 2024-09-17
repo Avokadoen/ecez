@@ -153,7 +153,7 @@ pub fn spawnRe(
 
     event_collection[spawned_event_index].reset();
 
-    if (builtin.single_threaded) {
+    if (builtin.single_threaded or pool.threads.len == 0) {
         @call(.auto, func, args);
         event_collection[spawned_event_index].set();
         return;
