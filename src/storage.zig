@@ -430,7 +430,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                         // If this is a read only storage, then we must make sure there is no pointers in Components
                         if (access == .read_only) {
                             const components_info = @typeInfo(Component);
-                            if (components_info.Pointer) {
+                            if (components_info == .Pointer) {
                                 @compileError("Accessing component pointers is illegal in a read only sub storage");
                             }
                         }
