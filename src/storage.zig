@@ -1395,6 +1395,46 @@ test "Subset unsetComponents() removes the component as expected" {
     try testing.expectEqual(false, storage_subset.hasComponents(entity, .{Testing.Component.B}));
 }
 
+test "Subset read only getComponent(s)" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    const Subset = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B }, .read_and_write);
+    const storage_subset = Subset{
+        .storage = &storage,
+    };
+
+    var entities: [100]Entity = undefined;
+    for (&entities, 0..) |*entity, iter| {
+        entity.* = try storage.createEntity(.{
+            Testing.Component.A{ .value = @intCast(iter) },
+            Testing.Component.B{ .value = @intCast(iter) },
+        });
+    }
+
+    for (entities, 0..) |entity, iter| {
+        const b = try storage_subset.getComponent(entity, Testing.Component.B);
+
+        try testing.expectEqual(
+            Testing.Component.B{ .value = @intCast(iter) },
+            b,
+        );
+    }
+
+    for (entities, 0..) |entity, iter| {
+        const ab = try storage_subset.getComponents(entity, Testing.Structure.AB);
+
+        try testing.expectEqual(
+            Testing.Component.A{ .value = @intCast(iter) },
+            ab.a,
+        );
+        try testing.expectEqual(
+            Testing.Component.B{ .value = @intCast(iter) },
+            ab.b,
+        );
+    }
+}
+
 test "query with single include type works" {
     var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
