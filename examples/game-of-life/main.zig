@@ -20,18 +20,20 @@ const Components = struct {
         x: u8,
         y: u8,
     };
+
     pub const Health = struct {
         // We must store two health values per cell so that only previous cell state affect
         // neighbouring cells
         alive: [2]bool,
         active_cell_index: u2,
     };
+
     // new line line component
     pub const LinePos = struct {
         nth: u8,
     };
 
-    const RenderTarget = struct {
+    pub const RenderTarget = struct {
         output_buffer: []u8,
     };
 };
@@ -60,11 +62,10 @@ const Scheduler = ecez.CreateScheduler(.{ecez.Event("loop", .{
     updateCellSystem,
 })});
 
-const RenderTargetView = Storage.Subset(.{Components.RenderTarget}, .read_and_write);
-
 const EventArgument = struct {
     grid_config: GridConfig,
     render_entity: ecez.Entity,
+    entity_grid: []const ecez.Entity,
 };
 
 pub fn main() anyerror!void {
@@ -90,7 +91,7 @@ pub fn main() anyerror!void {
     var storage = try Storage.init(allocator);
     defer storage.deinit();
 
-    var scheduler = try Scheduler.init(allocator, .{});
+    var scheduler = try Scheduler.init(allocator, .{ .thread_count = 2 });
     defer scheduler.deinit();
 
     const init_seed: u64 = @intCast(std.time.timestamp());
@@ -103,24 +104,27 @@ pub fn main() anyerror!void {
     }});
 
     // create all cells
-    {
+    const entity_grid = create_cell_blk: {
         const cell_create_zone = ztracy.ZoneNC(@src(), "Create Cells", Color.purple);
         defer cell_create_zone.End();
 
-        for (0..grid_config.cell_count) |i| {
+        var cells: [grid_config.cell_count]ecez.Entity = undefined;
+        for (&cells, 0..) |*cell, cell_index| {
             const alive = rng.random().float(f32) < spawn_threshold;
-            _ = try storage.createEntity(.{
-                .pos = Components.GridPos{
-                    .x = @intCast(i % grid_config.dimension_x),
-                    .y = @intCast(i / grid_config.dimension_x),
+            cell.* = try storage.createEntity(.{
+                Components.GridPos{
+                    .x = @intCast(cell_index % grid_config.dimension_x),
+                    .y = @intCast(cell_index / grid_config.dimension_x),
                 },
-                .health = Components.Health{
+                Components.Health{
                     .alive = [_]bool{ alive, alive },
                     .active_cell_index = 0,
                 },
             });
         }
-    }
+
+        break :create_cell_blk cells;
+    };
 
     // create new lines
     {
@@ -141,6 +145,7 @@ pub fn main() anyerror!void {
         scheduler.dispatchEvent(&storage, .loop, EventArgument{
             .grid_config = grid_config,
             .render_entity = render_entity,
+            .entity_grid = &entity_grid,
         });
 
         // wait for previous update and render
@@ -148,6 +153,10 @@ pub fn main() anyerror!void {
     }
 }
 
+const RenderTargetWriteView = Storage.Subset(
+    .{Components.RenderTarget},
+    .read_and_write,
+);
 const RenderCellQuery = Storage.Query(
     struct {
         pos: Components.GridPos,
@@ -157,7 +166,7 @@ const RenderCellQuery = Storage.Query(
 );
 pub fn renderCellSystem(
     query: *RenderCellQuery,
-    render_view: *RenderTargetView,
+    render_view: *RenderTargetWriteView,
     event_arg: EventArgument,
 ) void {
     const zone = ztracy.ZoneNC(@src(), "Render Cell", Color.red);
@@ -194,7 +203,7 @@ const LinePosQuery = Storage.Query(
 );
 pub fn renderLineSystem(
     query: *LinePosQuery,
-    render_view: *RenderTargetView,
+    render_view: *RenderTargetWriteView,
     event_arg: EventArgument,
 ) void {
     const zone = ztracy.ZoneNC(@src(), "Render newline", Color.turquoise);
@@ -226,14 +235,18 @@ pub fn busyWorkSystem(query: *GridPosQuery) void {
     }
 }
 
+const RenderTargetReadView = Storage.Subset(
+    .{Components.RenderTarget},
+    .read_only,
+);
 pub fn flushBufferSystem(
-    render_view: *RenderTargetView,
+    render_view: *RenderTargetReadView,
     event_arg: EventArgument,
 ) void {
     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.turquoise);
     defer zone.End();
 
-    const render = render_view.getComponent(event_arg.render_entity, *Components.RenderTarget) catch unreachable;
+    const render = render_view.getComponent(event_arg.render_entity, Components.RenderTarget) catch unreachable;
     std.log.info("\n{s}\n\n", .{render.output_buffer});
 }
 
@@ -244,13 +257,13 @@ const PosHealthQuery = Storage.Query(
     },
     .{},
 );
-const HealthQuery = Storage.Query(
-    struct { health: Components.Health },
-    .{},
+const HealthView = Storage.Subset(
+    .{Components.Health},
+    .read_only,
 );
 pub fn updateCellSystem(
     pos_health_query: *PosHealthQuery,
-    health_query: *HealthQuery,
+    health_view: *HealthView,
     event_arg: EventArgument,
 ) void {
     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.turquoise);
@@ -279,10 +292,8 @@ pub fn updateCellSystem(
             for ([_]i32{ down, up, up }) |offset| {
                 cursor += offset;
                 if (cursor >= 0 and cursor < event_arg.grid_config.cell_count) {
-                    health_query.skip(@intCast(cursor));
-                    defer health_query.reset();
-
-                    const neighbour_health = health_query.next().?.health;
+                    const neighbour_entity = event_arg.entity_grid[@intCast(cursor)];
+                    const neighbour_health = health_view.getComponent(neighbour_entity, Components.Health) catch unreachable;
                     const alive = neighbour_health.alive[neighbour_index];
                     if (alive) {
                         neighbour_sum += 1;
@@ -297,10 +308,8 @@ pub fn updateCellSystem(
             for ([_]i32{ down, up, up }) |offset| {
                 cursor += offset;
                 if (cursor >= 0 and cursor < event_arg.grid_config.cell_count) {
-                    health_query.skip(@intCast(cursor));
-                    defer health_query.reset();
-
-                    const neighbour_health = health_query.next().?.health;
+                    const neighbour_entity = event_arg.entity_grid[@intCast(cursor)];
+                    const neighbour_health = health_view.getComponent(neighbour_entity, Components.Health) catch unreachable;
                     const alive = neighbour_health.alive[neighbour_index];
                     if (alive) {
                         neighbour_sum += 1;
@@ -312,10 +321,8 @@ pub fn updateCellSystem(
         // check up & down neighbours
         for ([_]i32{ current_index + up, current_index + down }) |cursor| {
             if (cursor >= 0 and cursor < event_arg.grid_config.cell_count) {
-                health_query.skip(@intCast(cursor));
-                defer health_query.reset();
-
-                const neighbour_health = health_query.next().?.health;
+                const neighbour_entity = event_arg.entity_grid[@intCast(cursor)];
+                const neighbour_health = health_view.getComponent(neighbour_entity, Components.Health) catch unreachable;
                 const alive = neighbour_health.alive[neighbour_index];
                 if (alive) {
                     neighbour_sum += 1;
@@ -358,6 +365,7 @@ test "systems produce expected 3x3 grid state" {
     const event_arg = EventArgument{
         .grid_config = grid_config,
         .render_entity = render_entity,
+        .entity_grid = &cell_entities,
     };
 
     { // Still life: Block
