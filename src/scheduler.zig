@@ -462,6 +462,7 @@ const BcEntityType = Testing.Structure.BC;
 const AbcEntityType = Testing.Structure.ABC;
 
 const StorageStub = CreateStorage(Testing.AllComponentsTuple);
+const Queries = Testing.Queries;
 
 test "system query can mutate components" {
     const Query = StorageStub.Query(struct {
@@ -502,24 +503,6 @@ test "system query can mutate components" {
 }
 
 test "system SubStorage can spawn new entites (and no race hazards)" {
-    const Queries = struct {
-        pub const ReadB = StorageStub.Query(struct {
-            b: Testing.Component.B,
-        }, .{});
-
-        pub const WriteB = StorageStub.Query(struct {
-            b: *Testing.Component.B,
-        }, .{});
-
-        pub const WriteA = StorageStub.Query(struct {
-            a: *Testing.Component.A,
-        }, .{});
-
-        pub const ReadA = StorageStub.Query(struct {
-            a: Testing.Component.A,
-        }, .{});
-    };
-
     const SubsetA = StorageStub.Subset(.{Testing.Component.A}, .read_and_write);
     const SubsetB = StorageStub.Subset(.{Testing.Component.B}, .read_and_write);
 
@@ -637,17 +620,13 @@ test "system SubStorage can spawn new entites (and no race hazards)" {
 }
 
 test "system sub storage can mutate components" {
-    const Query = StorageStub.Query(struct {
-        entity: Entity,
-    }, .{});
-
     const SubStorage = StorageStub.Subset(.{
         Testing.Component.A,
         Testing.Component.B,
     }, .read_and_write);
 
     const SystemStruct = struct {
-        pub fn mutateStuff(entities: *Query, ab: *SubStorage) void {
+        pub fn mutateStuff(entities: *Queries.Entities, ab: *SubStorage) void {
             while (entities.next()) |item| {
                 const a = ab.getComponent(item.entity, Testing.Component.A) catch @panic("oof");
 
@@ -682,48 +661,34 @@ test "system sub storage can mutate components" {
 }
 
 test "Dispatch is determenistic (no race conditions)" {
-    const Queries = struct {
-        const MutA = StorageStub.Query(struct {
-            a: *Testing.Component.A,
-        }, .{});
-
-        const MutB = StorageStub.Query(struct {
-            b: *Testing.Component.B,
-        }, .{});
-
-        const EntityQuery = StorageStub.Query(struct {
-            entity: Entity,
-        }, .{});
-    };
-
     const AbSubStorage = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B }, .read_and_write);
 
     const SystemStruct = struct {
-        pub fn incrA(q: *Queries.MutA) void {
+        pub fn incrA(q: *Queries.WriteA) void {
             while (q.next()) |item| {
                 item.a.value += 1;
             }
         }
 
-        pub fn incrB(q: *Queries.MutB) void {
+        pub fn incrB(q: *Queries.WriteB) void {
             while (q.next()) |item| {
                 item.b.value += 1;
             }
         }
 
-        pub fn doubleA(q: *Queries.MutA) void {
+        pub fn doubleA(q: *Queries.WriteA) void {
             while (q.next()) |item| {
                 item.a.value *= 2;
             }
         }
 
-        pub fn doubleB(q: *Queries.MutB) void {
+        pub fn doubleB(q: *Queries.WriteB) void {
             while (q.next()) |item| {
                 item.b.value *= 2;
             }
         }
 
-        pub fn storageIncrAIncrB(entities: *Queries.EntityQuery, sub: *AbSubStorage) void {
+        pub fn storageIncrAIncrB(entities: *Queries.Entities, sub: *AbSubStorage) void {
             while (entities.next()) |item| {
                 const ab = sub.getComponents(item.entity, struct {
                     a: *Testing.Component.A,
@@ -735,7 +700,7 @@ test "Dispatch is determenistic (no race conditions)" {
             }
         }
 
-        pub fn storageDoubleADoubleB(entities: *Queries.EntityQuery, sub: *AbSubStorage) void {
+        pub fn storageDoubleADoubleB(entities: *Queries.Entities, sub: *AbSubStorage) void {
             while (entities.next()) |item| {
                 const ab = sub.getComponents(item.entity, struct {
                     a: *Testing.Component.A,
@@ -747,7 +712,7 @@ test "Dispatch is determenistic (no race conditions)" {
             }
         }
 
-        pub fn storageZeroAZeroB(entities: *Queries.EntityQuery, sub: *AbSubStorage) void {
+        pub fn storageZeroAZeroB(entities: *Queries.Entities, sub: *AbSubStorage) void {
             while (entities.next()) |item| {
                 sub.setComponents(item.entity, .{
                     Testing.Component.A{ .value = 0 },
@@ -825,36 +790,26 @@ test "Dispatch is determenistic (no race conditions)" {
 }
 
 test "Dispatch with multiple events works" {
-    const Queries = struct {
-        const MutA = StorageStub.Query(struct {
-            a: *Testing.Component.A,
-        }, .{});
-
-        const MutB = StorageStub.Query(struct {
-            b: *Testing.Component.B,
-        }, .{});
-    };
-
     const SystemStruct = struct {
-        pub fn incrA(q: *Queries.MutA) void {
+        pub fn incrA(q: *Queries.WriteA) void {
             while (q.next()) |item| {
                 item.a.value += 1;
             }
         }
 
-        pub fn incrB(q: *Queries.MutB) void {
+        pub fn incrB(q: *Queries.WriteB) void {
             while (q.next()) |item| {
                 item.b.value += 1;
             }
         }
 
-        pub fn doubleA(q: *Queries.MutA) void {
+        pub fn doubleA(q: *Queries.WriteA) void {
             while (q.next()) |item| {
                 item.a.value *= 2;
             }
         }
 
-        pub fn doubleB(q: *Queries.MutB) void {
+        pub fn doubleB(q: *Queries.WriteB) void {
             while (q.next()) |item| {
                 item.b.value *= 2;
             }
@@ -922,36 +877,26 @@ test "Dispatch with multiple events works" {
 }
 
 test "dumpDependencyChain" {
-    const Queries = struct {
-        const MutA = StorageStub.Query(struct {
-            a: *Testing.Component.A,
-        }, .{});
-
-        const MutB = StorageStub.Query(struct {
-            b: *Testing.Component.B,
-        }, .{});
-    };
-
     const SystemStruct = struct {
-        pub fn incrA(q: *Queries.MutA) void {
+        pub fn incrA(q: *Queries.WriteA) void {
             while (q.next()) |item| {
                 item.a.value += 1;
             }
         }
 
-        pub fn incrB(q: *Queries.MutB) void {
+        pub fn incrB(q: *Queries.WriteB) void {
             while (q.next()) |item| {
                 item.b.value += 1;
             }
         }
 
-        pub fn doubleA(q: *Queries.MutA) void {
+        pub fn doubleA(q: *Queries.WriteA) void {
             while (q.next()) |item| {
                 item.a.value *= 2;
             }
         }
 
-        pub fn doubleB(q: *Queries.MutB) void {
+        pub fn doubleB(q: *Queries.WriteB) void {
             while (q.next()) |item| {
                 item.b.value *= 2;
             }
@@ -1013,15 +958,9 @@ test "systems can accepts event related data" {
         v: u32,
     };
 
-    const Queries = struct {
-        const MutA = StorageStub.Query(struct {
-            a: *Testing.Component.A,
-        }, .{});
-    };
-
     // define a system type
     const System = struct {
-        pub fn addToA(q: *Queries.MutA, add_value: AddValue) void {
+        pub fn addToA(q: *Queries.WriteA, add_value: AddValue) void {
             while (q.next()) |item| {
                 item.a.value += add_value.v;
             }
@@ -1053,15 +992,9 @@ test "systems can mutate event argument" {
         v: u32,
     };
 
-    const Queries = struct {
-        const ImmutA = StorageStub.Query(struct {
-            a: Testing.Component.A,
-        }, .{});
-    };
-
     // define a system type
     const System = struct {
-        pub fn addToA(q: *Queries.ImmutA, add_value: *AddValue) void {
+        pub fn addToA(q: *Queries.ReadA, add_value: *AddValue) void {
             while (q.next()) |item| {
                 add_value.v += item.a.value;
             }
@@ -1090,21 +1023,11 @@ test "systems can mutate event argument" {
 }
 
 test "system can contain two queries" {
-    const Queries = struct {
-        const MutA = StorageStub.Query(struct {
-            a: *Testing.Component.A,
-        }, .{});
-
-        const ImmutA = StorageStub.Query(struct {
-            a: *Testing.Component.A,
-        }, .{});
-    };
-
     const pass_value = 99;
     const fail_value = 100;
 
     const SystemStruct = struct {
-        pub fn eventSystem(query_mut: *Queries.MutA, query_const: *Queries.ImmutA) void {
+        pub fn eventSystem(query_mut: *Queries.WriteA, query_const: *Queries.ReadA) void {
             const mut_item = query_mut.next().?;
             const const_item = query_const.next().?;
             if (mut_item.a.value == const_item.a.value) {
@@ -1137,24 +1060,14 @@ test "system can contain two queries" {
 // NOTE: we don't use a cache anymore, but the test can stay for now since it might be good for
 //       detecting potential regressions
 test "event caching works" {
-    const Queries = struct {
-        const MutA = StorageStub.Query(struct {
-            a: *Testing.Component.A,
-        }, .{});
-
-        const MutB = StorageStub.Query(struct {
-            b: *Testing.Component.B,
-        }, .{});
-    };
-
     const Systems = struct {
-        pub fn incA(q: *Queries.MutA) void {
+        pub fn incA(q: *Queries.WriteA) void {
             while (q.next()) |item| {
                 item.a.value += 1;
             }
         }
 
-        pub fn incB(q: *Queries.MutB) void {
+        pub fn incB(q: *Queries.WriteB) void {
             while (q.next()) |item| {
                 item.b.value += 1;
             }
@@ -1226,14 +1139,8 @@ test "event caching works" {
 }
 
 test "Event with no archetypes does not crash" {
-    const Queries = struct {
-        const MutA = StorageStub.Query(struct {
-            a: *Testing.Component.A,
-        }, .{});
-    };
-
     const Systems = struct {
-        pub fn incA(q: *Queries.MutA) void {
+        pub fn incA(q: *Queries.WriteA) void {
             while (q.next()) |item| {
                 item.a.value += 1;
             }
@@ -1260,14 +1167,8 @@ test "reproducer: Dispatcher does not include new components to systems previous
         count: u32,
     };
 
-    const Queries = struct {
-        const ImmutA = StorageStub.Query(struct {
-            a: Testing.Component.A,
-        }, .{});
-    };
-
     const Systems = struct {
-        pub fn addToTracker(q: *Queries.ImmutA, tracker: *Tracker) void {
+        pub fn addToTracker(q: *Queries.WriteA, tracker: *Tracker) void {
             while (q.next()) |item| {
                 tracker.count += item.a.value;
             }

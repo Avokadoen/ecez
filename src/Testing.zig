@@ -1,3 +1,6 @@
+const CreateStorage = @import("storage.zig").CreateStorage;
+const Entity = @import("entity_type.zig").Entity;
+
 pub const Component = struct {
     pub const A = struct { value: u32 = 2 };
     pub const B = struct { value: u8 = 4 };
@@ -36,18 +39,36 @@ pub const AllComponentsTuple = .{
     Component.C,
 };
 
-// TODO: remove me
-pub const AllArchetypesArr = [_]type{
-    Structure.A,
-    Structure.AB,
-    Structure.AC,
-    Structure.ABC,
-};
+pub const StorageStub = CreateStorage(AllComponentsTuple);
 
-// TODO: remove me
-pub const AllArchetypesTuple = .{
-    Structure.A,
-    Structure.AB,
-    Structure.AC,
-    Structure.ABC,
+pub const Queries = struct {
+    pub const Entities = StorageStub.Query(struct {
+        entity: Entity,
+    }, .{});
+
+    pub const ReadA = StorageStub.Query(struct {
+        a: Component.A,
+    }, .{});
+
+    pub const ReadB = StorageStub.Query(struct {
+        b: Component.B,
+    }, .{});
+
+    pub const ReadAReadB = StorageStub.Query(struct {
+        a: Component.A,
+        b: Component.B,
+    }, .{});
+
+    pub const WriteA = StorageStub.Query(struct {
+        a: *Component.A,
+    }, .{});
+
+    pub const WriteB = StorageStub.Query(struct {
+        b: *Component.B,
+    }, .{});
+
+    pub const WriteAReadB = StorageStub.Query(struct {
+        a: *Component.A,
+        b: Component.B,
+    }, .{});
 };

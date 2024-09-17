@@ -912,13 +912,14 @@ pub const CompileReflect = struct {
 const Testing = @import("Testing.zig");
 const testing = std.testing;
 
-const StorageStub = CreateStorage(Testing.AllComponentsTuple);
-
 // TODO: we cant use tuples here because of https://github.com/ziglang/zig/issues/12963
 const AbEntityType = Testing.Structure.AB;
 const AcEntityType = Testing.Structure.AC;
 const BcEntityType = Testing.Structure.BC;
 const AbcEntityType = Testing.Structure.ABC;
+
+const StorageStub = Testing.StorageStub;
+const Queries = Testing.Queries;
 
 test "init() + deinit() is idempotent" {
     var storage = try StorageStub.init(testing.allocator);
@@ -1448,10 +1449,7 @@ test "query with single include type works" {
 
     {
         var index: usize = 0;
-        var a_iter = StorageStub.Query(
-            struct { a: Testing.Component.A },
-            .{},
-        ).submit(&storage);
+        var a_iter = Queries.ReadA.submit(&storage);
 
         while (a_iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
@@ -1475,10 +1473,7 @@ test "query skip works" {
     }
 
     {
-        var a_iter = StorageStub.Query(
-            struct { a: Testing.Component.A },
-            .{},
-        ).submit(&storage);
+        var a_iter = Queries.ReadA.submit(&storage);
 
         var index: usize = 50;
         a_iter.skip(50);
@@ -1505,10 +1500,7 @@ test "query reset works" {
     }
 
     {
-        var a_iter = StorageStub.Query(
-            struct { a: Testing.Component.A },
-            .{},
-        ).submit(&storage);
+        var a_iter = Queries.ReadA.submit(&storage);
 
         var index: usize = 0;
         while (a_iter.next()) |item| {
@@ -1543,13 +1535,7 @@ test "query with multiple include type works" {
     }
 
     {
-        var a_b_iter = StorageStub.Query(
-            struct {
-                a: Testing.Component.A,
-                b: Testing.Component.B,
-            },
-            .{},
-        ).submit(&storage);
+        var a_b_iter = Queries.ReadAReadB.submit(&storage);
 
         var index: usize = 0;
         while (a_b_iter.next()) |item| {
@@ -1579,23 +1565,17 @@ test "query with single ptr include type works" {
 
     {
         var index: usize = 0;
-        var a_iter = StorageStub.Query(
-            struct { a_ptr: *Testing.Component.A },
-            .{},
-        ).submit(&storage);
+        var a_iter = Queries.WriteA.submit(&storage);
 
         while (a_iter.next()) |item| {
-            item.a_ptr.value += 1;
+            item.a.value += 1;
             index += 1;
         }
     }
 
     {
         var index: usize = 1;
-        var a_iter = StorageStub.Query(
-            struct { a: Testing.Component.A },
-            .{},
-        ).submit(&storage);
+        var a_iter = Queries.ReadA.submit(&storage);
 
         while (a_iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
