@@ -409,7 +409,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                             const components_info = @typeInfo(Components);
                             for (components_info.Struct.fields) |field| {
                                 const field_info = @typeInfo(field.type);
-                                if (field_info.Pointer) {
+                                if (field_info == .Pointer) {
                                     @compileError("Accessing component pointers is illegal in a read only sub storage");
                                 }
                             }
@@ -1400,7 +1400,7 @@ test "Subset read only getComponent(s)" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const Subset = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B }, .read_and_write);
+    const Subset = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B }, .read_only);
     const storage_subset = Subset{
         .storage = &storage,
     };
