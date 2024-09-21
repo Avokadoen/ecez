@@ -116,9 +116,10 @@ pub fn CreateScheduler(comptime events: anytype) type {
             defer zone.End();
 
             const Storage = get_storage_type_blk: {
-                const storage_ptr = @typeInfo(@TypeOf(storage));
+                const StoragePtr = @TypeOf(storage);
+                const storage_ptr = @typeInfo(StoragePtr);
                 if (storage_ptr != .Pointer) {
-                    @compileError(@src().fn_name ++ " expected argument storage to be pointer to a ecez.Storage");
+                    @compileError(@src().fn_name ++ " expected argument storage to be pointer to a ecez.Storage, got " ++ @typeName(StoragePtr));
                 }
 
                 const child_type = storage_ptr.Pointer.child;
