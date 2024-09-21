@@ -267,6 +267,8 @@ test buildDependencyList {
     };
 
     const SubStorages = struct {
+        const ReadA = StorageStub.Subset(.{Testing.Component.A}, .read_only);
+
         const WriteA = StorageStub.Subset(.{Testing.Component.A}, .read_and_write);
 
         const WriteB = StorageStub.Subset(.{Testing.Component.B}, .read_and_write);
@@ -355,6 +357,24 @@ test buildDependencyList {
         }
         pub fn readAReadBReadC(abc: *SubStorages.ReadABC) void {
             _ = abc;
+        }
+    };
+
+    const MiscSystems = struct {
+        pub fn SpamA(
+            qa_0: *Queries.WriteA,
+            qa_1: *Queries.WriteA,
+            qa_2: *Queries.ReadA,
+            sa_0: *SubStorages.WriteA,
+            sa_1: *SubStorages.WriteA,
+            sa_2: *SubStorages.ReadA,
+        ) void {
+            _ = qa_0; // autofix
+            _ = qa_1; // autofix
+            _ = qa_2; // autofix
+            _ = sa_0; // autofix
+            _ = sa_1; // autofix
+            _ = sa_2; // autofix
         }
     };
 
@@ -1070,6 +1090,28 @@ test buildDependencyList {
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
                 try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
             }
+        }
+    }
+
+    // Spam single access
+    {
+        const dependencies = comptime buildDependencyList(.{
+            SingleSubStorageSystems.writeA,
+            SingleQuerySystems.writeA,
+            SingleQuerySystems.readA,
+            MiscSystems.SpamA,
+            SingleQuerySystems.writeA,
+        }, 5);
+        const expected_dependencies = [_]Dependency{
+            Dependency{ .wait_on_indices = &[_]u32{} },
+            Dependency{ .wait_on_indices = &[_]u32{0} },
+            Dependency{ .wait_on_indices = &[_]u32{1} },
+            Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+            Dependency{ .wait_on_indices = &[_]u32{3} },
+        };
+
+        for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+            try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
         }
     }
 }
