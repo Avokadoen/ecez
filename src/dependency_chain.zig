@@ -1148,7 +1148,7 @@ test buildDependencyList {
         }
     }
 
-    // Entitty only
+    // Entity only
     {
         const dependencies = comptime buildDependencyList(.{
             SingleQuerySystems.entityOnly,
