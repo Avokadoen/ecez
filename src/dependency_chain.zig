@@ -58,7 +58,7 @@ pub fn buildDependencyList(
                 access_params[access_params_len] = param;
                 access_params_len += 1;
                 switch (TypeParam.EcezType) {
-                    QueryType => access_count += TypeParam._include_fields.len,
+                    QueryType => access_count += TypeParam._include_fields.len + TypeParam._exclude_types.len,
                     SubsetType => access_count += TypeParam.component_subset_arr.len,
                     else => |Type| @compileError("Unknown system argume type " ++ @typeName(Type)),
                 }
@@ -78,6 +78,13 @@ pub fn buildDependencyList(
                                 access[access_index] = Access{
                                     .type = req.type,
                                     .right = if (req.attr == .value) .read else .write,
+                                };
+                                access_index += 1;
+                            }
+                            for (TypeParam._exclude_types) |ExclComp| {
+                                access[access_index] = Access{
+                                    .type = ExclComp,
+                                    .right = .read,
                                 };
                                 access_index += 1;
                             }
@@ -264,6 +271,23 @@ test buildDependencyList {
             b: *Testing.Component.B,
             c: *Testing.Component.C,
         }, .{});
+
+        pub const EntityOnly = StorageStub.Query(struct {
+            entity: @import("entity_type.zig").Entity,
+        }, .{});
+
+        pub const ExclReadA = StorageStub.Query(struct {
+            entity: @import("entity_type.zig").Entity,
+        }, .{
+            Testing.Component.A,
+        });
+
+        pub const ExclReadAB = StorageStub.Query(struct {
+            entity: @import("entity_type.zig").Entity,
+        }, .{
+            Testing.Component.A,
+            Testing.Component.B,
+        });
     };
 
     const SubStorages = struct {
@@ -312,6 +336,15 @@ test buildDependencyList {
         }
         pub fn writeAWriteBWriteC(abc: *Queries.WriteAWriteBWriteC) void {
             _ = abc;
+        }
+        pub fn entityOnly(e: *Queries.EntityOnly) void {
+            _ = e;
+        }
+        pub fn exclReadA(a: *Queries.ExclReadA) void {
+            _ = a;
+        }
+        pub fn exclReadAexclReadB(a: *Queries.ExclReadAB) void {
+            _ = a;
         }
     };
 
@@ -369,12 +402,12 @@ test buildDependencyList {
             sa_1: *SubStorages.WriteA,
             sa_2: *SubStorages.ReadA,
         ) void {
-            _ = qa_0; // autofix
-            _ = qa_1; // autofix
-            _ = qa_2; // autofix
-            _ = sa_0; // autofix
-            _ = sa_1; // autofix
-            _ = sa_2; // autofix
+            _ = qa_0;
+            _ = qa_1;
+            _ = qa_2;
+            _ = sa_0;
+            _ = sa_1;
+            _ = sa_2;
         }
     };
 
@@ -1108,6 +1141,50 @@ test buildDependencyList {
             Dependency{ .wait_on_indices = &[_]u32{1} },
             Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
             Dependency{ .wait_on_indices = &[_]u32{3} },
+        };
+
+        for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+            try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+        }
+    }
+
+    // Entitty only
+    {
+        const dependencies = comptime buildDependencyList(.{
+            SingleQuerySystems.entityOnly,
+            SingleQuerySystems.entityOnly,
+            SingleQuerySystems.entityOnly,
+            SingleQuerySystems.readAReadB,
+        }, 4);
+        const expected_dependencies = [_]Dependency{
+            Dependency{ .wait_on_indices = &[_]u32{} },
+            Dependency{ .wait_on_indices = &[_]u32{} },
+            Dependency{ .wait_on_indices = &[_]u32{} },
+            Dependency{ .wait_on_indices = &[_]u32{} },
+        };
+
+        for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+            try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+        }
+    }
+
+    // Exclude
+    {
+        const dependencies = comptime buildDependencyList(.{
+            SingleQuerySystems.writeA,
+            SingleQuerySystems.readAReadB,
+            SingleQuerySystems.exclReadA,
+            SingleQuerySystems.exclReadAexclReadB,
+            SingleQuerySystems.writeA,
+            SingleQuerySystems.writeB,
+        }, 6);
+        const expected_dependencies = [_]Dependency{
+            Dependency{ .wait_on_indices = &[_]u32{} },
+            Dependency{ .wait_on_indices = &[_]u32{0} },
+            Dependency{ .wait_on_indices = &[_]u32{0} },
+            Dependency{ .wait_on_indices = &[_]u32{0} },
+            Dependency{ .wait_on_indices = &[_]u32{ 3, 2, 1 } },
+            Dependency{ .wait_on_indices = &[_]u32{ 3, 1 } },
         };
 
         for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {

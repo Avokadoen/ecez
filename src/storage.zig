@@ -536,7 +536,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                 // Entity only query
                 return struct {
-                    pub const _include_fields = include_fields;
+                    // Read by dependency_chain
+                    pub const _include_fields = &[0]std.builtin.Type.StructField{};
+                    // Read by dependency_chain
+                    pub const _exclude_types = &[0]type{};
+
                     pub const EcezType = QueryType;
 
                     pub const ThisQuery = @This();
@@ -586,7 +590,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             }
 
             return struct {
-                pub const _include_fields = include_fields;
+                // Read by dependency_chain
+                pub const _include_fields = include_fields[include_start_index..include_end_index];
+                // Read by dependency_chain
+                pub const _exclude_types = query_components[component_include_count..];
+
                 pub const EcezType = QueryType;
 
                 pub const ThisQuery = @This();
