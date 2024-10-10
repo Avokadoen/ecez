@@ -82,7 +82,7 @@ pub fn serialize(
 
             {
                 const sparse_set = storage.getSparseSetConstPtr(Component);
-                total_size += sparse_set.sparse_len * @sizeOf(EntityId);
+                total_size += calcAlignedEntityIdSize(sparse_set.sparse_len);
             }
 
             if (cull_component == false) {
@@ -154,9 +154,12 @@ pub fn serialize(
             // Write EntityIds
             {
                 if (comp_chunk.entity_count > 0) {
-                    const size_of_entities = @sizeOf(EntityId) * comp_chunk.entity_count;
+                    // Ignore alignment when doing the write (padding bytes are undefined)
+                    const size_of_entities = sparse_set.sparse_len * @sizeOf(EntityId);
                     const sparse_bytes = bytes[byte_cursor .. byte_cursor + size_of_entities];
-                    byte_cursor += size_of_entities;
+
+                    // Ensure alignment is respected for byte cursor
+                    byte_cursor += calcAlignedEntityIdSize(sparse_set.sparse_len);
 
                     if (cull_component) {
                         std.debug.assert(set.Sparse.not_set == std.math.maxInt(EntityId));
@@ -262,6 +265,10 @@ pub fn deserialize(
     }
 }
 
+inline fn calcAlignedEntityIdSize(sparse_len: usize) usize {
+    return std.mem.alignForward(usize, sparse_len * @sizeOf(EntityId), 8);
+}
+
 /// ezby v1 files can only have 2 chunks. Ezby chunk is always first, then 1 or many Comp chunks
 pub const Chunk = struct {
     pub const Ezby = packed struct {
@@ -319,6 +326,7 @@ pub const Chunk = struct {
         };
 
         bytes_cursor += parse_entity_ids_blk: {
+            // Point at actual entities, ignoring any written alignment padding
             const size_of_entity_ids = @sizeOf(EntityId) * chunk.*.entity_count;
             entity_ids.ptr = @as(
                 [*]const EntityId,
@@ -326,7 +334,8 @@ pub const Chunk = struct {
             );
             entity_ids.len = @intCast(chunk.*.entity_count);
 
-            break :parse_entity_ids_blk size_of_entity_ids;
+            // Report new offset by respecting alignment padding
+            break :parse_entity_ids_blk calcAlignedEntityIdSize(@intCast(chunk.*.entity_count));
         };
 
         bytes_cursor += parse_component_bytes_blk: {
@@ -336,7 +345,7 @@ pub const Chunk = struct {
             break :parse_component_bytes_blk size_of_component_bytes;
         };
 
-        const aligned_cursor = std.mem.alignForward(usize, bytes_cursor, 8);
+        const aligned_cursor = std.mem.alignForward(usize, bytes_cursor, alignment);
         return bytes[aligned_cursor..];
     }
 };
