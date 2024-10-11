@@ -41,7 +41,7 @@ python -m http.server 8000 -d ecez/zig-out/doc/ecez # you can then access the do
 ### Compile time based and type safe API
 Zig's comptime feature is utilized to perform static reflection on the usage of the API to validate usage and report useful messages to the user (in theory :)). 
 
-https://github.com/Avokadoen/ecez/blob/0fc1984cf5c0e6b9b8e3f4a5c0aa5703dc144151/examples/readme/main.zig#L1-L153
+https://github.com/Avokadoen/ecez/blob/4c713bfb1a5a65922bab3bcaabee402bbabb7c85/examples/readme/main.zig#L1-L153
 
 ### System arguments
 
@@ -68,22 +68,7 @@ ecez uses a custom byte format to convert storages into a slice of bytes.
 
 #### Example
 
-```zig
-const ecez = @import("ecez");
-const ezby = ecez.ezby;
-
-// ... create storage and some entities with components ...
-
-// serialize the storage into a slice of bytes
-const bytes = try ezby.serialize(StorageType, testing.allocator, storage, .{});
-defer testing.allocator.free(bytes);
-
-// nuke the storage for fun
-storage.clearRetainingCapacity();
-
-// restore the storage state with the slice of bytes which is ezby encoded
-try ezby.deserialize(StorageType, &storage, bytes);
-```
+https://github.com/Avokadoen/ecez/blob/4c713bfb1a5a65922bab3bcaabee402bbabb7c85/examples/readme/main.zig#L143-L153
 
 ### Tracy integration using [ztracy](https://github.com/michal-z/zig-gamedev/tree/main/libs/ztracy)
 ![ztracy](media/ztracy.png)
