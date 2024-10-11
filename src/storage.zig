@@ -357,8 +357,8 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 pub fn createEntity(self: *ThisSubset, entity_state: anytype) error{OutOfMemory}!Entity {
                     // Validate that the correct access was requested in subset type
                     comptime {
-                        const unset_info = @typeInfo(@TypeOf(entity_state));
-                        get_validation_loop: for (unset_info.Struct.fields) |field| {
+                        const entity_state_info = @typeInfo(@TypeOf(entity_state));
+                        get_validation_loop: for (entity_state_info.Struct.fields) |field| {
                             const FieldType = field.type;
                             for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
                                 if (FieldType == InnerSubsetComp) {
@@ -382,8 +382,8 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 pub fn setComponents(self: *const ThisSubset, entity: Entity, struct_of_components: anytype) error{OutOfMemory}!void {
                     // Validate that the correct access was requested in subset type
                     comptime {
-                        const unset_info = @typeInfo(@TypeOf(struct_of_components));
-                        get_validation_loop: for (unset_info.Struct.fields) |field| {
+                        const set_info = @typeInfo(@TypeOf(struct_of_components));
+                        get_validation_loop: for (set_info.Struct.fields) |field| {
                             const FieldType = field.type;
                             for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
                                 if (FieldType == InnerSubsetComp) {

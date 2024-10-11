@@ -73,15 +73,13 @@ pub fn main() anyerror!void {
 
     // You can define subsets of the storage.
     // This is used to track what components systems will read/write
-    const StorageSubset = struct {
-        const PosVelView = Storage.Subset(
-            .{
-                Component.Position,
-                Component.Velocity,
-            },
-            .read_and_write,
-        );
-    };
+    const StorageSubset = Storage.Subset(
+        .{
+            *Component.Position, // Request Position by pointer access (subset has write and read access for this type)
+            *Component.Velocity, // Also request velocity with write access
+            Component.Health, // Request Health by value only (subset has read only access for this type)
+        },
+    );
 
     // You can send data to systems through event arguments
     const MouseEvent = struct {
@@ -99,10 +97,17 @@ pub fn main() anyerror!void {
         }
 
         // Systems can also have multiple query arguments, and Storage.Subsets
-        pub fn spawnLivingTrail(living_query: *Queries.Living, pos_vel_view: *StorageSubset.PosVelView) void {
+        pub fn spawnLivingTrail(living_query: *Queries.Living, subset: *StorageSubset) void {
             while (living_query.next()) |item| {
                 // For each living, create a new entity at the living pos
-                _ = pos_vel_view.createEntity(.{ item.pos, Component.Velocity{} }) catch @panic("oom");
+                const new_entity = subset.createEntity(.{ item.pos, Component.Velocity{} }) catch @panic("oom");
+
+                // we can read health from the storage subset, but no write operation would be allowed (compile error)
+                // Write operations include:
+                //  - getComponent(s) with health as pointer
+                //  - (un)setComponents with health
+                //  - createEntity with health
+                std.debug.assert(subset.hasComponents(new_entity, .{Component.Health}) == false);
             }
         }
 
