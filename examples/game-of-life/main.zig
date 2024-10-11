@@ -154,8 +154,7 @@ pub fn main() anyerror!void {
 }
 
 const RenderTargetWriteView = Storage.Subset(
-    .{Components.RenderTarget},
-    .read_and_write,
+    .{*Components.RenderTarget},
 );
 const RenderCellQuery = Storage.Query(
     struct {
@@ -237,7 +236,6 @@ pub fn busyWorkSystem(query: *GridPosQuery) void {
 
 const RenderTargetReadView = Storage.Subset(
     .{Components.RenderTarget},
-    .read_only,
 );
 pub fn flushBufferSystem(
     render_view: *RenderTargetReadView,
@@ -259,7 +257,6 @@ const PosHealthQuery = Storage.Query(
 );
 const HealthView = Storage.Subset(
     .{Components.Health},
-    .read_only,
 );
 pub fn updateCellSystem(
     pos_health_query: *PosHealthQuery,

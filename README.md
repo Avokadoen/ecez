@@ -109,12 +109,11 @@ while (living_iter.next()) |item| {
 // You can define subsets of the storage.
 // This is used to track what components systems will read/write
 const StorageSubset = struct {
-    const PosVelView = Storage.Subset(
+    const PosVelSubset = Storage.Subset(
         .{
-            Component.Position,
-            Component.Velocity,
+            Component.Position, // Request positions by value only (subset has read only access for this type)
+            *Component.Velocity, // Request Velocity by pointer access (sbuser has write and read access for this type)
         },
-        .read_and_write,
     );
 };
 
@@ -134,7 +133,7 @@ const Systems = struct {
     }
 
     // Systems can also have multiple query arguments, and Storage.Subsets
-    pub fn spawnLivingTrail(living_query: *Queries.Living, pos_vel_view: *StorageSubset.PosVelView) void {
+    pub fn spawnLivingTrail(living_query: *Queries.Living, pos_vel_view: *StorageSubset.PosVelSubset) void {
         while (living_query.next()) |item| {
             // For each living, create a new entity at the living pos
             _ = pos_vel_view.createEntity(.{ item.pos, Component.Velocity{} }) catch @panic("oom");

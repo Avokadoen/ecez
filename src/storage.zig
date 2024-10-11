@@ -329,10 +329,19 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         /// This is used by the scheduler to track systems that does storage edits and to allow
         /// narrow synchronization. In other words, this lets the scheduler see which components
         /// need to be accounted for in a system when present as a system argument.
-        pub fn Subset(comptime component_subset: anytype, comptime access: SubsetAccess) type {
+        ///
+        /// Request a component as a pointer for write access. Value for read-only access
+        pub fn Subset(comptime component_subset: anytype) type {
 
             // Check if tuple is valid and get array of types instead if valid
-            const comp_arr = CompileReflect.verifyComponentTuple(component_subset);
+            const comp_types = CompileReflect.verifyComponentTuple(component_subset);
+            const inner_comp_types = get_inner_blk: {
+                var inner: [comp_types.len]type = undefined;
+                for (&inner, comp_types) |*Inner, CompType| {
+                    Inner.* = CompileReflect.compactComponentRequest(CompType).type;
+                }
+                break :get_inner_blk inner;
+            };
 
             // Check that each component type is part of the storage
             comptime CompileReflect.verifyInnerTypesIsInSlice(
@@ -343,50 +352,83 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
             return struct {
                 pub const EcezType = SubsetType;
-                pub const component_subset_arr = comp_arr;
-                pub const track_access = access;
+
+                pub const component_access = comp_types;
 
                 pub const ThisSubset = @This();
 
                 storage: *Storage,
 
                 pub fn createEntity(self: *ThisSubset, entity_state: anytype) error{OutOfMemory}!Entity {
+                    // Validate that the correct access was requested in subset type
                     comptime {
-                        dissallowInReadOnly(@src());
+                        const unset_info = @typeInfo(@TypeOf(entity_state));
+                        get_validation_loop: for (unset_info.Struct.fields) |field| {
+                            const FieldType = field.type;
+                            for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
+                                if (FieldType == InnerSubsetComp) {
+                                    // Subset is registered to have ptr access, validation is OK
+                                    const subset_access = CompileReflect.compactComponentRequest(SubsetComp);
+                                    if (subset_access.attr == .ptr) {
+                                        continue :get_validation_loop;
+                                    }
 
-                        CompileReflect.verifyInnerTypesIsInSlice(
-                            " is not part of " ++ simplifiedTypeName(),
-                            &component_subset_arr,
-                            @TypeOf(entity_state),
-                        );
+                                    // Criteria above not met. Validation NOT OK
+                                    @compileError(@src().fn_name ++ " " ++ @typeName(InnerSubsetComp) ++ ", subset " ++ simplifiedTypeName() ++ " only has value access (must have ptr/write access)");
+                                }
+                            }
+                            @compileError(@src().fn_name ++ " " ++ @typeName(FieldType) ++ " subset " ++ simplifiedTypeName() ++ " does not have this type");
+                        }
                     }
 
                     return self.storage.createEntity(entity_state);
                 }
 
                 pub fn setComponents(self: *const ThisSubset, entity: Entity, struct_of_components: anytype) error{OutOfMemory}!void {
+                    // Validate that the correct access was requested in subset type
                     comptime {
-                        dissallowInReadOnly(@src());
+                        const unset_info = @typeInfo(@TypeOf(struct_of_components));
+                        get_validation_loop: for (unset_info.Struct.fields) |field| {
+                            const FieldType = field.type;
+                            for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
+                                if (FieldType == InnerSubsetComp) {
+                                    // Subset is registered to have ptr access, validation is OK
+                                    const subset_access = CompileReflect.compactComponentRequest(SubsetComp);
+                                    if (subset_access.attr == .ptr) {
+                                        continue :get_validation_loop;
+                                    }
 
-                        CompileReflect.verifyInnerTypesIsInSlice(
-                            " is not part of " ++ simplifiedTypeName(),
-                            &component_subset_arr,
-                            @TypeOf(struct_of_components),
-                        );
+                                    // Criteria above not met. Validation NOT OK
+                                    @compileError(@src().fn_name ++ " " ++ @typeName(InnerSubsetComp) ++ ", subset " ++ simplifiedTypeName() ++ " only has value access (must have ptr/write access)");
+                                }
+                            }
+                            @compileError(@src().fn_name ++ " " ++ @typeName(FieldType) ++ " subset " ++ simplifiedTypeName() ++ " does not have this type");
+                        }
                     }
 
                     return self.storage.setComponents(entity, struct_of_components);
                 }
 
                 pub fn unsetComponents(self: *const ThisSubset, entity: Entity, comptime struct_of_remove_components: anytype) void {
+                    // Validate that the correct access was requested in subset type
                     comptime {
-                        dissallowInReadOnly(@src());
+                        const unset_info = @typeInfo(@TypeOf(struct_of_remove_components));
+                        get_validation_loop: for (unset_info.Struct.fields) |field| {
+                            const FieldType = @field(struct_of_remove_components, field.name);
+                            for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
+                                if (FieldType == InnerSubsetComp) {
+                                    // Subset is registered to have ptr access, validation is OK
+                                    const subset_access = CompileReflect.compactComponentRequest(SubsetComp);
+                                    if (subset_access.attr == .ptr) {
+                                        continue :get_validation_loop;
+                                    }
 
-                        CompileReflect.verifyInnerTypesIsInSlice(
-                            " is not part of " ++ simplifiedTypeName(),
-                            &component_subset_arr,
-                            struct_of_remove_components,
-                        );
+                                    // Criteria above not met. Validation NOT OK
+                                    @compileError(@src().fn_name ++ " " ++ @typeName(InnerSubsetComp) ++ ", subset " ++ simplifiedTypeName() ++ " only has value access (must have ptr/write access)");
+                                }
+                            }
+                            @compileError(@src().fn_name ++ " " ++ @typeName(FieldType) ++ " subset " ++ simplifiedTypeName() ++ " does not have this type");
+                        }
                     }
 
                     self.storage.unsetComponents(entity, struct_of_remove_components);
@@ -395,7 +437,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 pub fn hasComponents(self: *const ThisSubset, entity: Entity, comptime components: anytype) bool {
                     comptime CompileReflect.verifyInnerTypesIsInSlice(
                         " is not part of " ++ simplifiedTypeName(),
-                        &component_subset_arr,
+                        &inner_comp_types,
                         components,
                     );
 
@@ -403,43 +445,59 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 }
 
                 pub fn getComponents(self: *const ThisSubset, entity: Entity, comptime Components: type) error{MissingComponent}!Components {
+                    // Validate that the correct access was requested in subset type
                     comptime {
-                        // If this is a read only storage, then we must make sure there is no pointers in Components
-                        if (access == .read_only) {
-                            const components_info = @typeInfo(Components);
-                            for (components_info.Struct.fields) |field| {
-                                const field_info = @typeInfo(field.type);
-                                if (field_info == .Pointer) {
-                                    @compileError("Accessing component pointers is illegal in a read only sub storage");
+                        const get_info = @typeInfo(Components);
+                        get_validation_loop: for (get_info.Struct.fields) |field| {
+                            const component_to_get = CompileReflect.compactComponentRequest(field.type);
+
+                            for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
+                                if (component_to_get.type == InnerSubsetComp) {
+                                    // If we found get component in subset, and it is access by value, then validation is OK
+                                    if (component_to_get.attr == .value) {
+                                        continue :get_validation_loop;
+                                    }
+
+                                    // Get by ptr, subset is registered to have ptr access, validation is OK
+                                    const subset_access = CompileReflect.compactComponentRequest(SubsetComp);
+                                    if (subset_access.attr == .ptr) {
+                                        continue :get_validation_loop;
+                                    }
+
+                                    // Criteria above not met. Validation NOT OK
+                                    @compileError(@src().fn_name ++ " called with ptr of " ++ @typeName(InnerSubsetComp) ++ ", subset " ++ simplifiedTypeName() ++ " only has value access");
                                 }
                             }
+                            @compileError(@src().fn_name ++ " requested " ++ @typeName(component_to_get.type) ++ " subset " ++ simplifiedTypeName() ++ " does not have this type");
                         }
-
-                        CompileReflect.verifyInnerTypesIsInSlice(
-                            " is not part of " ++ simplifiedTypeName(),
-                            &component_subset_arr,
-                            Components,
-                        );
                     }
 
                     return self.storage.getComponents(entity, Components);
                 }
 
                 pub fn getComponent(self: *const ThisSubset, entity: Entity, comptime Component: type) error{MissingComponent}!Component {
-                    comptime {
-                        // If this is a read only storage, then we must make sure there is no pointers in Components
-                        if (access == .read_only) {
-                            const components_info = @typeInfo(Component);
-                            if (components_info == .Pointer) {
-                                @compileError("Accessing component pointers is illegal in a read only sub storage");
+                    // Validate that the correct access was requested in subset type
+                    comptime get_validation_blk: {
+                        const component_to_get = CompileReflect.compactComponentRequest(Component);
+
+                        for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
+                            if (component_to_get.type == InnerSubsetComp) {
+                                // If we found get component in subset, and it is access by value, then validation is OK
+                                if (component_to_get.attr == .value) {
+                                    break :get_validation_blk;
+                                }
+
+                                // Get by ptr, subset is registered to have ptr access, validation is OK
+                                const subset_access = CompileReflect.compactComponentRequest(SubsetComp);
+                                if (subset_access.attr == .ptr) {
+                                    break :get_validation_blk;
+                                }
+
+                                // Criteria above not met. Validation NOT OK
+                                @compileError(@src().fn_name ++ " called with ptr of " ++ @typeName(InnerSubsetComp) ++ ", subset " ++ simplifiedTypeName() ++ " only has value access");
                             }
                         }
-
-                        CompileReflect.verifyInnerTypesIsInSlice(
-                            " is not part of " ++ simplifiedTypeName(),
-                            &component_subset_arr,
-                            .{Component},
-                        );
+                        @compileError(@src().fn_name ++ " requested " ++ @typeName(component_to_get.type) ++ " subset " ++ simplifiedTypeName() ++ " does not have this type");
                     }
 
                     return self.storage.getComponent(entity, Component);
@@ -449,12 +507,6 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     const type_name = @typeName(ThisSubset);
                     const start_index = std.mem.indexOf(u8, type_name, "Subset").?;
                     return type_name[start_index..];
-                }
-
-                fn dissallowInReadOnly(caller: std.builtin.SourceLocation) void {
-                    if (access == .read_only) {
-                        @compileError("can't call " ++ caller.fn_name ++ " on a read only Storage Subset");
-                    }
                 }
             };
         }
@@ -884,8 +936,9 @@ pub const CompileReflect = struct {
                 @compileError("components must be a struct of types, field '" ++ field.name ++ "' was " ++ @typeName(field.type));
             }
 
-            if (@typeInfo(components[component_index]) != .Struct) {
-                @compileError("component types must be a struct, field '" ++ field.name ++ "' was '" ++ @typeName(components[component_index]));
+            const compo_field_info = @typeInfo(components[component_index]);
+            if (compo_field_info != .Struct and compo_field_info != .Pointer) {
+                @compileError("component types must be a struct or pointer, field '" ++ field.name ++ "' was '" ++ @typeName(components[component_index]));
             }
 
             field_type.* = components[component_index];
@@ -1311,7 +1364,10 @@ test "Subset createEntity" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const Subset = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B }, .read_and_write);
+    const Subset = StorageStub.Subset(.{
+        *Testing.Component.A,
+        *Testing.Component.B,
+    });
     var storage_subset = Subset{
         .storage = &storage,
     };
@@ -1331,7 +1387,10 @@ test "Subset setComponents() can reassign multiple components" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const Subset = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B }, .read_and_write);
+    const Subset = StorageStub.Subset(.{
+        *Testing.Component.A,
+        *Testing.Component.B,
+    });
     var storage_subset = Subset{
         .storage = &storage,
     };
@@ -1358,7 +1417,10 @@ test "Subset setComponents() can add new components to entity" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const Subset = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B }, .read_and_write);
+    const Subset = StorageStub.Subset(.{
+        *Testing.Component.A,
+        *Testing.Component.B,
+    });
     var storage_subset = Subset{
         .storage = &storage,
     };
@@ -1381,7 +1443,10 @@ test "Subset unsetComponents() removes the component as expected" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const Subset = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B }, .read_and_write);
+    const Subset = StorageStub.Subset(.{
+        *Testing.Component.A,
+        *Testing.Component.B,
+    });
     var storage_subset = Subset{
         .storage = &storage,
     };
@@ -1408,7 +1473,10 @@ test "Subset read only getComponent(s)" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const Subset = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B }, .read_only);
+    const Subset = StorageStub.Subset(.{
+        Testing.Component.A,
+        Testing.Component.B,
+    });
     const storage_subset = Subset{
         .storage = &storage,
     };
