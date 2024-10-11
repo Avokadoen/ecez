@@ -7,7 +7,7 @@ pub const Sparse = struct {
     const SparseSet = @This();
 
     // TODO: make 1 bit per entity (tradeof with o(1))
-    sparse_len: usize = 0,
+    sparse_len: u32 = 0,
     // Len of the slice is "capacity"
     sparse: []EntityId = &[0]EntityId{},
 
@@ -17,7 +17,7 @@ pub const Sparse = struct {
         self.sparse_len = undefined;
     }
 
-    pub fn grow(self: *SparseSet, allocator: Allocator, min_size: usize) error{OutOfMemory}!void {
+    pub fn grow(self: *SparseSet, allocator: Allocator, min_size: u32) error{OutOfMemory}!void {
         self.sparse_len = @max(self.sparse_len, min_size);
 
         if (self.sparse.len >= min_size) {
@@ -50,18 +50,22 @@ pub fn Dense(comptime DenseT: type) type {
 
         const Set = @This();
 
+        dense_len: u32 = 0,
         // TODO: even though the same pattern exist in std arraylist, I am not comfortable with stack addr to realloc
-        dense_len: usize = 0,
         // Len of slice is "capacity"
         dense: []DenseT = &[0]DenseT{},
+
+        sparse_index: []u32 = &[0]u32{},
 
         pub fn deinit(self: *Set, allocator: Allocator) void {
             if (@sizeOf(DenseT) > 0) {
                 allocator.free(self.dense);
+                allocator.free(self.sparse_index);
             }
 
-            self.dense = undefined;
             self.dense_len = undefined;
+            self.dense = undefined;
+            self.sparse_index = undefined;
         }
 
         pub fn grow(self: *Set, allocator: Allocator, min_size: usize) error{OutOfMemory}!void {
@@ -75,6 +79,7 @@ pub fn Dense(comptime DenseT: type) type {
 
             const new_len = growSize(self.dense.len, min_size);
             self.dense = try allocator.realloc(self.dense, new_len);
+            self.sparse_index = try allocator.realloc(self.sparse_index, new_len);
         }
     };
 }
@@ -98,6 +103,7 @@ pub fn setAssumeCapacity(
         if (entry != Sparse.not_set) {
             if (@sizeOf(DenseType) > 0) {
                 dense.dense[entry] = dense_item;
+                dense.sparse_index[entry] = sparse_slot;
             }
             return;
         }
@@ -111,6 +117,7 @@ pub fn setAssumeCapacity(
 
         if (@sizeOf(DenseType) > 0) {
             dense.dense[entry] = dense_item;
+            dense.sparse_index[entry] = sparse_slot;
         }
     }
 }
@@ -132,20 +139,16 @@ pub fn unset(
         return false;
     }
 
-    sparse.sparse[sparse_slot] = Sparse.not_set;
+    // swap remove
     if (@sizeOf(DenseStorage.DenseType) > 0) {
-        for (sparse.sparse[sparse_slot..]) |*sparse_entry| {
-            if (sparse_entry.* == Sparse.not_set) continue;
+        const swapped_sparse_entry = dense.sparse_index[dense.dense_len - 1];
+        sparse.sparse[swapped_sparse_entry] = entry;
 
-            sparse_entry.* -= 1;
-        }
-
-        const shift_dense = dense.dense[entry..];
-        if (shift_dense.len > 0) {
-            std.mem.rotate(DenseStorage.DenseType, shift_dense, 1);
-        }
+        dense.dense[entry] = dense.dense[dense.dense_len - 1];
+        dense.sparse_index[entry] = sparse_slot;
     }
 
+    sparse.sparse[sparse_slot] = Sparse.not_set;
     dense.dense_len -= 1;
     return true;
 }
