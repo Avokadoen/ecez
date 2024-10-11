@@ -15,11 +15,6 @@ pub const StorageType = struct {};
 pub const SubsetType = struct {};
 pub const QueryType = struct {};
 
-pub const SubsetAccess = enum {
-    read_only,
-    read_and_write,
-};
-
 pub fn CreateStorage(comptime all_components: anytype) type {
     return struct {
         pub const EcezType = StorageType;
