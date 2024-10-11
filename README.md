@@ -41,7 +41,7 @@ python -m http.server 8000 -d ecez/zig-out/doc/ecez # you can then access the do
 ### Compile time based and type safe API
 Zig's comptime feature is utilized to perform static reflection on the usage of the API to validate usage and report useful messages to the user (in theory :)). 
 
-https://github.com/Avokadoen/ecez/blob/40014080c6f1d7c1ba0c85e5190f1804ab1c2e07/examples/readme/main.zig
+https://github.com/Avokadoen/ecez/blob/0fc1984cf5c0e6b9b8e3f4a5c0aa5703dc144151/examples/readme/main.zig#L1-L153
 
 ### System arguments
 
