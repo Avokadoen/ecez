@@ -111,8 +111,8 @@ while (living_iter.next()) |item| {
 const StorageSubset = struct {
     const PosVelSubset = Storage.Subset(
         .{
-            Component.Position, // Request positions by value only (subset has read only access for this type)
-            *Component.Velocity, // Request Velocity by pointer access (sbuser has write and read access for this type)
+            Component.Position, // Request Position by value only (subset has read only access for this type)
+            *Component.Velocity, // Request Velocity by pointer access (subset has write and read access for this type)
         },
     );
 };
