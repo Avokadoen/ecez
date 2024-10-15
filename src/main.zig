@@ -4,6 +4,9 @@ const scheduler = @import("scheduler.zig");
 /// Ecez's entity type. Use this to apply changes to an entity that exist in a given storage.
 pub const Entity = entity_type.Entity;
 
+/// Ecez's entity id type. Ids is the only member of an Entity
+pub const EntityId = entity_type.EntityId;
+
 /// Use this function to create the ecs storage
 pub const CreateStorage = @import("storage.zig").CreateStorage;
 
