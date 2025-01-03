@@ -37,6 +37,11 @@ jobs:
       - name: Build examples 
         run: ./zig build
 
+      # build documentation
+      - name: Build documentation
+        run: ./zig build docs
+
+      # test library
       - name: Run tests
         run: ./zig build test
 
