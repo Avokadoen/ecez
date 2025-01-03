@@ -6,7 +6,6 @@ pub const Sparse = struct {
     pub const not_set = std.math.maxInt(EntityId);
     const SparseSet = @This();
 
-    // TODO: make 1 bit per entity (tradeof with o(1))
     sparse_len: u32 = 0,
     // Len of the slice is "capacity"
     sparse: []EntityId = &[0]EntityId{},
@@ -43,7 +42,6 @@ pub const Sparse = struct {
     }
 };
 
-// TODO: sparse set is not thread safe
 pub fn Dense(comptime DenseT: type) type {
     return struct {
         pub const DenseType = DenseT;
@@ -51,7 +49,6 @@ pub fn Dense(comptime DenseT: type) type {
         const Set = @This();
 
         dense_len: u32 = 0,
-        // TODO: even though the same pattern exist in std arraylist, I am not comfortable with stack addr to realloc
         // Len of slice is "capacity"
         dense: []DenseT = &[0]DenseT{},
 
@@ -97,7 +94,7 @@ pub fn setAssumeCapacity(
         std.debug.assert(dense.dense_len < dense.dense.len);
     }
 
-    // Check if we have sparse already has a item
+    // Check if sparse already has an item
     {
         const entry = sparse.sparse[sparse_slot];
         if (entry != Sparse.not_set) {
@@ -109,8 +106,8 @@ pub fn setAssumeCapacity(
         }
     }
 
+    // Add new item and register index
     {
-        // Add new item and register index
         const entry = dense.dense_len;
         sparse.sparse[sparse_slot] = @intCast(entry);
         dense.dense_len += 1;
