@@ -49,6 +49,7 @@ pub fn buildDependencyList(
             var access_params_len: usize = 0;
             var access_count = 0;
 
+            // For each system parameter, expect either a Query or Subset type.
             access_count_loop: for (params) |param| {
                 const TypeParam = storage.CompileReflect.compactComponentRequest(param.type.?).type;
                 if (@hasDecl(TypeParam, "EcezType") == false) {
@@ -58,7 +59,7 @@ pub fn buildDependencyList(
                 access_params[access_params_len] = param;
                 access_params_len += 1;
                 switch (TypeParam.EcezType) {
-                    QueryType => access_count += TypeParam._result_fields.len + TypeParam._exclude_types.len,
+                    QueryType => access_count += TypeParam._result_fields.len + TypeParam._include_types.len + TypeParam._exclude_types.len,
                     SubsetType => access_count += TypeParam.component_access.len,
                     else => |Type| @compileError("Unknown system argume type " ++ @typeName(Type)),
                 }
@@ -78,6 +79,13 @@ pub fn buildDependencyList(
                                 access[access_index] = Access{
                                     .type = req.type,
                                     .right = if (req.attr == .value) .read else .write,
+                                };
+                                access_index += 1;
+                            }
+                            for (TypeParam._include_types) |InclComp| {
+                                access[access_index] = Access{
+                                    .type = InclComp,
+                                    .right = .read,
                                 };
                                 access_index += 1;
                             }
@@ -224,68 +232,140 @@ const StorageStub = storage.CreateStorage(Testing.AllComponentsTuple);
 
 test buildDependencyList {
     const Queries = struct {
-        pub const ReadA = StorageStub.Query(struct {
-            a: Testing.Component.A,
-        }, .{});
+        pub const ReadA = StorageStub.Query(
+            struct {
+                a: Testing.Component.A,
+            },
+            .{},
+            .{},
+        );
 
-        pub const WriteA = StorageStub.Query(struct {
-            a: *Testing.Component.A,
-        }, .{});
+        pub const WriteA = StorageStub.Query(
+            struct {
+                a: *Testing.Component.A,
+            },
+            .{},
+            .{},
+        );
 
-        pub const ReadB = StorageStub.Query(struct {
-            b: Testing.Component.B,
-        }, .{});
+        pub const ReadB = StorageStub.Query(
+            struct {
+                b: Testing.Component.B,
+            },
+            .{},
+            .{},
+        );
 
-        pub const WriteB = StorageStub.Query(struct {
-            b: *Testing.Component.B,
-        }, .{});
+        pub const WriteB = StorageStub.Query(
+            struct {
+                b: *Testing.Component.B,
+            },
+            .{},
+            .{},
+        );
 
-        pub const ReadC = StorageStub.Query(struct {
-            c: Testing.Component.C,
-        }, .{});
+        pub const ReadC = StorageStub.Query(
+            struct {
+                c: Testing.Component.C,
+            },
+            .{},
+            .{},
+        );
 
-        pub const WriteC = StorageStub.Query(struct {
-            c: *Testing.Component.C,
-        }, .{});
+        pub const WriteC = StorageStub.Query(
+            struct {
+                c: *Testing.Component.C,
+            },
+            .{},
+            .{},
+        );
 
-        pub const ReadAReadB = StorageStub.Query(struct {
-            a: Testing.Component.A,
-            b: Testing.Component.B,
-        }, .{});
+        pub const ReadAReadB = StorageStub.Query(
+            struct {
+                a: Testing.Component.A,
+                b: Testing.Component.B,
+            },
+            .{},
+            .{},
+        );
 
-        pub const WriteAWriteB = StorageStub.Query(struct {
-            a: *Testing.Component.A,
-            b: *Testing.Component.B,
-        }, .{});
+        pub const InclAInclB = StorageStub.Query(
+            struct {
+                a: Testing.Component.A,
+                b: Testing.Component.B,
+            },
+            .{},
+            .{},
+        );
 
-        pub const ReadAReadBReadC = StorageStub.Query(struct {
-            a: Testing.Component.A,
-            b: Testing.Component.B,
-            c: Testing.Component.C,
-        }, .{});
+        pub const WriteAWriteB = StorageStub.Query(
+            struct {
+                a: *Testing.Component.A,
+                b: *Testing.Component.B,
+            },
+            .{},
+            .{},
+        );
 
-        pub const WriteAWriteBWriteC = StorageStub.Query(struct {
-            a: *Testing.Component.A,
-            b: *Testing.Component.B,
-            c: *Testing.Component.C,
-        }, .{});
+        pub const ReadAReadBReadC = StorageStub.Query(
+            struct {
+                a: Testing.Component.A,
+                b: Testing.Component.B,
+                c: Testing.Component.C,
+            },
+            .{},
+            .{},
+        );
 
-        pub const EntityOnly = StorageStub.Query(struct {
-            entity: @import("entity_type.zig").Entity,
-        }, .{});
+        pub const WriteAWriteBWriteC = StorageStub.Query(
+            struct {
+                a: *Testing.Component.A,
+                b: *Testing.Component.B,
+                c: *Testing.Component.C,
+            },
+            .{},
+            .{},
+        );
 
-        pub const ExclReadA = StorageStub.Query(struct {
-            entity: @import("entity_type.zig").Entity,
-        }, .{
-            Testing.Component.A,
-        });
+        pub const EntityOnly = StorageStub.Query(
+            struct {
+                entity: @import("entity_type.zig").Entity,
+            },
+            .{},
+            .{},
+        );
 
-        pub const ExclReadAB = StorageStub.Query(struct {
-            entity: @import("entity_type.zig").Entity,
-        }, .{
-            Testing.Component.A,
-            Testing.Component.B,
-        });
+        pub const EntityExclA = StorageStub.Query(
+            struct {
+                entity: @import("entity_type.zig").Entity,
+            },
+            .{},
+            .{
+                Testing.Component.A,
+            },
+        );
+
+        pub const EntityExclAB = StorageStub.Query(
+            struct {
+                entity: @import("entity_type.zig").Entity,
+            },
+            .{},
+            .{
+                Testing.Component.A,
+                Testing.Component.B,
+            },
+        );
+
+        pub const EntityInclAB = StorageStub.Query(
+            struct {
+                entity: @import("entity_type.zig").Entity,
+            },
+            .{
+                Testing.Component.A,
+                Testing.Component.B,
+            },
+            .{},
+        );
     };
 
     const SubStorages = struct {
@@ -340,11 +420,14 @@ test buildDependencyList {
         pub fn entityOnly(e: *Queries.EntityOnly) void {
             _ = e;
         }
-        pub fn exclReadA(a: *Queries.ExclReadA) void {
+        pub fn exclReadA(a: *Queries.EntityExclA) void {
             _ = a;
         }
-        pub fn exclReadAexclReadB(a: *Queries.ExclReadAB) void {
+        pub fn exclReadAexclReadB(a: *Queries.EntityExclAB) void {
             _ = a;
+        }
+        pub fn inclAInclB(ab: *Queries.ReadAReadB) void {
+            _ = ab;
         }
     };
 
@@ -1213,6 +1296,53 @@ test buildDependencyList {
 
         for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
             try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+        }
+    }
+
+    // Include
+    {
+        // Write, read, read, write, write
+        {
+            const dependencies = comptime buildDependencyList(.{
+                SingleSubStorageSystems.writeAWriteB,
+                SingleQuerySystems.inclAInclB,
+                SingleQuerySystems.inclAInclB,
+                SingleSubStorageSystems.writeAWriteB,
+                SingleSubStorageSystems.writeAWriteB,
+            }, 5);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{3} },
+            };
+
+            for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            }
+        }
+
+        // Write, read, read, write, write
+        {
+            const dependencies = comptime buildDependencyList(.{
+                SingleSubStorageSystems.writeAWriteB,
+                SingleQuerySystems.inclAInclB,
+                SingleQuerySystems.inclAInclB,
+                SingleSubStorageSystems.writeAWriteB,
+                SingleSubStorageSystems.writeAWriteB,
+            }, 5);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{3} },
+            };
+
+            for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            }
         }
     }
 }

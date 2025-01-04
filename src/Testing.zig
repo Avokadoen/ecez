@@ -42,33 +42,61 @@ pub const AllComponentsTuple = .{
 pub const StorageStub = CreateStorage(AllComponentsTuple);
 
 pub const Queries = struct {
-    pub const Entities = StorageStub.Query(struct {
-        entity: Entity,
-    }, .{});
+    pub const Entities = StorageStub.Query(
+        struct {
+            entity: Entity,
+        },
+        .{},
+        .{},
+    );
 
-    pub const ReadA = StorageStub.Query(struct {
-        a: Component.A,
-    }, .{});
+    pub const ReadA = StorageStub.Query(
+        struct {
+            a: Component.A,
+        },
+        .{},
+        .{},
+    );
 
-    pub const ReadB = StorageStub.Query(struct {
-        b: Component.B,
-    }, .{});
+    pub const ReadB = StorageStub.Query(
+        struct {
+            b: Component.B,
+        },
+        .{},
+        .{},
+    );
 
-    pub const ReadAReadB = StorageStub.Query(struct {
-        a: Component.A,
-        b: Component.B,
-    }, .{});
+    pub const ReadAReadB = StorageStub.Query(
+        struct {
+            a: Component.A,
+            b: Component.B,
+        },
+        .{},
+        .{},
+    );
 
-    pub const WriteA = StorageStub.Query(struct {
-        a: *Component.A,
-    }, .{});
+    pub const WriteA = StorageStub.Query(
+        struct {
+            a: *Component.A,
+        },
+        .{},
+        .{},
+    );
 
-    pub const WriteB = StorageStub.Query(struct {
-        b: *Component.B,
-    }, .{});
+    pub const WriteB = StorageStub.Query(
+        struct {
+            b: *Component.B,
+        },
+        .{},
+        .{},
+    );
 
-    pub const WriteAReadB = StorageStub.Query(struct {
-        a: *Component.A,
-        b: Component.B,
-    }, .{});
+    pub const WriteAReadB = StorageStub.Query(
+        struct {
+            a: *Component.A,
+            b: Component.B,
+        },
+        .{},
+        .{},
+    );
 };

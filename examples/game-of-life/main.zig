@@ -162,6 +162,7 @@ const RenderCellQuery = Storage.Query(
         health: Components.Health,
     },
     .{},
+    .{},
 );
 pub fn renderCellSystem(
     query: *RenderCellQuery,
@@ -199,6 +200,7 @@ const LinePosQuery = Storage.Query(
         pos: Components.LinePos,
     },
     .{},
+    .{},
 );
 pub fn renderLineSystem(
     query: *LinePosQuery,
@@ -219,6 +221,7 @@ pub fn renderLineSystem(
 
 const GridPosQuery = Storage.Query(
     struct { pos: Components.GridPos },
+    .{},
     .{},
 );
 pub fn busyWorkSystem(query: *GridPosQuery) void {
@@ -253,6 +256,7 @@ const PosHealthQuery = Storage.Query(
         pos: Components.GridPos,
         health: *Components.Health,
     },
+    .{},
     .{},
 );
 const HealthView = Storage.Subset(

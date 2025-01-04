@@ -466,10 +466,14 @@ const StorageStub = CreateStorage(Testing.AllComponentsTuple);
 const Queries = Testing.Queries;
 
 test "system query can mutate components" {
-    const Query = StorageStub.Query(struct {
-        a: *Testing.Component.A,
-        b: Testing.Component.B,
-    }, .{});
+    const Query = StorageStub.Query(
+        struct {
+            a: *Testing.Component.A,
+            b: Testing.Component.B,
+        },
+        .{},
+        .{},
+    );
 
     const SystemStruct = struct {
         pub fn mutateStuff(ab: *Query) void {
@@ -1219,7 +1223,7 @@ test "Event with no archetypes does not crash" {
 }
 
 // this reproducer never had an issue filed, so no issue number
-test "reproducer: Dispatcher does not include new components to systems previously triggered" {
+test "reproducer: Scheduler does not include new components to systems previously triggered" {
     const Tracker = struct {
         count: u32,
     };
