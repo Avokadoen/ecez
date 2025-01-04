@@ -58,7 +58,7 @@ pub fn buildDependencyList(
                 access_params[access_params_len] = param;
                 access_params_len += 1;
                 switch (TypeParam.EcezType) {
-                    QueryType => access_count += TypeParam._include_fields.len + TypeParam._exclude_types.len,
+                    QueryType => access_count += TypeParam._result_fields.len + TypeParam._exclude_types.len,
                     SubsetType => access_count += TypeParam.component_access.len,
                     else => |Type| @compileError("Unknown system argume type " ++ @typeName(Type)),
                 }
@@ -73,7 +73,7 @@ pub fn buildDependencyList(
 
                     switch (TypeParam.EcezType) {
                         QueryType => {
-                            for (TypeParam._include_fields) |component_field| {
+                            for (TypeParam._result_fields) |component_field| {
                                 const req = storage.CompileReflect.compactComponentRequest(component_field.type);
                                 access[access_index] = Access{
                                     .type = req.type,

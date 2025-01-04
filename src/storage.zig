@@ -530,30 +530,34 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         pub fn Query(comptime ResultItem: type, comptime exclude_types: anytype) type {
             @setEvalBranchQuota(10000);
 
-            const include_type_info = @typeInfo(ResultItem);
-            if (include_type_info != .Struct) {
+            // Start by reflecting on ResultItem type
+            const result_type_info = @typeInfo(ResultItem);
+            if (result_type_info != .Struct) {
                 @compileError("query result_item must be a struct of components");
             }
-            const include_fields = include_type_info.Struct.fields;
+            const result_fields = result_type_info.Struct.fields;
+            const result_start_index, const result_end_index = check_for_entity_blk: {
+                // Check if an Entity was requested as well
+                if (result_fields[0].type == Entity) {
+                    break :check_for_entity_blk .{ 1, result_fields.len };
+                }
+                break :check_for_entity_blk .{ 0, result_fields.len };
+            };
+            const component_result_count = result_end_index - result_start_index;
+
             const exclude_type_info = @typeInfo(@TypeOf(exclude_types));
             if (exclude_type_info != .Struct) {
                 @compileError("query exclude types must be a tuple of types");
             }
             const exclude_fields = exclude_type_info.Struct.fields;
-
-            const include_start_index, const include_end_index = check_for_entity_blk: {
-                if (include_fields[0].type == Entity) {
-                    break :check_for_entity_blk .{ 1, include_fields.len };
-                }
-                break :check_for_entity_blk .{ 0, include_fields.len };
-            };
-            const component_include_count = include_end_index - include_start_index;
-
             const query_components = reflect_on_query_blk: {
-                var raw_component_types: [component_include_count + exclude_fields.len]type = undefined;
+                const type_count = component_result_count + exclude_fields.len;
+                var raw_component_types: [type_count]type = undefined;
+
+                //
                 inline for (
-                    raw_component_types[0..component_include_count],
-                    include_fields[include_start_index..],
+                    raw_component_types[0..component_result_count],
+                    result_fields[result_start_index..],
                 ) |
                     *query_component,
                     incl_field,
@@ -563,7 +567,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 }
 
                 inline for (
-                    raw_component_types[component_include_count .. component_include_count + exclude_fields.len],
+                    raw_component_types[component_result_count .. component_result_count + exclude_fields.len],
                     0..,
                 ) |
                     *query_component,
@@ -577,14 +581,14 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             };
 
             if (query_components.len == 0) {
-                if (include_start_index == 0) {
+                if (result_start_index == 0) {
                     @compileError("Empty result struct is invalid query result");
                 }
 
                 // Entity only query
                 return struct {
                     // Read by dependency_chain
-                    pub const _include_fields = &[0]std.builtin.Type.StructField{};
+                    pub const _result_fields = &[0]std.builtin.Type.StructField{};
                     // Read by dependency_chain
                     pub const _exclude_types = &[0]type{};
 
@@ -616,7 +620,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                         defer self.sparse_cursors += 1;
 
                         var result: ResultItem = undefined;
-                        @field(result, include_fields[0].name) = Entity{ .id = self.sparse_cursors };
+                        @field(result, result_fields[0].name) = Entity{ .id = self.sparse_cursors };
                         return result;
                     }
 
@@ -638,9 +642,9 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
             return struct {
                 // Read by dependency_chain
-                pub const _include_fields = include_fields[include_start_index..include_end_index];
+                pub const _result_fields = result_fields[result_start_index..result_end_index];
                 // Read by dependency_chain
-                pub const _exclude_types = query_components[component_include_count..];
+                pub const _exclude_types = query_components[component_result_count..];
 
                 pub const EcezType = QueryType;
 
@@ -689,7 +693,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                                 const dense_set = storage.getDenseSetConstPtr(QueryComp);
 
                                 const len_value = get_len_blk: {
-                                    if (q_index < component_include_count) {
+                                    if (q_index < component_result_count) {
                                         break :get_len_blk dense_set.dense_len;
                                     } else {
                                         break :get_len_blk number_of_entities - dense_set.dense_len;
@@ -727,11 +731,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                     var result: ResultItem = undefined;
                     // if entity is first field
-                    if (include_start_index > 0) {
-                        @field(result, include_fields[0].name) = Entity{ .id = self.sparse_cursors };
+                    if (result_start_index > 0) {
+                        @field(result, result_fields[0].name) = Entity{ .id = self.sparse_cursors };
                     }
 
-                    inline for (include_fields[include_start_index..include_end_index]) |incl_field| {
+                    inline for (result_fields[result_start_index..result_end_index]) |incl_field| {
                         const component_to_get = CompileReflect.compactComponentRequest(incl_field.type);
                         const comp_index = indexOfQueryComponent(component_to_get.type);
 
@@ -772,12 +776,12 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                         }
 
                         for (self.search_order) |this_search| {
-                            const is_include = this_search < component_include_count;
+                            const is_result = this_search < component_result_count;
                             const entry_is_set = self.sparse_sets[this_search].isSet(self.sparse_cursors);
 
                             // Check if we should skip entry:
-                            // Skip if is set is false and it's a include entry, if its exclude then it should be set in order to skip
-                            if (entry_is_set != is_include) {
+                            // Skip if is set is false and it's a result entry, if its exclude then it should be set in order to skip
+                            if (entry_is_set != is_result) {
                                 self.sparse_cursors += 1;
                                 continue :search_next_loop;
                             }
