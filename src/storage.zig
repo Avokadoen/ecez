@@ -140,6 +140,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///
         ///     - entity:               the entity that should be assigned the component value
         ///     - struct_of_components: the new component values
+        ///
+        /// Hazards:
+        ///
+        ///     It's undefined behaviour to call setComponents, then read a stale query result (returned from Query.next) item pointer field.
+        ///     The same is true for returned getComponent(s) that are pointers. Be sure to call setComponents AFTER any component pointer access.
         pub fn setComponents(self: *Storage, entity: Entity, struct_of_components: anytype) error{OutOfMemory}!void {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
