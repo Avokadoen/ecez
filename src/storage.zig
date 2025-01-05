@@ -543,26 +543,42 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             // Start by reflecting on ResultItem type
             const result_type_info = @typeInfo(ResultItem);
             if (result_type_info != .Struct) {
-                @compileError("query result_item must be a struct of components");
+                const error_message = std.fmt.comptimePrint("query ResultItem '{s}' must be a struct of components", .{@typeName(ResultItem)});
+                @compileError(error_message);
             }
-            const result_fields = result_type_info.Struct.fields;
-            const result_start_index, const result_end_index = check_for_entity_blk: {
 
-                // Validate that there is no Entity field after index 0
-                if (result_fields.len > 1) {
-                    for (result_fields[1..]) |field| {
-                        if (field.type == Entity) {
-                            @compileError("Type '{s}' Entity field can only be the first field in the struct");
+            const fields = result_type_info.Struct.fields;
+            if (fields.len < 1) {
+                const error_message = std.fmt.comptimePrint("query ResultItem '{s}' have atleast one field", .{@typeName(ResultItem)});
+                @compileError(error_message);
+            }
+
+            const result_fields, const result_start_index, const result_end_index = check_for_entity_blk: {
+                var _result_fields: [fields.len]std.builtin.Type.StructField = undefined;
+
+                var has_entity = false;
+                for (&_result_fields, fields, 0..) |*result_field, field, field_index| {
+                    result_field.* = field;
+
+                    if (result_field.type == Entity) {
+                        // Validate that there is only 1 entity field (Multiple Entity fields would not make sense)
+                        if (has_entity) {
+                            const error_message = std.fmt.comptimePrint("ResultItem '{s}' in Query has multiple entity fields, type can only have 0 or 1 Entity field", .{@typeName(ResultItem)});
+                            @compileError(error_message);
                         }
+
+                        // Swap entity to index 0 for easier separation from component types.
+                        std.mem.swap(std.builtin.Type.StructField, &_result_fields[0], &_result_fields[field_index]);
+                        has_entity = true;
                     }
                 }
 
                 // Check if an Entity was requested as well
                 // If it is, then we have our component queries from index 1
-                if (result_fields[0].type == Entity) {
-                    break :check_for_entity_blk .{ 1, result_fields.len };
+                if (has_entity) {
+                    break :check_for_entity_blk .{ _result_fields, 1, _result_fields.len };
                 }
-                break :check_for_entity_blk .{ 0, result_fields.len };
+                break :check_for_entity_blk .{ _result_fields, 0, _result_fields.len };
             };
             const result_component_count = result_end_index - result_start_index;
 
@@ -1753,7 +1769,7 @@ test "query with single result component and single exclude works" {
     }
 }
 
-test "query with result of single compoent type and multiple exclude works" {
+test "query with result of single component type and multiple exclude works" {
     var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
@@ -1852,6 +1868,7 @@ test "query with result entity, components and exclude only works" {
     }
 
     {
+        // Test with entity as first argument
         var iter = StorageStub.Query(
             struct {
                 entity: Entity,
@@ -1866,10 +1883,87 @@ test "query with result entity, components and exclude only works" {
 
         var index: usize = 0;
         while (iter.next()) |item| {
-            try std.testing.expectEqual(entities[index], item.entity);
-            try std.testing.expectEqual(Testing.Component.A{
-                .value = @as(u32, @intCast(index)),
-            }, item.a);
+            try std.testing.expectEqual(
+                entities[index],
+                item.entity,
+            );
+
+            try std.testing.expectEqual(
+                Testing.Component.A{
+                    .value = @as(u32, @intCast(index)),
+                },
+                item.a,
+            );
+            index += 1;
+        }
+    }
+
+    {
+        // Test with entity as second argument
+        var iter = StorageStub.Query(
+            struct {
+                a: Testing.Component.A,
+                entity: Entity,
+            },
+            .{},
+            .{Testing.Component.B},
+        ).submit(&storage);
+
+        const expected_order = [_]usize{ 1, 0 };
+        try std.testing.expectEqualSlices(usize, &expected_order, &iter.search_order);
+
+        var index: usize = 0;
+        while (iter.next()) |item| {
+            try std.testing.expectEqual(
+                entities[index],
+                item.entity,
+            );
+
+            try std.testing.expectEqual(
+                Testing.Component.A{
+                    .value = @as(u32, @intCast(index)),
+                },
+                item.a,
+            );
+            index += 1;
+        }
+    }
+
+    {
+        // Test with entity as "sandwiched" between A and B
+        var iter = StorageStub.Query(
+            struct {
+                a: Testing.Component.A,
+                entity: Entity,
+                b: Testing.Component.B,
+            },
+            .{},
+            .{},
+        ).submit(&storage);
+
+        const expected_order = [_]usize{ 1, 0 };
+        try std.testing.expectEqualSlices(usize, &expected_order, &iter.search_order);
+
+        var index: usize = 100;
+        while (iter.next()) |item| {
+            try std.testing.expectEqual(
+                entities[index],
+                item.entity,
+            );
+
+            try std.testing.expectEqual(
+                Testing.Component.A{
+                    .value = @as(u32, @intCast(index)),
+                },
+                item.a,
+            );
+
+            try std.testing.expectEqual(
+                Testing.Component.B{
+                    .value = @as(u8, @intCast(index)),
+                },
+                item.b,
+            );
             index += 1;
         }
     }
