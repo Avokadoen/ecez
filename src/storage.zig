@@ -608,7 +608,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                         *query_component,
                         incl_index,
                     | {
-                        const request = CompileReflect.compactComponentRequest(exclude_types[incl_index]);
+                        const request = CompileReflect.compactComponentRequest(include_types[incl_index]);
                         query_component.* = request.type;
                     }
                 }
