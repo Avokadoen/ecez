@@ -563,7 +563,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     if (result_field.type == Entity) {
                         // Validate that there is only 1 entity field (Multiple Entity fields would not make sense)
                         if (has_entity) {
-                            const error_message = std.fmt.comptimePrint("Query ResultItem '{s}' has multiple entity fields, type can only have 0 or 1 Entity field", .{@typeName(ResultItem)});
+                            const error_message = std.fmt.comptimePrint("Query ResultItem '{s}' has multiple entity fields, ResultItem can only have 0 or 1 Entity field", .{@typeName(ResultItem)});
                             @compileError(error_message);
                         }
 
@@ -648,6 +648,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 break :reflect_on_query_blk raw_component_types;
             };
 
+            // If query is requesting no components
             if (query_components.len == 0) {
                 if (result_start_index == 0) {
                     @compileError("Empty result struct is invalid query result");
@@ -874,7 +875,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             };
         }
 
-        /// Retrieve the sparse set for a component type.
+        /// Retrieve the dense set for a component type.
         /// Mostly meant for internal usage. Be careful not to write to the set as this can
         /// lead to inconsistent storage state.
         pub fn getDenseSetConstPtr(storage: *const Storage, comptime Component: type) *const set.Dense(Component) {
@@ -884,7 +885,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             );
         }
 
-        /// Retrieve the sparse set for a component type.
+        /// Retrieve the dense set for a component type.
         /// Mostly meant for internal usage. Be careful not to write to the set as this can
         /// lead to inconsistent storage state.
         pub fn getDenseSetPtr(storage: *Storage, comptime Component: type) *set.Dense(Component) {
