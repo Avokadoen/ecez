@@ -543,13 +543,13 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             // Start by reflecting on ResultItem type
             const result_type_info = @typeInfo(ResultItem);
             if (result_type_info != .Struct) {
-                const error_message = std.fmt.comptimePrint("query ResultItem '{s}' must be a struct of components", .{@typeName(ResultItem)});
+                const error_message = std.fmt.comptimePrint("Query ResultItem '{s}' must be a struct of components", .{@typeName(ResultItem)});
                 @compileError(error_message);
             }
 
             const fields = result_type_info.Struct.fields;
             if (fields.len < 1) {
-                const error_message = std.fmt.comptimePrint("query ResultItem '{s}' have atleast one field", .{@typeName(ResultItem)});
+                const error_message = std.fmt.comptimePrint("Query ResultItem '{s}' must have atleast one field", .{@typeName(ResultItem)});
                 @compileError(error_message);
             }
 
@@ -563,7 +563,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     if (result_field.type == Entity) {
                         // Validate that there is only 1 entity field (Multiple Entity fields would not make sense)
                         if (has_entity) {
-                            const error_message = std.fmt.comptimePrint("ResultItem '{s}' in Query has multiple entity fields, type can only have 0 or 1 Entity field", .{@typeName(ResultItem)});
+                            const error_message = std.fmt.comptimePrint("Query ResultItem '{s}' has multiple entity fields, type can only have 0 or 1 Entity field", .{@typeName(ResultItem)});
                             @compileError(error_message);
                         }
 
