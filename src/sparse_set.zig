@@ -33,6 +33,10 @@ pub const Sparse = struct {
         }
     }
 
+    pub inline fn setAssumeCapacity(self: *SparseSet, sparse_slot: EntityId, entry: EntityId) void {
+        self.sparse[sparse_slot] = entry;
+    }
+
     pub inline fn isSet(self: SparseSet, sparse_slot: EntityId) bool {
         if (self.sparse.len <= sparse_slot) {
             return false;
@@ -109,7 +113,7 @@ pub fn setAssumeCapacity(
     // Add new item and register index
     {
         const entry = dense.dense_len;
-        sparse.sparse[sparse_slot] = @intCast(entry);
+        sparse.setAssumeCapacity(sparse_slot, entry);
         dense.dense_len += 1;
 
         if (@sizeOf(DenseType) > 0) {
