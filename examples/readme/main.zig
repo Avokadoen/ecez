@@ -17,6 +17,7 @@ pub fn main() anyerror!void {
         pub const Weapon = struct {};
         pub const Position = struct {};
         pub const Velocity = struct {};
+        pub const HeartOrgan = struct {};
     };
 
     // Given a set of components, we can store them in a storage defined by the component set.
@@ -26,6 +27,7 @@ pub fn main() anyerror!void {
         Component.Weapon,
         Component.Position,
         Component.Velocity,
+        Component.HeartOrgan,
     });
 
     // Initialize our storage
@@ -36,7 +38,16 @@ pub fn main() anyerror!void {
     const Queries = struct {
         pub const Living = Storage.Query(
             // Any result item will be of this type
-            struct { health: *Component.Health, pos: Component.Position },
+            struct {
+                health: *Component.Health,
+                pos: Component.Position,
+            },
+            // include types:
+            .{
+                // Any query result must have the following components, but they wont be included in the result struct
+                Component.HeartOrgan,
+            },
+            // exclude types:
             .{
                 // Exclude any entity with the following component
                 Component.DeadTag,
@@ -48,6 +59,7 @@ pub fn main() anyerror!void {
     const my_living_entity = try storage.createEntity(.{
         Component.Health{ .value = 42 },
         Component.Position{},
+        Component.HeartOrgan{},
     });
 
     // You can unset components (remove)
