@@ -246,6 +246,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///
         ///     - entity:    the entity to retrieve Component from
         ///     - Components: a struct type where fields are compoents that that belong to entity
+        ///
+        /// Hazards:
+        ///
+        ///     it's undefined behaviour to read component pointers after a call setComponents with the same component type(s),
+        ///     even it it's not on the same entity.
         pub fn getComponents(self: *const Storage, entity: Entity, comptime Components: type) error{MissingComponent}!Components {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
@@ -288,6 +293,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///
         ///     - entity:    the entity to retrieve Component from
         ///     - Components: a struct type where fields are compoents that that belong to entity
+        ///
+        /// Hazards:
+        ///
+        ///     it's undefined behaviour to read component pointers after a call setComponents with the same component type,
+        ///     even it it's not on the same entity.
         pub fn getComponent(self: *const Storage, entity: Entity, comptime Component: type) error{MissingComponent}!Component {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
