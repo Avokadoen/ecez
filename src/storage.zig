@@ -804,7 +804,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                     // Find next entity
                     const entity_count = self.storage_entity_count_ptr.load(.monotonic);
-                    self.gotoFirstSet(entity_count) orelse return null;
+                    self.gotoFirstEntitySet(entity_count) orelse return null;
                     defer self.sparse_cursors += 1;
 
                     var result: ResultItem = undefined;
@@ -838,7 +838,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     // TODO: this is horrible for cache, we should find the next N entities instead
                     // Find next entity
                     for (0..skip_count) |_| {
-                        self.gotoFirstSet(entity_count) orelse return;
+                        self.gotoFirstEntitySet(entity_count) orelse return;
                         self.sparse_cursors = self.sparse_cursors + 1;
                     }
                 }
@@ -847,7 +847,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     self.sparse_cursors = 0;
                 }
 
-                fn gotoFirstSet(self: *ThisQuery, entity_count: EntityId) ?void {
+                fn gotoFirstEntitySet(self: *ThisQuery, entity_count: EntityId) ?void {
                     search_next_loop: while (true) {
                         if (self.sparse_cursors >= entity_count) {
                             return null;
