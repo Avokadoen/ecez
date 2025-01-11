@@ -1246,6 +1246,23 @@ test "hasComponents() identify missing and present components" {
     try testing.expectEqual(true, storage.hasComponents(entity, .{ Testing.Component.A, Testing.Component.C }));
 }
 
+test "storage with 0 size component is valid" {
+    const ZeroComp = struct {};
+    var storage = try CreateStorage(.{ZeroComp}).init(testing.allocator);
+    defer storage.deinit();
+
+    const entity = try storage.createEntity(.{});
+    try testing.expectEqual(false, storage.hasComponents(entity, .{ZeroComp}));
+
+    try storage.setComponents(entity, .{ZeroComp{}});
+    try testing.expectEqual(true, storage.hasComponents(entity, .{ZeroComp}));
+
+    _ = try storage.getComponent(entity, ZeroComp);
+    _ = try storage.getComponents(entity, struct { z: ZeroComp });
+    storage.unsetComponents(entity, .{ZeroComp});
+    try testing.expectEqual(false, storage.hasComponents(entity, .{ZeroComp}));
+}
+
 test "getComponents() retrieve component values" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
