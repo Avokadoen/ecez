@@ -24,7 +24,7 @@ pub fn hashTypeName(comptime T: type) u64 {
 
 // TODO: option to use stack instead of heap
 
-pub const version_major = 1;
+pub const version_major = 2;
 pub const version_minor = 0;
 pub const version_patch = 0;
 pub const alignment = 8;
@@ -80,14 +80,19 @@ pub fn serialize(
 
             total_size += @sizeOf(Chunk.Comp);
 
-            {
-                const sparse_set = storage.getSparseSetConstPtr(Component);
-                total_size += calcAlignedEntityIdSize(sparse_set.sparse_len);
-            }
+            if (@sizeOf(Component) > 0) {
+                {
+                    const sparse_set: *const set.Sparse.Full = storage.getSparseSetConstPtr(Component);
+                    total_size += calcAlignedEntityIdSize(sparse_set.sparse_len);
+                }
 
-            if (cull_component == false) {
-                const dense_set = storage.getDenseSetConstPtr(Component);
-                total_size += dense_set.dense_len * @sizeOf(Component);
+                if (cull_component == false) {
+                    const dense_set = storage.getDenseSetConstPtr(Component);
+                    total_size += dense_set.dense_len * @sizeOf(Component);
+                }
+            } else {
+                const sparse_set: *const set.Sparse.Tag = storage.getSparseSetConstPtr(Component);
+                total_size += calcAlignedEntityIdSize(sparse_set.sparse_bits.len);
             }
 
             // Align comp chunk
@@ -98,7 +103,6 @@ pub fn serialize(
     };
 
     // We allocate in long words for alignment reasons (ensure 8 byte alignment)
-
     const bytes = try allocator.alloc(u8, total_byte_size);
     errdefer allocator.free(bytes);
 
@@ -122,7 +126,6 @@ pub fn serialize(
 
         inline for (Storage.component_type_array, 0..) |Component, comp_index| {
             const sparse_set = storage.getSparseSetConstPtr(Component);
-            const dense_set = storage.getDenseSetConstPtr(Component);
 
             const cull_component = comptime check_if_cull_needed_blk: {
                 for (comptime_config.culled_component_types) |CullComponent| {
@@ -133,9 +136,27 @@ pub fn serialize(
                 break :check_if_cull_needed_blk false;
             };
 
+            const sparse_count: u32, const dense_count: u32 = get_entity_dense_count_blk: {
+                if (cull_component) {
+                    break :get_entity_dense_count_blk .{ 0, 0 };
+                }
+
+                var result: std.meta.Tuple(&[_]type{ u32, u32 }) = .{
+                    @intCast(sparse_set.sparse_len),
+                    0,
+                };
+
+                if (@sizeOf(Component) > 0) {
+                    const dense_set = storage.getDenseSetConstPtr(Component);
+                    result[1] = @intCast(dense_set.dense_len);
+                }
+
+                break :get_entity_dense_count_blk result;
+            };
+
             const comp_chunk = Chunk.Comp{
-                .entity_count = if (cull_component) 0 else @intCast(sparse_set.sparse_len),
-                .comp_count = if (cull_component) 0 else @intCast(dense_set.dense_len),
+                .sparse_count = sparse_count,
+                .dense_count = dense_count,
                 .type_size = @sizeOf(Component),
                 .type_alignment = @alignOf(Component),
                 .type_name_hash = hashfn(@typeName(Component)),
@@ -153,9 +174,10 @@ pub fn serialize(
 
             // Write EntityIds
             {
-                if (comp_chunk.entity_count > 0) {
+                if (comp_chunk.sparse_count > 0) {
                     // Ignore alignment when doing the write (padding bytes are undefined)
                     const size_of_entities = sparse_set.sparse_len * @sizeOf(EntityId);
+
                     const sparse_bytes = bytes[byte_cursor .. byte_cursor + size_of_entities];
 
                     // Ensure alignment is respected for byte cursor
@@ -166,9 +188,14 @@ pub fn serialize(
                         const not_set_byte = 0b1111_1111;
                         @memset(sparse_bytes, not_set_byte);
                     } else {
+                        const sparse_slice = if (@sizeOf(Component) > 0)
+                            sparse_set.sparse[0..comp_chunk.sparse_count]
+                        else
+                            sparse_set.sparse_bits[0..comp_chunk.sparse_count];
+
                         @memcpy(
                             sparse_bytes,
-                            std.mem.sliceAsBytes(sparse_set.sparse[0..comp_chunk.entity_count]),
+                            std.mem.sliceAsBytes(sparse_slice),
                         );
                     }
                 }
@@ -178,14 +205,16 @@ pub fn serialize(
             {
                 std.debug.assert(@sizeOf(Component) == comp_chunk.type_size);
                 if (@sizeOf(Component) > 0) {
-                    if (comp_chunk.comp_count > 0) {
-                        const size_of_components = comp_chunk.comp_count * comp_chunk.type_size;
+                    if (comp_chunk.dense_count > 0) {
+                        const dense_set = storage.getDenseSetConstPtr(Component);
+
+                        const size_of_components = comp_chunk.dense_count * comp_chunk.type_size;
                         const dense_bytes = bytes[byte_cursor .. byte_cursor + size_of_components];
                         byte_cursor += size_of_components;
 
                         @memcpy(
                             dense_bytes,
-                            std.mem.sliceAsBytes(dense_set.dense[0..comp_chunk.comp_count]),
+                            std.mem.sliceAsBytes(dense_set.dense[0..comp_chunk.dense_count]),
                         );
                     }
                 }
@@ -226,7 +255,6 @@ pub fn deserialize(
     }
 
     storage.number_of_entities.store(@intCast(ezby.number_of_entities), .seq_cst);
-
     while (cursor.len > @sizeOf(Chunk.Comp) and mem.eql(u8, cursor[0..4], "COMP")) {
         var comp: *Chunk.Comp = undefined;
         var component_bytes: Chunk.Comp.ComponentBytes = undefined;
@@ -238,7 +266,6 @@ pub fn deserialize(
             &component_bytes,
         );
 
-        // TODO: not good ...
         inline for (Storage.component_type_array) |Component| {
             const type_hash = comptime hashTypeName(Component);
             if (type_hash == comp.type_name_hash) {
@@ -246,19 +273,25 @@ pub fn deserialize(
                 std.debug.assert(comp.type_alignment == @alignOf(Component));
 
                 const sparse_set = storage.getSparseSetPtr(Component);
-                const dense_set = storage.getDenseSetPtr(Component);
-
-                dense_set.dense_len = comp.comp_count;
-
-                // Set sparse
-                try sparse_set.grow(storage.allocator, comp.entity_count);
-                @memcpy(sparse_set.sparse[0..entity_ids.len], entity_ids);
+                const grow_by = if (@sizeOf(Component) > 0)
+                    comp.sparse_count
+                else
+                    comp.sparse_count * @bitSizeOf(EntityId);
+                try sparse_set.grow(storage.allocator, grow_by);
 
                 if (@sizeOf(Component) > 0) {
-                    const component_data = std.mem.bytesAsSlice(Component, component_bytes);
+                    // Set full sparse
+                    @memcpy(sparse_set.sparse[0..entity_ids.len], entity_ids);
+
                     // set dense
-                    try dense_set.grow(storage.allocator, comp.comp_count);
+                    const dense_set = storage.getDenseSetPtr(Component);
+                    dense_set.dense_len = comp.dense_count;
+                    const component_data = std.mem.bytesAsSlice(Component, component_bytes);
+                    try dense_set.grow(storage.allocator, comp.dense_count);
                     @memcpy(dense_set.dense[0..component_data.len], component_data);
+                } else {
+                    // Set tag sparse bits
+                    @memcpy(sparse_set.sparse_bits[0..entity_ids.len], entity_ids);
                 }
             }
         }
@@ -281,8 +314,8 @@ pub const Chunk = struct {
     pub const Comp = packed struct {
         identifier: u32 = mem.bytesToValue(u32, "COMP"),
         padding: u32 = 0,
-        entity_count: u32,
-        comp_count: u32,
+        sparse_count: u32,
+        dense_count: u32,
         type_size: u32,
         type_alignment: u32,
         type_name_hash: u64,
@@ -327,19 +360,18 @@ pub const Chunk = struct {
 
         bytes_cursor += parse_entity_ids_blk: {
             // Point at actual entities, ignoring any written alignment padding
-            const size_of_entity_ids = @sizeOf(EntityId) * chunk.*.entity_count;
             entity_ids.ptr = @as(
                 [*]const EntityId,
-                @ptrCast(@alignCast(bytes[bytes_cursor .. bytes_cursor + size_of_entity_ids].ptr)),
+                @ptrCast(@alignCast(bytes[bytes_cursor..].ptr)),
             );
-            entity_ids.len = @intCast(chunk.*.entity_count);
+            entity_ids.len = @intCast(chunk.*.sparse_count);
 
             // Report new offset by respecting alignment padding
-            break :parse_entity_ids_blk calcAlignedEntityIdSize(@intCast(chunk.*.entity_count));
+            break :parse_entity_ids_blk calcAlignedEntityIdSize(@intCast(chunk.*.sparse_count));
         };
 
         bytes_cursor += parse_component_bytes_blk: {
-            const size_of_component_bytes = chunk.*.comp_count * chunk.*.type_size;
+            const size_of_component_bytes = chunk.*.dense_count * chunk.*.type_size;
             component_bytes.* = bytes[bytes_cursor .. bytes_cursor + size_of_component_bytes];
 
             break :parse_component_bytes_blk size_of_component_bytes;
@@ -413,13 +445,23 @@ test "Chunk.parseComp" {
             &component_bytes,
         );
 
-        try testing.expectEqual(Chunk.Comp{
-            .entity_count = 128,
-            .comp_count = 128,
-            .type_size = @sizeOf(Component),
-            .type_alignment = @alignOf(Component),
-            .type_name_hash = comptime hashfn(@typeName(Component)),
-        }, comp.*);
+        if (@sizeOf(Component) > 0) {
+            try testing.expectEqual(Chunk.Comp{
+                .sparse_count = 128,
+                .dense_count = 128,
+                .type_size = @sizeOf(Component),
+                .type_alignment = @alignOf(Component),
+                .type_name_hash = comptime hashfn(@typeName(Component)),
+            }, comp.*);
+        } else {
+            try testing.expectEqual(Chunk.Comp{
+                .sparse_count = 128 / 32,
+                .dense_count = 0,
+                .type_size = @sizeOf(Component),
+                .type_alignment = @alignOf(Component),
+                .type_name_hash = comptime hashfn(@typeName(Component)),
+            }, comp.*);
+        }
     }
 }
 
@@ -480,14 +522,14 @@ test "serialize and deserialized is idempotent" {
     for (a_as, a_entities) |a, a_entity| {
         try testing.expectEqual(a, try storage.getComponent(a_entity, Testing.Component.A));
         try testing.expectError(error.MissingComponent, storage.getComponent(a_entity, Testing.Component.B));
-        try testing.expectError(error.MissingComponent, storage.getComponent(a_entity, Testing.Component.C));
+        try testing.expectEqual(false, storage.hasComponents(a_entity, .{Testing.Component.C}));
     }
 
     for (ab_as, ab_bs, ab_entities) |ab_a, ab_b, ab_entity| {
         const ab = try storage.getComponents(ab_entity, Testing.Structure.AB);
         try testing.expectEqual(ab_a, ab.a);
         try testing.expectEqual(ab_b, ab.b);
-        try testing.expectError(error.MissingComponent, storage.getComponent(ab_entity, Testing.Component.C));
+        try testing.expectEqual(false, storage.hasComponents(ab_entity, .{Testing.Component.C}));
     }
 
     for (ac_as, ac_entities) |ac_a, ac_entity| {
@@ -688,19 +730,19 @@ test "serialize with culled_component_types config can be deserialized by other 
         for (a_entities) |a_entity| {
             try testing.expectError(error.MissingComponent, bc_storage.getComponent(a_entity, Testing.Component.A));
             try testing.expectError(error.MissingComponent, bc_storage.getComponent(a_entity, Testing.Component.B));
-            try testing.expectError(error.MissingComponent, bc_storage.getComponent(a_entity, Testing.Component.C));
+            try testing.expectEqual(false, bc_storage.hasComponents(a_entity, .{Testing.Component.C}));
         }
 
         for (ab_bs, ab_entities) |ab_b, ab_entity| {
             try testing.expectError(error.MissingComponent, bc_storage.getComponent(ab_entity, Testing.Component.A));
             try testing.expectEqual(ab_b, try bc_storage.getComponent(ab_entity, Testing.Component.B));
-            try testing.expectError(error.MissingComponent, bc_storage.getComponent(ab_entity, Testing.Component.C));
+            try testing.expectEqual(false, bc_storage.hasComponents(ab_entity, .{Testing.Component.C}));
         }
 
         for (ac_entities) |ac_entity| {
             try testing.expectError(error.MissingComponent, bc_storage.getComponent(ac_entity, Testing.Component.A));
             try testing.expectError(error.MissingComponent, bc_storage.getComponent(ac_entity, Testing.Component.B));
-            try testing.expectEqual(ac_cs, try bc_storage.getComponent(ac_entity, Testing.Component.C));
+            try testing.expectEqual(true, bc_storage.hasComponents(ac_entity, .{Testing.Component.C}));
         }
 
         for (abc_bs, abc_entities) |abc_b, abc_entity| {
@@ -735,13 +777,13 @@ test "serialize with culled_component_types config can be deserialized by other 
         for (a_as, a_entities) |a, a_entity| {
             try testing.expectEqual(a, try ac_storage.getComponent(a_entity, Testing.Component.A));
             try testing.expectError(error.MissingComponent, ac_storage.getComponent(a_entity, Testing.Component.B));
-            try testing.expectError(error.MissingComponent, ac_storage.getComponent(a_entity, Testing.Component.C));
+            try testing.expectEqual(false, ac_storage.hasComponents(a_entity, .{Testing.Component.C}));
         }
 
         for (ab_as, ab_entities) |ab_a, ab_entity| {
             try testing.expectEqual(ab_a, try ac_storage.getComponent(ab_entity, Testing.Component.A));
             try testing.expectError(error.MissingComponent, ac_storage.getComponent(ab_entity, Testing.Component.B));
-            try testing.expectError(error.MissingComponent, ac_storage.getComponent(ab_entity, Testing.Component.C));
+            try testing.expectEqual(false, ac_storage.hasComponents(ab_entity, .{Testing.Component.C}));
         }
 
         for (ac_as, ac_entities) |ac_a, ac_entity| {
@@ -783,27 +825,27 @@ test "serialize with culled_component_types config can be deserialized by other 
         for (a_as, a_entities) |a, a_entity| {
             try testing.expectEqual(a, try ab_storage.getComponent(a_entity, Testing.Component.A));
             try testing.expectError(error.MissingComponent, ab_storage.getComponent(a_entity, Testing.Component.B));
-            try testing.expectError(error.MissingComponent, ab_storage.getComponent(a_entity, Testing.Component.C));
+            try testing.expectEqual(false, ab_storage.hasComponents(a_entity, .{Testing.Component.C}));
         }
 
         for (ab_as, ab_bs, ab_entities) |ab_a, ab_b, ab_entity| {
             const ab = try ab_storage.getComponents(ab_entity, Testing.Structure.AB);
             try testing.expectEqual(ab_a, ab.a);
             try testing.expectEqual(ab_b, ab.b);
-            try testing.expectError(error.MissingComponent, ab_storage.getComponent(ab_entity, Testing.Component.C));
+            try testing.expectEqual(false, ab_storage.hasComponents(ab_entity, .{Testing.Component.C}));
         }
 
         for (ac_as, ac_entities) |ac_a, ac_entity| {
             try testing.expectEqual(ac_a, ab_storage.getComponent(ac_entity, Testing.Component.A));
             try testing.expectError(error.MissingComponent, ab_storage.getComponent(ac_entity, Testing.Component.B));
-            try testing.expectError(error.MissingComponent, ab_storage.getComponent(ac_entity, Testing.Component.C));
+            try testing.expectEqual(false, ab_storage.hasComponents(ac_entity, .{Testing.Component.C}));
         }
 
         for (abc_as, abc_bs, abc_entities) |abc_a, abc_b, abc_entity| {
             const abc = try ab_storage.getComponents(abc_entity, Testing.Structure.AB);
             try testing.expectEqual(abc_a, abc.a);
             try testing.expectEqual(abc_b, abc.b);
-            try testing.expectError(error.MissingComponent, ab_storage.getComponent(abc_entity, Testing.Component.C));
+            try testing.expectEqual(false, ab_storage.hasComponents(abc_entity, .{Testing.Component.C}));
         }
     }
 
@@ -831,25 +873,25 @@ test "serialize with culled_component_types config can be deserialized by other 
         for (a_entities) |a_entity| {
             try testing.expectError(error.MissingComponent, b_storage.getComponent(a_entity, Testing.Component.A));
             try testing.expectError(error.MissingComponent, b_storage.getComponent(a_entity, Testing.Component.B));
-            try testing.expectError(error.MissingComponent, b_storage.getComponent(a_entity, Testing.Component.C));
+            try testing.expectEqual(false, b_storage.hasComponents(a_entity, .{Testing.Component.C}));
         }
 
         for (ab_bs, ab_entities) |ab_b, ab_entity| {
             try testing.expectError(error.MissingComponent, b_storage.getComponent(ab_entity, Testing.Component.A));
             try testing.expectEqual(ab_b, try b_storage.getComponent(ab_entity, Testing.Component.B));
-            try testing.expectError(error.MissingComponent, b_storage.getComponent(ab_entity, Testing.Component.C));
+            try testing.expectEqual(false, b_storage.hasComponents(ab_entity, .{Testing.Component.C}));
         }
 
         for (ac_entities) |ac_entity| {
             try testing.expectError(error.MissingComponent, b_storage.getComponent(ac_entity, Testing.Component.A));
             try testing.expectError(error.MissingComponent, b_storage.getComponent(ac_entity, Testing.Component.B));
-            try testing.expectError(error.MissingComponent, b_storage.getComponent(ac_entity, Testing.Component.C));
+            try testing.expectEqual(false, b_storage.hasComponents(ac_entity, .{Testing.Component.C}));
         }
 
         for (abc_bs, abc_entities) |abc_b, abc_entity| {
             try testing.expectError(error.MissingComponent, b_storage.getComponent(abc_entity, Testing.Component.A));
             try testing.expectEqual(abc_b, try b_storage.getComponent(abc_entity, Testing.Component.B));
-            try testing.expectError(error.MissingComponent, b_storage.getComponent(abc_entity, Testing.Component.C));
+            try testing.expectEqual(false, b_storage.hasComponents(abc_entity, .{Testing.Component.C}));
         }
     }
 }

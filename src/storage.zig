@@ -23,12 +23,13 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         pub const component_type_array = CompileReflect.verifyComponentTuple(all_components);
 
         pub const GroupDenseSets = CompileReflect.GroupDenseSets(&component_type_array);
+        pub const GroupSparseSets = CompileReflect.GroupSparseSets(&component_type_array);
 
         const Storage = @This();
 
         allocator: Allocator,
 
-        sparse_sets: [component_type_array.len]set.Sparse,
+        sparse_sets: GroupSparseSets,
         dense_sets: GroupDenseSets,
 
         number_of_entities: std.atomic.Value(EntityId) = .{ .raw = 0 },
@@ -42,14 +43,9 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
-            var sparse_sets: [component_type_array.len]set.Sparse = undefined;
-            inline for (&sparse_sets) |*sparse_set| {
-                sparse_set.* = set.Sparse{};
-            }
-
             return Storage{
                 .allocator = allocator,
-                .sparse_sets = sparse_sets,
+                .sparse_sets = .{},
                 .dense_sets = .{},
             };
         }
@@ -61,10 +57,13 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             defer zone.End();
 
             inline for (component_type_array) |Component| {
-                const dense_set = self.getDenseSetPtr(Component);
-                dense_set.deinit(self.allocator);
+                if (@sizeOf(Component) > 0) {
+                    const dense_set = self.getDenseSetPtr(Component);
+                    dense_set.deinit(self.allocator);
+                }
             }
-            for (&self.sparse_sets) |*sparse_set| {
+            inline for (component_type_array) |Component| {
+                const sparse_set = self.getSparseSetPtr(Component);
                 sparse_set.deinit(self.allocator);
             }
         }
@@ -75,10 +74,15 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             defer zone.End();
 
             inline for (component_type_array) |Component| {
-                const sparse_set = self.getSparseSetPtr(Component);
-                const dense_set = self.getDenseSetPtr(Component);
+                if (@sizeOf(Component) > 0) {
+                    const sparse_set: *set.Sparse.Full = self.getSparseSetPtr(Component);
+                    const dense_set = self.getDenseSetPtr(Component);
 
-                set.clearRetainingCapacity(sparse_set, dense_set);
+                    set.clearRetainingCapacity(sparse_set, dense_set);
+                } else {
+                    const sparse_set: *set.Sparse.Tag = self.getSparseSetPtr(Component);
+                    sparse_set.clearRetainingCapacity();
+                }
             }
 
             self.number_of_entities.store(0, .seq_cst);
@@ -106,27 +110,38 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
             // Ensure capacity first to avoid errdefer
             inline for (field_info.Struct.fields) |field| {
-                var sparse_set = self.getSparseSetPtr(field.type);
-                var dense_set = self.getDenseSetPtr(field.type);
+                const Component = field.type;
 
-                try sparse_set.grow(self.allocator, this_id + 1);
-                try dense_set.grow(self.allocator, dense_set.dense_len + 1);
+                {
+                    var sparse_set = self.getSparseSetPtr(Component);
+                    try sparse_set.grow(self.allocator, this_id + 1);
+                }
+
+                if (@sizeOf(Component) > 0) {
+                    var dense_set = self.getDenseSetPtr(Component);
+                    try dense_set.grow(self.allocator, dense_set.dense_len + 1);
+                }
             }
 
             inline for (field_info.Struct.fields) |field| {
-                const sparse_set = self.getSparseSetPtr(field.type);
-                const dense_set = self.getDenseSetPtr(field.type);
-
-                const component = @field(
+                const Component = field.type;
+                const component: Component = @field(
                     entity_state,
                     field.name,
                 );
-                set.setAssumeCapacity(
-                    sparse_set,
-                    dense_set,
-                    this_id,
-                    component,
-                );
+
+                const sparse_set = self.getSparseSetPtr(Component);
+                if (@sizeOf(Component) > 0) {
+                    const dense_set = self.getDenseSetPtr(Component);
+                    set.setAssumeCapacity(
+                        sparse_set,
+                        dense_set,
+                        this_id,
+                        component,
+                    );
+                } else {
+                    sparse_set.setAssumeCapacity(this_id);
+                }
             }
 
             return Entity{
@@ -159,27 +174,37 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
             // Ensure capacity first to avoid errdefer
             inline for (field_info.Struct.fields) |field| {
-                var sparse_set = self.getSparseSetPtr(field.type);
-                var dense_set = self.getDenseSetPtr(field.type);
+                const Component = field.type;
+                {
+                    var sparse_set = self.getSparseSetPtr(Component);
+                    try sparse_set.grow(self.allocator, entity.id + 1);
+                }
 
-                try dense_set.grow(self.allocator, entity.id + 1);
-                try sparse_set.grow(self.allocator, entity.id + 1);
+                if (@sizeOf(Component) > 0) {
+                    var dense_set = self.getDenseSetPtr(Component);
+                    try dense_set.grow(self.allocator, entity.id + 1);
+                }
             }
 
             inline for (field_info.Struct.fields) |field| {
-                const sparse_set = self.getSparseSetPtr(field.type);
-                const dense_set = self.getDenseSetPtr(field.type);
-
-                const component = @field(
+                const Component = field.type;
+                const component: Component = @field(
                     struct_of_components,
                     field.name,
                 );
-                set.setAssumeCapacity(
-                    sparse_set,
-                    dense_set,
-                    entity.id,
-                    component,
-                );
+
+                const sparse_set = self.getSparseSetPtr(field.type);
+                if (@sizeOf(Component) > 0) {
+                    const dense_set = self.getDenseSetPtr(field.type);
+                    set.setAssumeCapacity(
+                        sparse_set,
+                        dense_set,
+                        entity.id,
+                        component,
+                    );
+                } else {
+                    sparse_set.setAssumeCapacity(entity.id);
+                }
             }
         }
 
@@ -204,13 +229,17 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 const ComponentToRemove = @field(struct_of_remove_components, field.name);
 
                 const sparse_set = self.getSparseSetPtr(ComponentToRemove);
-                const dense_set = self.getDenseSetPtr(ComponentToRemove);
 
-                _ = set.unset(
-                    sparse_set,
-                    dense_set,
-                    entity.id,
-                );
+                if (@sizeOf(ComponentToRemove) > 0) {
+                    const dense_set = self.getDenseSetPtr(ComponentToRemove);
+                    _ = set.unset(
+                        sparse_set,
+                        dense_set,
+                        entity.id,
+                    );
+                } else {
+                    sparse_set.unset(entity.id);
+                }
             }
         }
 
@@ -250,7 +279,8 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         /// Parameters:
         ///
         ///     - entity:    the entity to retrieve Component from
-        ///     - Components: a struct type where fields are compoents that that belong to entity
+        ///     - Components: a struct type where fields are compoents that that belong to entity.
+        ///                   It's illegal to have field that is pointer to Component of size == 0
         ///
         /// Hazards:
         ///
@@ -276,16 +306,31 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 const component_to_get = CompileReflect.compactComponentRequest(field.type);
 
                 const sparse_set = self.getSparseSetConstPtr(component_to_get.type);
-                const dense_set = self.getDenseSetConstPtr(component_to_get.type);
+                if (@sizeOf(component_to_get.type) > 0) {
+                    const dense_set = self.getDenseSetConstPtr(component_to_get.type);
 
-                const get_ptr = set.get(
-                    sparse_set,
-                    dense_set,
-                    entity.id,
-                ) orelse return error.MissingComponent;
-                switch (component_to_get.attr) {
-                    .ptr => @field(result, field.name) = get_ptr,
-                    .value => @field(result, field.name) = get_ptr.*,
+                    const get_ptr = set.get(
+                        sparse_set,
+                        dense_set,
+                        entity.id,
+                    ) orelse return error.MissingComponent;
+                    switch (component_to_get.attr) {
+                        .ptr => @field(result, field.name) = get_ptr,
+                        .value => @field(result, field.name) = get_ptr.*,
+                    }
+                } else {
+                    comptime {
+                        if (component_to_get.attr == .ptr) {
+                            const error_message = std.fmt.comptimePrint("field '{s}' is a pointer to zero sized component which is illegal", .{field.name});
+                            @compileError(error_message);
+                        }
+                    }
+
+                    if (sparse_set.isSet(entity.id) == false) {
+                        return error.MissingComponent;
+                    }
+
+                    @field(result, field.name) = component_to_get.type{};
                 }
             }
 
@@ -297,7 +342,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         /// Parameters:
         ///
         ///     - entity:    the entity to retrieve Component from
-        ///     - Components: a struct type where fields are compoents that that belong to entity
+        ///     - Component: Component to fetch from entity. Size of Component must be greater than 0
         ///
         /// Hazards:
         ///
@@ -314,10 +359,15 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             );
 
             const component_to_get = CompileReflect.compactComponentRequest(Component);
+            comptime {
+                if (@sizeOf(component_to_get.type) == 0) {
+                    const error_message = std.fmt.comptimePrint("Component size must be greater than 0, @sizeOf({s}) == 0", .{@typeName(component_to_get.type)});
+                    @compileError(error_message);
+                }
+            }
 
             const sparse_set = self.getSparseSetConstPtr(component_to_get.type);
             const dense_set = self.getDenseSetConstPtr(component_to_get.type);
-
             const get_ptr = set.get(
                 sparse_set,
                 dense_set,
@@ -734,7 +784,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                 search_order: [query_components.len]usize,
 
-                sparse_sets: [query_components.len]*set.Sparse,
+                sparse_sets: [query_components.len]set.Sparse.CommonSparse,
                 dense_sets: CompileReflect.GroupDenseSetsPtr(&query_components),
 
                 pub fn submit(storage: *Storage) ThisQuery {
@@ -742,10 +792,16 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     defer zone.End();
 
                     var dense_sets: CompileReflect.GroupDenseSetsPtr(&query_components) = undefined;
-                    var sparse_sets: [query_components.len]*set.Sparse = undefined;
+                    var sparse_sets: [query_components.len]set.Sparse.CommonSparse = undefined;
                     inline for (query_components, &sparse_sets) |Component, *sparse_set| {
-                        sparse_set.* = storage.getSparseSetPtr(Component);
-                        @field(dense_sets, @typeName(Component)) = storage.getDenseSetPtr(Component);
+                        if (@sizeOf(Component) > 0) {
+                            const full_set = storage.getSparseSetPtr(Component);
+                            sparse_set.* = .{ .full = full_set };
+                            @field(dense_sets, @typeName(Component)) = storage.getDenseSetPtr(Component);
+                        } else {
+                            const tag_set = storage.getSparseSetPtr(Component);
+                            sparse_set.* = .{ .tag = tag_set };
+                        }
                     }
 
                     const number_of_entities = storage.number_of_entities.load(.monotonic);
@@ -768,13 +824,22 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                             }
 
                             if (skip_component == false) {
-                                const dense_set = storage.getDenseSetConstPtr(QueryComp);
+                                const query_candidate_len = get_candidate_len_blk: {
+                                    if (@sizeOf(QueryComp) > 0) {
+                                        const dense_set = storage.getDenseSetConstPtr(QueryComp);
+                                        break :get_candidate_len_blk dense_set.dense_len;
+                                    } else {
+                                        const sparse_set: *const set.Sparse.Tag = storage.getSparseSetConstPtr(QueryComp);
+                                        break :get_candidate_len_blk sparse_set.sparse_len;
+                                    }
+                                };
 
                                 const len_value = get_len_blk: {
-                                    if (q_index < result_component_count + include_fields.len) {
-                                        break :get_len_blk dense_set.dense_len;
+                                    const is_result_or_include_component = q_index < result_component_count + include_fields.len;
+                                    if (is_result_or_include_component) {
+                                        break :get_len_blk query_candidate_len;
                                     } else {
-                                        break :get_len_blk number_of_entities - dense_set.dense_len;
+                                        break :get_len_blk number_of_entities - query_candidate_len;
                                     }
                                 };
 
@@ -813,17 +878,27 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                         @field(result, result_fields[0].name) = Entity{ .id = self.sparse_cursors };
                     }
 
-                    inline for (result_fields[result_start_index..result_end_index]) |incl_field| {
-                        const component_to_get = CompileReflect.compactComponentRequest(incl_field.type);
-                        const comp_index = indexOfQueryComponent(component_to_get.type);
+                    inline for (result_fields[result_start_index..result_end_index]) |result_field| {
+                        const component_to_get = CompileReflect.compactComponentRequest(result_field.type);
 
-                        const sparse_set = self.sparse_sets[comp_index];
-                        const dense_set = @field(self.dense_sets, @typeName(component_to_get.type));
-                        const component_ptr = set.get(sparse_set, dense_set, self.sparse_cursors).?;
+                        if (@sizeOf(component_to_get.type) > 0) {
+                            const sparse_index = indexOfComponentSparse(component_to_get.type);
 
-                        switch (component_to_get.attr) {
-                            .ptr => @field(result, incl_field.name) = component_ptr,
-                            .value => @field(result, incl_field.name) = component_ptr.*,
+                            const sparse_set = self.sparse_sets[sparse_index].full;
+                            const dense_set = @field(self.dense_sets, @typeName(component_to_get.type));
+                            const component_ptr = set.get(sparse_set, dense_set, self.sparse_cursors).?;
+
+                            switch (component_to_get.attr) {
+                                .ptr => @field(result, result_field.name) = component_ptr,
+                                .value => @field(result, result_field.name) = component_ptr.*,
+                            }
+                        } else {
+                            if (component_to_get.attr == .ptr) {
+                                const error_message = std.fmt.comptimePrint("field '{s}' is a pointer to zero sized component which is illegal", .{result_field.name});
+                                @compileError(error_message);
+                            }
+
+                            @field(result, result_field.name) = component_to_get.type{};
                         }
                     }
 
@@ -854,12 +929,16 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                         }
 
                         for (self.search_order) |this_search| {
-                            const is_result = this_search < result_component_count + include_fields.len;
-                            const entry_is_set = self.sparse_sets[this_search].isSet(self.sparse_cursors);
+                            const entry_is_set = switch (self.sparse_sets[this_search]) {
+                                .full => |full_set| full_set.isSet(self.sparse_cursors),
+                                .tag => |tag_set| tag_set.isSet(self.sparse_cursors),
+                            };
+
+                            const should_be_set = this_search < result_component_count + include_fields.len;
 
                             // Check if we should skip entry:
                             // Skip if is set is false and it's a result entry, otherwise if it's an exclude, then it should be set to skip.
-                            if (entry_is_set != is_result) {
+                            if (entry_is_set != should_be_set) {
                                 self.sparse_cursors += 1;
                                 continue :search_next_loop;
                             }
@@ -869,7 +948,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     }
                 }
 
-                fn indexOfQueryComponent(comptime Component: type) comptime_int {
+                fn indexOfComponentSparse(comptime Component: type) comptime_int {
                     for (query_components, 0..) |ComponentQ, comp_index| {
                         if (ComponentQ == Component) {
                             return comp_index;
@@ -884,6 +963,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         /// Mostly meant for internal usage. Be careful not to write to the set as this can
         /// lead to inconsistent storage state.
         pub fn getDenseSetConstPtr(storage: *const Storage, comptime Component: type) *const set.Dense(Component) {
+            comptime std.debug.assert(@sizeOf(Component) > 0);
             return &@field(
                 storage.dense_sets,
                 @typeName(Component),
@@ -894,6 +974,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         /// Mostly meant for internal usage. Be careful not to write to the set as this can
         /// lead to inconsistent storage state.
         pub fn getDenseSetPtr(storage: *Storage, comptime Component: type) *set.Dense(Component) {
+            comptime std.debug.assert(@sizeOf(Component) > 0);
             return &@field(
                 storage.dense_sets,
                 @typeName(Component),
@@ -903,17 +984,21 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         /// Retrieve the sparse set for a component type.
         /// Mostly meant for internal usage. Be careful not to write to the set as this can
         /// lead to inconsistent storage state.
-        pub fn getSparseSetConstPtr(storage: *const Storage, comptime Component: type) *const set.Sparse {
-            const comp_index = indexOfStorageComponent(Component);
-            return &storage.sparse_sets[comp_index];
+        pub fn getSparseSetConstPtr(storage: *const Storage, comptime Component: type) *const set.Sparse.CompToSparseType(Component) {
+            return &@field(
+                storage.sparse_sets,
+                @typeName(Component),
+            );
         }
 
         /// Retrieve the sparse set for a component type.
         /// Mostly meant for internal usage. Be careful not to write to the set as this can
         /// lead to inconsistent storage state.
-        pub fn getSparseSetPtr(storage: *Storage, comptime Component: type) *set.Sparse {
-            const comp_index = indexOfStorageComponent(Component);
-            return &storage.sparse_sets[comp_index];
+        pub fn getSparseSetPtr(storage: *Storage, comptime Component: type) *set.Sparse.CompToSparseType(Component) {
+            return &@field(
+                storage.sparse_sets,
+                @typeName(Component),
+            );
         }
 
         fn indexOfStorageComponent(comptime Component: type) usize {
@@ -954,17 +1039,17 @@ pub const CompileReflect = struct {
         };
     }
 
-    pub fn GroupDenseSets(comptime components: []const type) type {
+    pub fn GroupSparseSets(comptime components: []const type) type {
         var struct_fields: [components.len]std.builtin.Type.StructField = undefined;
-        inline for (&struct_fields, components) |*field, component| {
-            const DenseSet = set.Dense(component);
-            const default_value = DenseSet{};
+        inline for (&struct_fields, components) |*field, Component| {
+            const SparseSet = set.Sparse.CompToSparseType(Component);
+            const default_value = SparseSet{};
             field.* = std.builtin.Type.StructField{
-                .name = @typeName(component),
-                .type = DenseSet,
+                .name = @typeName(Component),
+                .type = SparseSet,
                 .default_value = @ptrCast(&default_value),
                 .is_comptime = false,
-                .alignment = @alignOf(DenseSet),
+                .alignment = @alignOf(SparseSet),
             };
         }
         const group_type = std.builtin.Type{ .Struct = .{
@@ -976,12 +1061,49 @@ pub const CompileReflect = struct {
         return @Type(group_type);
     }
 
-    pub fn GroupDenseSetsPtr(comptime components: []const type) type {
+    /// Generate the struct that will store our dense sets.
+    pub fn GroupDenseSets(comptime components: []const type) type {
+        comptime var non_zero_component_count = 0;
         var struct_fields: [components.len]std.builtin.Type.StructField = undefined;
-        inline for (&struct_fields, components) |*field, component| {
-            const DenseSet = set.Dense(component);
+        inline for (&struct_fields, components) |*field, Component| {
+            if (@sizeOf(Component) == 0) {
+                continue;
+            }
+
+            non_zero_component_count += 1;
+
+            const DenseSet = set.Dense(Component);
+            const default_value = DenseSet{};
             field.* = std.builtin.Type.StructField{
-                .name = @typeName(component),
+                .name = @typeName(Component),
+                .type = DenseSet,
+                .default_value = @ptrCast(&default_value),
+                .is_comptime = false,
+                .alignment = @alignOf(DenseSet),
+            };
+        }
+        const group_type = std.builtin.Type{ .Struct = .{
+            .layout = .auto,
+            .fields = struct_fields[0..non_zero_component_count],
+            .decls = &[_]std.builtin.Type.Declaration{},
+            .is_tuple = false,
+        } };
+        return @Type(group_type);
+    }
+
+    pub fn GroupDenseSetsPtr(comptime components: []const type) type {
+        comptime var non_zero_component_count = 0;
+        var struct_fields: [components.len]std.builtin.Type.StructField = undefined;
+        inline for (&struct_fields, components) |*field, Component| {
+            if (@sizeOf(Component) == 0) {
+                continue;
+            }
+
+            non_zero_component_count += 1;
+
+            const DenseSet = set.Dense(Component);
+            field.* = std.builtin.Type.StructField{
+                .name = @typeName(Component),
                 .type = *DenseSet,
                 .default_value = null,
                 .is_comptime = false,
@@ -990,7 +1112,7 @@ pub const CompileReflect = struct {
         }
         const group_type = std.builtin.Type{ .Struct = .{
             .layout = .auto,
-            .fields = &struct_fields,
+            .fields = struct_fields[0..non_zero_component_count],
             .decls = &[_]std.builtin.Type.Declaration{},
             .is_tuple = false,
         } };
@@ -1025,7 +1147,7 @@ pub const CompileReflect = struct {
     }
 
     fn verifyInnerTypesIsInSlice(
-        comptime fmt_error_msg: []const u8,
+        comptime fmt_error_message: []const u8,
         comptime type_slice: []const type,
         comptime type_tuple: anytype,
     ) void {
@@ -1042,7 +1164,7 @@ pub const CompileReflect = struct {
                 }
             }
 
-            @compileError(@typeName(InnerType) ++ fmt_error_msg);
+            @compileError(@typeName(InnerType) ++ fmt_error_message);
         }
     }
 };
@@ -1257,7 +1379,6 @@ test "storage with 0 size component is valid" {
     try storage.setComponents(entity, .{ZeroComp{}});
     try testing.expectEqual(true, storage.hasComponents(entity, .{ZeroComp}));
 
-    _ = try storage.getComponent(entity, ZeroComp);
     _ = try storage.getComponents(entity, struct { z: ZeroComp });
     storage.unsetComponents(entity, .{ZeroComp});
     try testing.expectEqual(false, storage.hasComponents(entity, .{ZeroComp}));
