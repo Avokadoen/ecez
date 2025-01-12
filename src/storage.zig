@@ -771,7 +771,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                                 const dense_set = storage.getDenseSetConstPtr(QueryComp);
 
                                 const len_value = get_len_blk: {
-                                    if (q_index < result_component_count) {
+                                    if (q_index < result_component_count + include_fields.len) {
                                         break :get_len_blk dense_set.dense_len;
                                     } else {
                                         break :get_len_blk number_of_entities - dense_set.dense_len;
@@ -854,7 +854,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                         }
 
                         for (self.search_order) |this_search| {
-                            const is_result = this_search < result_component_count;
+                            const is_result = this_search < result_component_count + include_fields.len;
                             const entry_is_set = self.sparse_sets[this_search].isSet(self.sparse_cursors);
 
                             // Check if we should skip entry:
@@ -1969,6 +1969,54 @@ test "query with result entity, components and exclude only works" {
                     .value = @as(u8, @intCast(index)),
                 },
                 item.b,
+            );
+            index += 1;
+        }
+    }
+}
+
+test "query wuth include field works" {
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
+
+    var entities: [200]Entity = undefined;
+    for (entities[0..100], 0..) |*entity, index| {
+        entity.* = try storage.createEntity(.{
+            Testing.Component.A{ .value = @as(u32, @intCast(index)) },
+        });
+    }
+    for (entities[100..200], 100..) |*entity, index| {
+        entity.* = try storage.createEntity(AbEntityType{
+            .a = .{ .value = @as(u32, @intCast(index)) },
+            .b = .{ .value = @as(u8, @intCast(index)) },
+        });
+    }
+
+    {
+        var iter = StorageStub.Query(
+            struct {
+                entity: Entity,
+                a: Testing.Component.A,
+            },
+            .{Testing.Component.B},
+            .{},
+        ).submit(&storage);
+
+        const expected_order = [_]usize{ 1, 0 };
+        try std.testing.expectEqualSlices(usize, &expected_order, &iter.search_order);
+
+        var index: usize = 100;
+        while (iter.next()) |item| {
+            try std.testing.expectEqual(
+                entities[index],
+                item.entity,
+            );
+
+            try std.testing.expectEqual(
+                Testing.Component.A{
+                    .value = @as(u32, @intCast(index)),
+                },
+                item.a,
             );
             index += 1;
         }
