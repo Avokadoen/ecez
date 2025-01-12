@@ -1065,22 +1065,22 @@ pub const CompileReflect = struct {
     pub fn GroupDenseSets(comptime components: []const type) type {
         comptime var non_zero_component_count = 0;
         var struct_fields: [components.len]std.builtin.Type.StructField = undefined;
-        inline for (&struct_fields, components) |*field, Component| {
+        inline for (components) |Component| {
             if (@sizeOf(Component) == 0) {
                 continue;
             }
 
-            non_zero_component_count += 1;
-
             const DenseSet = set.Dense(Component);
             const default_value = DenseSet{};
-            field.* = std.builtin.Type.StructField{
+            struct_fields[non_zero_component_count] = std.builtin.Type.StructField{
                 .name = @typeName(Component),
                 .type = DenseSet,
                 .default_value = @ptrCast(&default_value),
                 .is_comptime = false,
                 .alignment = @alignOf(DenseSet),
             };
+
+            non_zero_component_count += 1;
         }
         const group_type = std.builtin.Type{ .Struct = .{
             .layout = .auto,
@@ -1094,21 +1094,21 @@ pub const CompileReflect = struct {
     pub fn GroupDenseSetsPtr(comptime components: []const type) type {
         comptime var non_zero_component_count = 0;
         var struct_fields: [components.len]std.builtin.Type.StructField = undefined;
-        inline for (&struct_fields, components) |*field, Component| {
+        inline for (components) |Component| {
             if (@sizeOf(Component) == 0) {
                 continue;
             }
 
-            non_zero_component_count += 1;
-
             const DenseSet = set.Dense(Component);
-            field.* = std.builtin.Type.StructField{
+            struct_fields[non_zero_component_count] = std.builtin.Type.StructField{
                 .name = @typeName(Component),
                 .type = *DenseSet,
                 .default_value = null,
                 .is_comptime = false,
                 .alignment = @alignOf(*DenseSet),
             };
+
+            non_zero_component_count += 1;
         }
         const group_type = std.builtin.Type{ .Struct = .{
             .layout = .auto,
