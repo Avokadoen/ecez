@@ -3,47 +3,121 @@ const Allocator = std.mem.Allocator;
 const EntityId = @import("entity_type.zig").EntityId;
 
 pub const Sparse = struct {
+    pub fn CompToSparseType(comptime Component: type) type {
+        return if (@sizeOf(Component) > 0) Full else Tag;
+    }
+
+    pub const SparseRtType = enum {
+        tag,
+        full,
+    };
+    pub const CommonSparse = union(SparseRtType) {
+        tag: *Tag,
+        full: *Full,
+    };
+
     pub const not_set = std.math.maxInt(EntityId);
-    const SparseSet = @This();
 
-    sparse_len: u32 = 0,
-    // Len of the slice is "capacity"
-    sparse: []EntityId = &[0]EntityId{},
+    /// TagSparse set is the type used when there is a "0 sized" component
+    pub const Tag = struct {
+        pub const Byte = u8;
 
-    pub fn deinit(self: *SparseSet, allocator: Allocator) void {
-        allocator.free(self.sparse);
-        self.sparse = undefined;
-        self.sparse_len = undefined;
-    }
+        sparse_len: u32 = 0,
+        // Len of the slice is "capacity"
+        sparse_bits: []EntityId = &[0]EntityId{},
 
-    pub fn grow(self: *SparseSet, allocator: Allocator, min_size: u32) error{OutOfMemory}!void {
-        self.sparse_len = @max(self.sparse_len, min_size);
-
-        if (self.sparse.len >= min_size) {
-            return;
+        pub fn deinit(self: *Tag, allocator: Allocator) void {
+            allocator.free(self.sparse_bits);
+            self.sparse_len = undefined;
+            self.sparse_bits = undefined;
         }
 
-        const new_len = growSize(self.sparse.len, min_size);
-        const old_len = self.sparse.len;
+        pub fn grow(self: *Tag, allocator: Allocator, min_size: u32) error{OutOfMemory}!void {
+            const word_count = std.math.divCeil(u32, min_size, @bitSizeOf(EntityId)) catch unreachable;
+            self.sparse_len = @max(self.sparse_len, word_count);
+            if (self.sparse_bits.len >= word_count) {
+                return;
+            }
 
-        // Grow sparse, realloc will resize if possible internaly
-        {
-            self.sparse = try allocator.realloc(self.sparse, new_len);
-            @memset(self.sparse[old_len..new_len], Sparse.not_set);
-        }
-    }
+            const new_len = growSize(self.sparse_bits.len, word_count);
+            const old_len = self.sparse_bits.len;
 
-    pub inline fn setAssumeCapacity(self: *SparseSet, sparse_slot: EntityId, entry: EntityId) void {
-        self.sparse[sparse_slot] = entry;
-    }
-
-    pub inline fn isSet(self: SparseSet, sparse_slot: EntityId) bool {
-        if (self.sparse.len <= sparse_slot) {
-            return false;
+            // Grow sparse, realloc will resize if possible
+            {
+                self.sparse_bits = try allocator.realloc(self.sparse_bits, new_len);
+                @memset(self.sparse_bits[old_len..new_len], not_set);
+            }
         }
 
-        return self.sparse[sparse_slot] != Sparse.not_set;
-    }
+        pub fn setAssumeCapacity(self: *Tag, sparse_slot: EntityId) void {
+            const slot_index = @divFloor(sparse_slot, @bitSizeOf(EntityId));
+            const slot_bit: u5 = @intCast(@rem(sparse_slot, @bitSizeOf(EntityId)));
+            self.sparse_bits[slot_index] &= ~(@as(EntityId, 1) << slot_bit);
+        }
+
+        pub fn unset(self: *Tag, sparse_slot: EntityId) void {
+            const slot_index = @divFloor(sparse_slot, @bitSizeOf(EntityId));
+            const slot_bit: u5 = @intCast(@rem(sparse_slot, @bitSizeOf(EntityId)));
+            self.sparse_bits[slot_index] |= @as(EntityId, 1) << slot_bit;
+        }
+
+        pub fn isSet(self: Tag, sparse_slot: EntityId) bool {
+            if (self.sparse_bits.len * @bitSizeOf(EntityId) <= sparse_slot) {
+                return false;
+            }
+
+            const slot_index = @divFloor(sparse_slot, @bitSizeOf(EntityId));
+            const slot_bit: u5 = @intCast(@rem(sparse_slot, @bitSizeOf(EntityId)));
+            return (self.sparse_bits[slot_index] & (@as(EntityId, 1) << slot_bit)) == 0;
+        }
+
+        pub fn clearRetainingCapacity(self: *Tag) void {
+            @memset(self.sparse_bits, not_set);
+            self.sparse_len = 0;
+        }
+    };
+
+    pub const Full = struct {
+        const SparseSet = @This();
+
+        sparse_len: u32 = 0,
+        // Len of the slice is "capacity"
+        sparse: []EntityId = &[0]EntityId{},
+
+        pub fn deinit(self: *SparseSet, allocator: Allocator) void {
+            allocator.free(self.sparse);
+            self.sparse = undefined;
+            self.sparse_len = undefined;
+        }
+
+        pub fn grow(self: *SparseSet, allocator: Allocator, min_size: u32) error{OutOfMemory}!void {
+            self.sparse_len = @max(self.sparse_len, min_size);
+            if (self.sparse.len >= min_size) {
+                return;
+            }
+
+            const new_len = growSize(self.sparse.len, min_size);
+            const old_len = self.sparse.len;
+
+            // Grow sparse, realloc will resize if possible
+            {
+                self.sparse = try allocator.realloc(self.sparse, new_len);
+                @memset(self.sparse[old_len..new_len], not_set);
+            }
+        }
+
+        pub inline fn setAssumeCapacity(self: *SparseSet, sparse_slot: EntityId, entry: EntityId) void {
+            self.sparse[sparse_slot] = entry;
+        }
+
+        pub fn isSet(self: SparseSet, sparse_slot: EntityId) bool {
+            if (self.sparse.len <= sparse_slot) {
+                return false;
+            }
+
+            return self.sparse[sparse_slot] != not_set;
+        }
+    };
 };
 
 pub fn Dense(comptime DenseT: type) type {
@@ -86,7 +160,7 @@ pub fn Dense(comptime DenseT: type) type {
 }
 
 pub fn setAssumeCapacity(
-    sparse: anytype,
+    sparse: *Sparse.Full,
     dense: anytype,
     sparse_slot: EntityId,
     dense_item: anytype,
@@ -125,7 +199,7 @@ pub fn setAssumeCapacity(
 
 // True if sparse was set, false otherwise
 pub fn unset(
-    sparse: anytype,
+    sparse: *Sparse.Full,
     dense: anytype,
     sparse_slot: EntityId,
 ) bool {
@@ -155,7 +229,7 @@ pub fn unset(
 }
 
 pub fn get(
-    sparse: anytype,
+    sparse: *const Sparse.Full,
     dense: anytype,
     sparse_slot: EntityId,
 ) ?*GetDenseStorage(@TypeOf(dense)).DenseType {
@@ -179,7 +253,7 @@ pub fn get(
 }
 
 pub fn clearRetainingCapacity(
-    sparse: anytype,
+    sparse: *Sparse.Full,
     dense: anytype,
 ) void {
     @memset(sparse.sparse, Sparse.not_set);
@@ -205,7 +279,7 @@ fn GetDenseStorage(comptime DensePtr: type) type {
 const TestDenseSet = Dense(u32);
 
 test "SparseSet growSparse grows set" {
-    var sparse_set = Sparse{};
+    var sparse_set = Sparse.Full{};
     defer sparse_set.deinit(std.testing.allocator);
 
     var dense_set = TestDenseSet{};
@@ -227,7 +301,7 @@ test "SparseSet growSparse grows set" {
 }
 
 test "SparseSet set populates dense" {
-    var sparse_set = Sparse{};
+    var sparse_set = Sparse.Full{};
     defer sparse_set.deinit(std.testing.allocator);
 
     var dense_set = TestDenseSet{};
@@ -266,7 +340,7 @@ test "SparseSet set populates dense" {
 }
 
 test "SparseSet unset removes elements" {
-    var sparse_set = Sparse{};
+    var sparse_set = Sparse.Full{};
     defer sparse_set.deinit(std.testing.allocator);
 
     var dense_set = TestDenseSet{};
@@ -297,7 +371,7 @@ test "SparseSet unset removes elements" {
 }
 
 test "SparseSet get retrieves element" {
-    var sparse_set = Sparse{};
+    var sparse_set = Sparse.Full{};
     defer sparse_set.deinit(std.testing.allocator);
 
     var dense_set = TestDenseSet{};
@@ -333,7 +407,7 @@ test "SparseSet get retrieves element" {
 }
 
 test "SparseSet isSet identifies set and unset elements" {
-    var sparse_set = Sparse{};
+    var sparse_set = Sparse.Full{};
     defer sparse_set.deinit(std.testing.allocator);
 
     var dense_set = TestDenseSet{};
@@ -361,7 +435,7 @@ test "SparseSet isSet identifies set and unset elements" {
 }
 
 test "SparseSet clearRetainingCapacity clears" {
-    var sparse_set = Sparse{};
+    var sparse_set = Sparse.Full{};
     defer sparse_set.deinit(std.testing.allocator);
 
     var dense_set = TestDenseSet{};
@@ -385,7 +459,7 @@ test "SparseSet clearRetainingCapacity clears" {
 }
 
 test "SparseSet with zero sized type only has sparse" {
-    var sparse_set = Sparse{};
+    var sparse_set = Sparse.Full{};
     defer sparse_set.deinit(std.testing.allocator);
 
     var dense_set = Dense(void){};
