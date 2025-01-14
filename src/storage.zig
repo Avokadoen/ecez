@@ -584,10 +584,8 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///
         /// Example:
         /// ```
-        /// var a_iter = Storage.Query(struct{ entity: Entity, a: A }, .{B}).submit(&storage);
-        /// defer a_iter.deinit();
-        ///
-        /// while (a_iter.next()) |item| {
+        /// var living_iter = Storage.Query(struct{ entity: Entity, a: Health }, .{LivingTag} .{DeadTag}).submit(&storage);
+        /// while (living_iter.next()) |item| {
         ///    std.debug.print("{d}", .{item.entity});
         ///    std.debug.print("{any}", .{item.a});
         /// }
@@ -608,7 +606,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 @compileError(error_message);
             }
 
-            const result_fields, const result_start_index, const result_end_index = check_for_entity_blk: {
+            const result_fields, const result_start_index, const result_end = check_for_entity_blk: {
                 var _result_fields: [fields.len]std.builtin.Type.StructField = undefined;
 
                 var has_entity = false;
@@ -618,13 +616,24 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     if (result_field.type == Entity) {
                         // Validate that there is only 1 entity field (Multiple Entity fields would not make sense)
                         if (has_entity) {
-                            const error_message = std.fmt.comptimePrint("Query ResultItem '{s}' has multiple entity fields, ResultItem can only have 0 or 1 Entity field", .{@typeName(ResultItem)});
+                            const error_message = std.fmt.comptimePrint(
+                                "Query ResultItem '{s}' has multiple entity fields, ResultItem can only have 0 or 1 Entity field",
+                                .{@typeName(ResultItem)},
+                            );
                             @compileError(error_message);
                         }
 
                         // Swap entity to index 0 for easier separation from component types.
                         std.mem.swap(std.builtin.Type.StructField, &_result_fields[0], &_result_fields[field_index]);
                         has_entity = true;
+                    }
+
+                    if (@sizeOf(result_field.type) == 0) {
+                        const error_message = std.fmt.comptimePrint(
+                            "Query ResultItem '{s}'.{s} is illegal zero sized field. Use include parameter for tag types",
+                            .{ @typeName(ResultItem), result_field.name },
+                        );
+                        @compileError(error_message);
                     }
                 }
 
@@ -635,7 +644,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 }
                 break :check_for_entity_blk .{ _result_fields, 0, _result_fields.len };
             };
-            const result_component_count = result_end_index - result_start_index;
+            const result_component_count = result_end - result_start_index;
 
             const include_type_info = @typeInfo(@TypeOf(include_types));
             if (include_type_info != .Struct) {
@@ -680,7 +689,14 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                         incl_index,
                     | {
                         const request = CompileReflect.compactComponentRequest(include_types[incl_index]);
-                        query_component.* = request.type;
+                        if (request.attr == .ptr) {
+                            const error_message = std.fmt.comptimePrint(
+                                "Query include_type {s} cant be a pointer",
+                                .{@typeName(request.type)},
+                            );
+                            @compileError(error_message);
+                        }
+                        query_component.* = include_types[incl_index];
                     }
                 }
 
@@ -696,11 +712,42 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                         excl_index,
                     | {
                         const request = CompileReflect.compactComponentRequest(exclude_types[excl_index]);
-                        query_component.* = request.type;
+                        if (request.attr == .ptr) {
+                            const error_message = std.fmt.comptimePrint(
+                                "Query include_type {s} cant be a pointer",
+                                .{@typeName(request.type)},
+                            );
+                            @compileError(error_message);
+                        }
+
+                        query_component.* = exclude_types[excl_index];
                     }
                 }
 
                 break :reflect_on_query_blk raw_component_types;
+            };
+
+            const exclude_type_start = result_component_count + include_fields.len;
+            const full_sparse_set_count, const tag_sparse_set_count, const tag_exclude_start = count_sparse_sets_blk: {
+                var full_sparse_count = 0;
+                var tag_sparse_count = 0;
+                var tag_exclude_start: ?comptime_int = null;
+                for (query_components, 0..) |Component, comp_index| {
+                    if (@sizeOf(Component) > 0) {
+                        full_sparse_count += 1;
+                    } else {
+                        if (comp_index > exclude_type_start) {
+                            tag_exclude_start = tag_sparse_count;
+                        }
+                        tag_sparse_count += 1;
+                    }
+                }
+
+                break :count_sparse_sets_blk .{
+                    full_sparse_count,
+                    tag_sparse_count,
+                    tag_exclude_start orelse tag_sparse_count,
+                };
             };
 
             // If query is requesting no components
@@ -768,11 +815,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
             return struct {
                 // Read by dependency_chain
-                pub const _result_fields = result_fields[result_start_index..result_end_index];
+                pub const _result_fields = result_fields[result_start_index..result_end];
                 // Read by dependency_chain
-                pub const _include_types = query_components[result_component_count .. result_component_count + include_fields.len];
+                pub const _include_types = query_components[result_component_count..exclude_type_start];
                 // Read by dependency_chain
-                pub const _exclude_types = query_components[result_component_count + include_fields.len ..];
+                pub const _exclude_types = query_components[exclude_type_start..];
 
                 pub const EcezType = QueryType;
 
@@ -782,26 +829,42 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 sparse_cursors: EntityId,
                 storage_entity_count_ptr: *const std.atomic.Value(EntityId),
 
-                search_order: [query_components.len]usize,
+                full_set_search_order: [full_sparse_set_count]usize,
+                full_sparse_sets: [full_sparse_set_count]*const set.Sparse.Full,
 
-                sparse_sets: [query_components.len]set.Sparse.CommonSparse,
-                dense_sets: CompileReflect.GroupDenseSetsPtr(&query_components),
+                tag_sparse_sets_bits: EntityId,
+                tag_sparse_sets: [tag_sparse_set_count]*const set.Sparse.Tag,
+
+                dense_sets: CompileReflect.GroupDenseSetsConstPtr(&query_components),
 
                 pub fn submit(storage: *Storage) ThisQuery {
                     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
                     defer zone.End();
 
-                    var dense_sets: CompileReflect.GroupDenseSetsPtr(&query_components) = undefined;
-                    var sparse_sets: [query_components.len]set.Sparse.CommonSparse = undefined;
-                    inline for (query_components, &sparse_sets) |Component, *sparse_set| {
-                        if (@sizeOf(Component) > 0) {
-                            const full_set = storage.getSparseSetPtr(Component);
-                            sparse_set.* = .{ .full = full_set };
-                            @field(dense_sets, @typeName(Component)) = storage.getDenseSetPtr(Component);
-                        } else {
-                            const tag_set = storage.getSparseSetPtr(Component);
-                            sparse_set.* = .{ .tag = tag_set };
+                    var dense_sets: CompileReflect.GroupDenseSetsConstPtr(&query_components) = undefined;
+
+                    var full_sparse_sets: [full_sparse_set_count]*const set.Sparse.Full = undefined;
+                    var tag_sparse_sets: [tag_sparse_set_count]*const set.Sparse.Tag = undefined;
+
+                    {
+                        comptime var full_sparse_sets_index: u32 = 0;
+                        comptime var tag_sparse_sets_index: u32 = 0;
+                        inline for (query_components) |Component| {
+                            const sparse_set_ptr = storage.getSparseSetConstPtr(Component);
+
+                            if (@sizeOf(Component) > 0) {
+                                full_sparse_sets[full_sparse_sets_index] = sparse_set_ptr;
+                                full_sparse_sets_index += 1;
+
+                                @field(dense_sets, @typeName(Component)) = storage.getDenseSetPtr(Component);
+                            } else {
+                                tag_sparse_sets[tag_sparse_sets_index] = sparse_set_ptr;
+                                tag_sparse_sets_index += 1;
+                            }
                         }
+
+                        std.debug.assert(full_sparse_sets_index == full_sparse_set_count);
+                        std.debug.assert(tag_sparse_sets_index == tag_sparse_set_count);
                     }
 
                     const number_of_entities = storage.number_of_entities.load(.monotonic);
@@ -809,14 +872,16 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     var current_index: usize = undefined;
                     var current_min_value: usize = undefined;
                     var last_min_value: usize = 0;
-                    var search_order: [query_components.len]usize = undefined;
-                    inline for (&search_order, 0..) |*search, search_index| {
+                    var full_set_search_order: [full_sparse_set_count]usize = undefined;
+                    inline for (&full_set_search_order, 0..) |*search, search_index| {
                         current_min_value = std.math.maxInt(usize);
 
                         inline for (query_components, 0..) |QueryComp, q_index| {
+                            if (@sizeOf(QueryComp) == 0) continue;
+
                             var skip_component: bool = false;
                             // Skip indices we already stored
-                            already_included_loop: for (search_order[0..search_index]) |prev_found| {
+                            already_included_loop: for (full_set_search_order[0..search_index]) |prev_found| {
                                 if (prev_found == q_index) {
                                     skip_component = true;
                                     continue :already_included_loop;
@@ -857,8 +922,10 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     return ThisQuery{
                         .sparse_cursors = 0,
                         .storage_entity_count_ptr = &storage.number_of_entities,
-                        .search_order = search_order,
-                        .sparse_sets = sparse_sets,
+                        .full_set_search_order = full_set_search_order,
+                        .full_sparse_sets = full_sparse_sets,
+                        .tag_sparse_sets_bits = 0,
+                        .tag_sparse_sets = tag_sparse_sets,
                         .dense_sets = dense_sets,
                     };
                 }
@@ -878,27 +945,16 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                         @field(result, result_fields[0].name) = Entity{ .id = self.sparse_cursors };
                     }
 
-                    inline for (result_fields[result_start_index..result_end_index]) |result_field| {
+                    inline for (result_fields[result_start_index..result_end], 0..) |result_field, result_field_index| {
                         const component_to_get = CompileReflect.compactComponentRequest(result_field.type);
 
-                        if (@sizeOf(component_to_get.type) > 0) {
-                            const sparse_index = indexOfComponentSparse(component_to_get.type);
+                        const sparse_set = self.full_sparse_sets[result_field_index];
+                        const dense_set = @field(self.dense_sets, @typeName(component_to_get.type));
+                        const component_ptr = set.get(sparse_set, dense_set, self.sparse_cursors).?;
 
-                            const sparse_set = self.sparse_sets[sparse_index].full;
-                            const dense_set = @field(self.dense_sets, @typeName(component_to_get.type));
-                            const component_ptr = set.get(sparse_set, dense_set, self.sparse_cursors).?;
-
-                            switch (component_to_get.attr) {
-                                .ptr => @field(result, result_field.name) = component_ptr,
-                                .value => @field(result, result_field.name) = component_ptr.*,
-                            }
-                        } else {
-                            if (component_to_get.attr == .ptr) {
-                                const error_message = std.fmt.comptimePrint("field '{s}' is a pointer to zero sized component which is illegal", .{result_field.name});
-                                @compileError(error_message);
-                            }
-
-                            @field(result, result_field.name) = component_to_get.type{};
+                        switch (component_to_get.attr) {
+                            .ptr => @field(result, result_field.name) = component_ptr,
+                            .value => @field(result, result_field.name) = component_ptr.*,
                         }
                     }
 
@@ -928,12 +984,35 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                             return null;
                         }
 
-                        for (self.search_order) |this_search| {
-                            const entry_is_set = switch (self.sparse_sets[this_search]) {
-                                .full => |full_set| full_set.isSet(self.sparse_cursors),
-                                .tag => |tag_set| tag_set.isSet(self.sparse_cursors),
-                            };
+                        // Check if we should check the tag_sparse_sets_bits
+                        if (comptime tag_sparse_set_count > 0) {
+                            const bit_pos: u5 = @intCast(@rem(self.sparse_cursors, @bitSizeOf(EntityId)));
 
+                            // If we are the 32th entry, lets re-populate tag_sparse_sets_bits
+                            if (bit_pos == 0) {
+                                const bit_index = @divFloor(self.sparse_cursors, @bitSizeOf(EntityId));
+
+                                self.tag_sparse_sets_bits = 0;
+                                for (self.tag_sparse_sets, 0..) |tag_sparse_set, sparse_index| {
+                                    const bits = if (tag_sparse_set.sparse_bits.len > bit_index)
+                                        tag_sparse_set.sparse_bits[bit_index]
+                                    else
+                                        set.Sparse.not_set;
+
+                                    self.tag_sparse_sets_bits |= if (sparse_index < tag_exclude_start) bits else ~bits;
+                                }
+                            }
+
+                            // 0 is considered set for sparse sets.
+                            const all_tag_requirements = (self.tag_sparse_sets_bits & (@as(EntityId, 1) << bit_pos)) == 0;
+                            if (all_tag_requirements == false) {
+                                self.sparse_cursors += 1;
+                                continue :search_next_loop;
+                            }
+                        }
+
+                        for (self.full_set_search_order) |this_search| {
+                            const entry_is_set = self.full_sparse_sets[this_search].isSet(self.sparse_cursors);
                             const should_be_set = this_search < result_component_count + include_fields.len;
 
                             // Check if we should skip entry:
@@ -1091,7 +1170,7 @@ pub const CompileReflect = struct {
         return @Type(group_type);
     }
 
-    pub fn GroupDenseSetsPtr(comptime components: []const type) type {
+    pub fn GroupDenseSetsConstPtr(comptime components: []const type) type {
         comptime var non_zero_component_count = 0;
         var struct_fields: [components.len]std.builtin.Type.StructField = undefined;
         inline for (components) |Component| {
@@ -1102,7 +1181,7 @@ pub const CompileReflect = struct {
             const DenseSet = set.Dense(Component);
             struct_fields[non_zero_component_count] = std.builtin.Type.StructField{
                 .name = @typeName(Component),
-                .type = *DenseSet,
+                .type = *const DenseSet,
                 .default_value = null,
                 .is_comptime = false,
                 .alignment = @alignOf(*DenseSet),
@@ -1945,8 +2024,8 @@ test "query with result of single component type and multiple exclude works" {
             .{ Testing.Component.B, Testing.Component.C },
         ).submit(&storage);
 
-        const expected_order = [_]usize{ 1, 2, 0 };
-        try std.testing.expectEqualSlices(usize, &expected_order, &iter.search_order);
+        const expected_order = [_]usize{ 1, 0 };
+        try std.testing.expectEqualSlices(usize, &expected_order, &iter.full_set_search_order);
 
         var index: usize = 200;
         while (iter.next()) |item| {
@@ -2023,7 +2102,7 @@ test "query with result entity, components and exclude only works" {
         ).submit(&storage);
 
         const expected_order = [_]usize{ 1, 0 };
-        try std.testing.expectEqualSlices(usize, &expected_order, &iter.search_order);
+        try std.testing.expectEqualSlices(usize, &expected_order, &iter.full_set_search_order);
 
         var index: usize = 0;
         while (iter.next()) |item| {
@@ -2054,7 +2133,7 @@ test "query with result entity, components and exclude only works" {
         ).submit(&storage);
 
         const expected_order = [_]usize{ 1, 0 };
-        try std.testing.expectEqualSlices(usize, &expected_order, &iter.search_order);
+        try std.testing.expectEqualSlices(usize, &expected_order, &iter.full_set_search_order);
 
         var index: usize = 0;
         while (iter.next()) |item| {
@@ -2086,7 +2165,7 @@ test "query with result entity, components and exclude only works" {
         ).submit(&storage);
 
         const expected_order = [_]usize{ 1, 0 };
-        try std.testing.expectEqualSlices(usize, &expected_order, &iter.search_order);
+        try std.testing.expectEqualSlices(usize, &expected_order, &iter.full_set_search_order);
 
         var index: usize = 100;
         while (iter.next()) |item| {
@@ -2141,7 +2220,7 @@ test "query wuth include field works" {
         ).submit(&storage);
 
         const expected_order = [_]usize{ 1, 0 };
-        try std.testing.expectEqualSlices(usize, &expected_order, &iter.search_order);
+        try std.testing.expectEqualSlices(usize, &expected_order, &iter.full_set_search_order);
 
         var index: usize = 100;
         while (iter.next()) |item| {

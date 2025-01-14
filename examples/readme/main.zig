@@ -15,7 +15,11 @@ pub fn main() anyerror!void {
         };
         pub const DeadTag = struct {};
         pub const Weapon = struct {};
-        pub const Position = struct {};
+        pub const Position = struct {
+            x: f32 = 0,
+            y: f32 = 0,
+            z: f32 = 0,
+        };
         pub const Velocity = struct {};
         pub const HeartOrgan = struct {};
     };

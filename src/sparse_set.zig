@@ -7,15 +7,6 @@ pub const Sparse = struct {
         return if (@sizeOf(Component) > 0) Full else Tag;
     }
 
-    pub const SparseRtType = enum {
-        tag,
-        full,
-    };
-    pub const CommonSparse = union(SparseRtType) {
-        tag: *Tag,
-        full: *Full,
-    };
-
     pub const not_set = std.math.maxInt(EntityId);
 
     /// TagSparse set is the type used when there is a "0 sized" component
