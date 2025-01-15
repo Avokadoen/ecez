@@ -736,7 +736,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     if (@sizeOf(Component) > 0) {
                         full_sparse_count += 1;
                     } else {
-                        if (comp_index > exclude_type_start) {
+                        if (tag_exclude_start == null and comp_index >= exclude_type_start) {
                             tag_exclude_start = tag_sparse_count;
                         }
                         tag_sparse_count += 1;
@@ -2028,6 +2028,44 @@ test "query with result of single component type and multiple exclude works" {
         try std.testing.expectEqualSlices(usize, &expected_order, &iter.full_set_search_order);
 
         var index: usize = 200;
+        while (iter.next()) |item| {
+            try std.testing.expectEqual(Testing.Component.A{
+                .value = @as(u32, @intCast(index)),
+            }, item.a);
+
+            index += 1;
+        }
+    }
+}
+
+test "query with single result component, single include and single (tag component) exclude works" {
+    // Issue found in Wizard Rampage project https://github.com/Avokadoen/wizard_rampage while prototyping in it
+
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
+
+    for (0..100) |index| {
+        _ = try storage.createEntity(AbcEntityType{
+            .a = .{ .value = @as(u32, @intCast(index)) },
+            .b = .{ .value = @as(u8, @intCast(index)) },
+            .c = .{},
+        });
+    }
+
+    for (100..200) |index| {
+        _ = try storage.createEntity(.{
+            Testing.Component.A{ .value = @as(u32, @intCast(index)) },
+        });
+    }
+
+    {
+        var iter = StorageStub.Query(
+            struct { a: Testing.Component.A },
+            .{Testing.Component.B},
+            .{Testing.Component.C},
+        ).submit(&storage);
+
+        var index: usize = 100;
         while (iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
                 .value = @as(u32, @intCast(index)),
