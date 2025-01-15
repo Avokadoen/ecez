@@ -876,13 +876,16 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     inline for (&full_set_search_order, 0..) |*search, search_index| {
                         current_min_value = std.math.maxInt(usize);
 
-                        inline for (query_components, 0..) |QueryComp, q_index| {
+                        comptime var sized_comp_index = 0;
+                        inline for (query_components, 0..) |QueryComp, q_comp_index| {
                             if (@sizeOf(QueryComp) == 0) continue;
+
+                            defer sized_comp_index += 1;
 
                             var skip_component: bool = false;
                             // Skip indices we already stored
                             already_included_loop: for (full_set_search_order[0..search_index]) |prev_found| {
-                                if (prev_found == q_index) {
+                                if (prev_found == sized_comp_index) {
                                     skip_component = true;
                                     continue :already_included_loop;
                                 }
@@ -900,7 +903,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                                 };
 
                                 const len_value = get_len_blk: {
-                                    const is_result_or_include_component = q_index < result_component_count + include_fields.len;
+                                    const is_result_or_include_component = q_comp_index < result_component_count + include_fields.len;
                                     if (is_result_or_include_component) {
                                         break :get_len_blk query_candidate_len;
                                     } else {
@@ -909,7 +912,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                                 };
 
                                 if (len_value <= current_min_value and len_value >= last_min_value) {
-                                    current_index = q_index;
+                                    current_index = sized_comp_index;
                                     current_min_value = len_value;
                                 }
                             }
@@ -2022,6 +2025,52 @@ test "query with result of single component type and multiple exclude works" {
             struct { a: Testing.Component.A },
             .{},
             .{ Testing.Component.B, Testing.Component.C },
+        ).submit(&storage);
+
+        const expected_order = [_]usize{ 1, 0 };
+        try std.testing.expectEqualSlices(usize, &expected_order, &iter.full_set_search_order);
+
+        var index: usize = 200;
+        while (iter.next()) |item| {
+            try std.testing.expectEqual(Testing.Component.A{
+                .value = @as(u32, @intCast(index)),
+            }, item.a);
+
+            index += 1;
+        }
+    }
+}
+
+test "query with result of single component, one zero sized exclude and one sized exclude" {
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
+
+    for (0..100) |index| {
+        _ = try storage.createEntity(AbEntityType{
+            .a = .{ .value = @as(u32, @intCast(index)) },
+            .b = .{ .value = @as(u8, @intCast(index)) },
+        });
+    }
+
+    for (100..200) |index| {
+        _ = try storage.createEntity(AbcEntityType{
+            .a = .{ .value = @as(u32, @intCast(index)) },
+            .b = .{ .value = @as(u8, @intCast(index)) },
+            .c = .{},
+        });
+    }
+
+    for (200..300) |index| {
+        _ = try storage.createEntity(.{
+            Testing.Component.A{ .value = @as(u32, @intCast(index)) },
+        });
+    }
+
+    {
+        var iter = StorageStub.Query(
+            struct { a: Testing.Component.A },
+            .{},
+            .{ Testing.Component.C, Testing.Component.B },
         ).submit(&storage);
 
         const expected_order = [_]usize{ 1, 0 };
