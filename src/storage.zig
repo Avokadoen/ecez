@@ -1416,7 +1416,19 @@ test "unsetComponents() removes all components from entity" {
     const entity = try storage.createEntity(.{Testing.Component.A{}});
 
     storage.unsetComponents(entity, .{Testing.Component.A});
+    storage.unsetComponents(entity, .{Testing.Component.A});
     try testing.expectEqual(false, storage.hasComponents(entity, .{Testing.Component.A}));
+}
+
+test "unsetComponents() none-existing sized and zero sized type works" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    const entity = try storage.createEntity(.{});
+
+    storage.unsetComponents(entity, .{Testing.Component.A});
+    storage.unsetComponents(entity, .{Testing.Component.C});
+    try testing.expectEqual(false, storage.hasComponents(entity, .{Testing.Component.C}));
 }
 
 test "unsetComponents() removes multiple components" {

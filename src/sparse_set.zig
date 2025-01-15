@@ -47,6 +47,10 @@ pub const Sparse = struct {
         }
 
         pub fn unset(self: *Tag, sparse_slot: EntityId) void {
+            if (self.sparse_bits.len * @bitSizeOf(EntityId) <= sparse_slot) {
+                return;
+            }
+
             const slot_index = @divFloor(sparse_slot, @bitSizeOf(EntityId));
             const slot_bit: u5 = @intCast(@rem(sparse_slot, @bitSizeOf(EntityId)));
             self.sparse_bits[slot_index] |= @as(EntityId, 1) << slot_bit;
