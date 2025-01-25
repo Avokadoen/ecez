@@ -584,7 +584,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///
         /// Example:
         /// ```
-        /// var living_iter = Storage.Query(struct{ entity: Entity, a: Health }, .{LivingTag} .{DeadTag}).submit(&storage);
+        /// var living_iter = Storage.Query(struct{ entity: Entity, a: Health }, .{LivingTag} .{DeadTag}).submit(std.testing.allocator, &storage);
         /// while (living_iter.next()) |item| {
         ///    std.debug.print("{d}", .{item.entity});
         ///    std.debug.print("{any}", .{item.a});
@@ -772,14 +772,21 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     sparse_cursors: EntityId,
                     storage_entity_count_ptr: *const std.atomic.Value(EntityId),
 
-                    pub fn submit(storage: *Storage) ThisQuery {
+                    pub fn submit(allocator: Allocator, storage: *Storage) error{OutOfMemory}!ThisQuery {
                         const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
                         defer zone.End();
+
+                        _ = allocator;
 
                         return ThisQuery{
                             .sparse_cursors = 0,
                             .storage_entity_count_ptr = &storage.number_of_entities,
                         };
+                    }
+
+                    pub fn deinit(self: *ThisQuery, allocator: Allocator) void {
+                        _ = self;
+                        _ = allocator;
                     }
 
                     pub fn next(self: *ThisQuery) ?ResultItem {
@@ -825,27 +832,22 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                 pub const ThisQuery = @This();
 
-                // TODO: this is horrible for cache, we should find the next N entities instead
                 sparse_cursors: EntityId,
-                storage_entity_count_ptr: *const std.atomic.Value(EntityId),
 
-                full_set_search_order: [full_sparse_set_count]usize,
                 full_sparse_sets: [full_sparse_set_count]*const set.Sparse.Full,
-
-                tag_sparse_sets_bits: EntityId,
-                tag_sparse_sets: [tag_sparse_set_count]*const set.Sparse.Tag,
-
                 dense_sets: CompileReflect.GroupDenseSetsConstPtr(&query_components),
 
-                pub fn submit(storage: *Storage) ThisQuery {
+                result_entities_bit_count: EntityId,
+                result_entities_bitmap: []const EntityId,
+
+                pub fn submit(allocator: Allocator, storage: *Storage) error{OutOfMemory}!ThisQuery {
                     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
                     defer zone.End();
 
-                    var dense_sets: CompileReflect.GroupDenseSetsConstPtr(&query_components) = undefined;
-
                     var full_sparse_sets: [full_sparse_set_count]*const set.Sparse.Full = undefined;
+                    var dense_sets: CompileReflect.GroupDenseSetsConstPtr(&query_components) = undefined;
                     var tag_sparse_sets: [tag_sparse_set_count]*const set.Sparse.Tag = undefined;
-
+                    var worst_case_entitiy_result_count: EntityId = 0;
                     {
                         comptime var full_sparse_sets_index: u32 = 0;
                         comptime var tag_sparse_sets_index: u32 = 0;
@@ -853,11 +855,15 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                             const sparse_set_ptr = storage.getSparseSetConstPtr(Component);
 
                             if (@sizeOf(Component) > 0) {
+                                worst_case_entitiy_result_count = @max(worst_case_entitiy_result_count, sparse_set_ptr.sparse_len);
+
                                 full_sparse_sets[full_sparse_sets_index] = sparse_set_ptr;
                                 full_sparse_sets_index += 1;
 
                                 @field(dense_sets, @typeName(Component)) = storage.getDenseSetPtr(Component);
                             } else {
+                                worst_case_entitiy_result_count = @max(worst_case_entitiy_result_count, sparse_set_ptr.sparse_len * @bitSizeOf(EntityId));
+
                                 tag_sparse_sets[tag_sparse_sets_index] = sparse_set_ptr;
                                 tag_sparse_sets_index += 1;
                             }
@@ -869,11 +875,13 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                     const number_of_entities = storage.number_of_entities.load(.monotonic);
 
+                    var global_comp_index: usize = undefined;
                     var current_index: usize = undefined;
                     var current_min_value: usize = undefined;
                     var last_min_value: usize = 0;
                     var full_set_search_order: [full_sparse_set_count]usize = undefined;
-                    inline for (&full_set_search_order, 0..) |*search, search_index| {
+                    var full_set_is_include: [full_sparse_set_count]bool = undefined;
+                    inline for (&full_set_search_order, &full_set_is_include, 0..) |*search, *is_include, search_index| {
                         current_min_value = std.math.maxInt(usize);
 
                         comptime var sized_comp_index = 0;
@@ -882,16 +890,17 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                             defer sized_comp_index += 1;
 
-                            var skip_component: bool = false;
                             // Skip indices we already stored
-                            already_included_loop: for (full_set_search_order[0..search_index]) |prev_found| {
-                                if (prev_found == sized_comp_index) {
-                                    skip_component = true;
-                                    continue :already_included_loop;
+                            const already_included: bool = already_included_search: {
+                                for (full_set_search_order[0..search_index]) |prev_found| {
+                                    if (prev_found == sized_comp_index) {
+                                        break :already_included_search true;
+                                    }
                                 }
-                            }
+                                break :already_included_search false;
+                            };
 
-                            if (skip_component == false) {
+                            if (already_included == false) {
                                 const query_candidate_len = get_candidate_len_blk: {
                                     if (@sizeOf(QueryComp) > 0) {
                                         const dense_set = storage.getDenseSetConstPtr(QueryComp);
@@ -914,23 +923,106 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                                 if (len_value <= current_min_value and len_value >= last_min_value) {
                                     current_index = sized_comp_index;
                                     current_min_value = len_value;
+                                    global_comp_index = q_comp_index;
                                 }
                             }
                         }
 
+                        is_include.* = global_comp_index < result_component_count + include_fields.len;
                         search.* = current_index;
                         last_min_value = current_min_value;
                     }
 
+                    const worst_case_bitmap_count = std.math.divCeil(EntityId, worst_case_entitiy_result_count, @bitSizeOf(EntityId)) catch unreachable;
+                    const result_entities_bitmap = try allocator.alloc(EntityId, worst_case_bitmap_count);
+                    errdefer allocator.free(result_entities_bitmap);
+
+                    // initialize all bits as a query hit (1)
+                    // each check will reduce result if a miss
+                    @memset(result_entities_bitmap, std.math.maxInt(EntityId));
+
+                    // handle any tag components and store result
+                    if (comptime tag_sparse_set_count > 0) {
+                        inline for (tag_sparse_sets, 0..) |tag_sparse_set, sparse_index| {
+                            const is_include_set = sparse_index < tag_exclude_start;
+                            const sparse_len = tag_sparse_set.sparse_len;
+
+                            // if out of set bound, consider remaining entities as missing component
+                            if (is_include_set) {
+                                for (tag_sparse_set.sparse_bits[0..sparse_len], result_entities_bitmap[0..sparse_len]) |sparse_bits, *result_bitmap| {
+                                    // The not (~) may seem counterintutive, but: 1 signals "not set" in the sparse set.
+                                    result_bitmap.* &= ~sparse_bits;
+                                }
+
+                                // For the remaining entities, they do not have this component as sparse set len < entity id
+                                for (result_entities_bitmap[sparse_len..]) |*result_bitmap| {
+                                    result_bitmap.* = 0;
+                                }
+                            } else {
+                                for (tag_sparse_set.sparse_bits[0..sparse_len], result_entities_bitmap[0..sparse_len]) |sparse_bits, *result_bitmap| {
+                                    result_bitmap.* &= sparse_bits;
+                                }
+                            }
+                        }
+                    }
+
+                    for (full_set_search_order, full_set_is_include) |search_order, is_include_set| {
+                        const sparse_set = full_sparse_sets[search_order];
+
+                        for (sparse_set.sparse[0..sparse_set.sparse_len], 0..) |dense_index, entity| {
+                            // Check if we have query hit for entity:
+                            const entry_is_set = dense_index != set.Sparse.not_set;
+                            const query_hit = entry_is_set == is_include_set;
+
+                            if (query_hit == false) {
+                                const bit_index = @divFloor(entity, @bitSizeOf(EntityId));
+
+                                // u5 assuming EntityId = u32
+                                comptime std.debug.assert(EntityId == u32);
+                                const nth_bit: u5 = @intCast(@rem(entity, @bitSizeOf(EntityId)));
+                                result_entities_bitmap[bit_index] &= ~(@as(EntityId, 1) << nth_bit);
+                            }
+                        }
+
+                        // TODO: unlikely branch
+                        // if out of set bound, consider remaining entities as missing component
+                        if (is_include_set) {
+                            if (sparse_set.sparse_len != 0) {
+                                const last_index = sparse_set.sparse_len - 1;
+                                const bit_index = @divFloor(last_index, @bitSizeOf(EntityId));
+                                if (@rem(last_index, @bitSizeOf(EntityId)) != 31) {
+                                    // populate partial bitmap
+                                    comptime std.debug.assert(EntityId == u32);
+                                    const partial_bitmap_offset: u5 = @intCast(@rem(sparse_set.sparse_len, @bitSizeOf(EntityId)));
+                                    const partial_bitmap_set_bits = (@as(EntityId, 1) << (partial_bitmap_offset)) - 1;
+                                    result_entities_bitmap[bit_index] &= partial_bitmap_set_bits;
+                                }
+
+                                if (bit_index + 1 < result_entities_bitmap.len) {
+                                    // fill remaining bitmaps as all entities are missing
+                                    for (result_entities_bitmap[bit_index + 1 ..]) |*bitmap| {
+                                        bitmap.* = 0;
+                                    }
+                                }
+                            } else {
+                                for (result_entities_bitmap) |*bitmap| {
+                                    bitmap.* = 0;
+                                }
+                            }
+                        }
+                    }
+
                     return ThisQuery{
                         .sparse_cursors = 0,
-                        .storage_entity_count_ptr = &storage.number_of_entities,
-                        .full_set_search_order = full_set_search_order,
                         .full_sparse_sets = full_sparse_sets,
-                        .tag_sparse_sets_bits = 0,
-                        .tag_sparse_sets = tag_sparse_sets,
                         .dense_sets = dense_sets,
+                        .result_entities_bit_count = worst_case_entitiy_result_count,
+                        .result_entities_bitmap = result_entities_bitmap,
                     };
+                }
+
+                pub fn deinit(self: *ThisQuery, allocator: Allocator) void {
+                    allocator.free(self.result_entities_bitmap);
                 }
 
                 pub fn next(self: *ThisQuery) ?ResultItem {
@@ -938,8 +1030,25 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     defer zone.End();
 
                     // Find next entity
-                    const entity_count = self.storage_entity_count_ptr.load(.monotonic);
-                    self.gotoFirstEntitySet(entity_count) orelse return null;
+                    goto_next_cursor_loop: while (self.sparse_cursors < self.result_entities_bit_count) {
+                        const bitmap_index = @divFloor(self.sparse_cursors, @bitSizeOf(EntityId));
+                        comptime std.debug.assert(EntityId == u32);
+                        const bitmap_bit_offset: u5 = @intCast(@rem(self.sparse_cursors, @bitSizeOf(EntityId)));
+
+                        const cursor_bit = @as(EntityId, 1) << bitmap_bit_offset;
+                        const cursor_bitmap = self.result_entities_bitmap[bitmap_index];
+                        // If cursor is pointing at a query hit then exit
+                        if ((cursor_bitmap & cursor_bit) != 0) {
+                            break :goto_next_cursor_loop;
+                        }
+
+                        const next_set_bit_distance = @ctz(self.result_entities_bitmap[bitmap_index] >> bitmap_bit_offset);
+                        const next_bitmap_distance = @bitSizeOf(EntityId) - @as(EntityId, @intCast(bitmap_bit_offset));
+                        self.sparse_cursors += @min(next_bitmap_distance, next_set_bit_distance);
+                    }
+                    if (self.sparse_cursors >= self.result_entities_bit_count) {
+                        return null;
+                    }
                     defer self.sparse_cursors += 1;
 
                     var result: ResultItem = undefined;
@@ -968,66 +1077,31 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
                     defer zone.End();
 
-                    const entity_count = self.storage_entity_count_ptr.load(.monotonic);
-                    // TODO: this is horrible for cache, we should find the next N entities instead
-                    // Find next entity
-                    for (0..skip_count) |_| {
-                        self.gotoFirstEntitySet(entity_count) orelse return;
-                        self.sparse_cursors = self.sparse_cursors + 1;
+                    self.sparse_cursors = @min(self.sparse_cursors, self.result_entities_bit_count);
+                    const actual_skip_count = @min(skip_count, self.result_entities_bit_count - self.sparse_cursors);
+
+                    const pre_skip_cursor = self.sparse_cursors;
+                    while (self.sparse_cursors - pre_skip_cursor < actual_skip_count) {
+                        const bitmap_index = @divFloor(self.sparse_cursors, @bitSizeOf(EntityId));
+                        comptime std.debug.assert(EntityId == u32);
+                        const bitmap_bit_offset: u5 = @intCast(@rem(self.sparse_cursors, @bitSizeOf(EntityId)));
+
+                        const cursor_bit = @as(EntityId, 1) << bitmap_bit_offset;
+                        const cursor_bitmap = self.result_entities_bitmap[bitmap_index];
+                        // If cursor is pointing at a query hit then exit
+                        if ((cursor_bitmap & cursor_bit) != 0) {
+                            self.sparse_cursors += 1;
+                            continue;
+                        }
+
+                        const next_set_bit_distance = @ctz(self.result_entities_bitmap[bitmap_index] >> bitmap_bit_offset);
+                        const next_bitmap_distance = @bitSizeOf(EntityId) - @as(EntityId, @intCast(bitmap_bit_offset));
+                        self.sparse_cursors += @min(next_bitmap_distance, next_set_bit_distance);
                     }
                 }
 
                 pub fn reset(self: *ThisQuery) void {
                     self.sparse_cursors = 0;
-                }
-
-                fn gotoFirstEntitySet(self: *ThisQuery, entity_count: EntityId) ?void {
-                    search_next_loop: while (true) {
-                        if (self.sparse_cursors >= entity_count) {
-                            return null;
-                        }
-
-                        // Check if we should check the tag_sparse_sets_bits
-                        if (comptime tag_sparse_set_count > 0) {
-                            const bit_pos: u5 = @intCast(@rem(self.sparse_cursors, @bitSizeOf(EntityId)));
-
-                            // If we are the 32th entry, lets re-populate tag_sparse_sets_bits
-                            if (bit_pos == 0) {
-                                const bit_index = @divFloor(self.sparse_cursors, @bitSizeOf(EntityId));
-
-                                self.tag_sparse_sets_bits = 0;
-                                for (self.tag_sparse_sets, 0..) |tag_sparse_set, sparse_index| {
-                                    const bits = if (tag_sparse_set.sparse_bits.len > bit_index)
-                                        tag_sparse_set.sparse_bits[bit_index]
-                                    else
-                                        set.Sparse.not_set;
-
-                                    self.tag_sparse_sets_bits |= if (sparse_index < tag_exclude_start) bits else ~bits;
-                                }
-                            }
-
-                            // 0 is considered set for sparse sets.
-                            const all_tag_requirements = (self.tag_sparse_sets_bits & (@as(EntityId, 1) << bit_pos)) == 0;
-                            if (all_tag_requirements == false) {
-                                self.sparse_cursors += 1;
-                                continue :search_next_loop;
-                            }
-                        }
-
-                        for (self.full_set_search_order) |this_search| {
-                            const entry_is_set = self.full_sparse_sets[this_search].isSet(self.sparse_cursors);
-                            const should_be_set = this_search < result_component_count + include_fields.len;
-
-                            // Check if we should skip entry:
-                            // Skip if is set is false and it's a result entry, otherwise if it's an exclude, then it should be set to skip.
-                            if (entry_is_set != should_be_set) {
-                                self.sparse_cursors += 1;
-                                continue :search_next_loop;
-                            }
-                        }
-
-                        return; // sparse_cursor is a valid entity!
-                    }
                 }
 
                 fn indexOfComponentSparse(comptime Component: type) comptime_int {
@@ -1834,7 +1908,8 @@ test "query with single result component type works" {
 
     {
         var index: usize = 0;
-        var a_iter = Queries.ReadA.submit(&storage);
+        var a_iter = try Queries.ReadA.submit(std.testing.allocator, &storage);
+        defer a_iter.deinit(std.testing.allocator);
 
         while (a_iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
@@ -1858,7 +1933,8 @@ test "query skip works" {
     }
 
     {
-        var a_iter = Queries.ReadA.submit(&storage);
+        var a_iter = try Queries.ReadA.submit(std.testing.allocator, &storage);
+        defer a_iter.deinit(std.testing.allocator);
 
         var index: usize = 50;
         a_iter.skip(50);
@@ -1885,7 +1961,8 @@ test "query reset works" {
     }
 
     {
-        var a_iter = Queries.ReadA.submit(&storage);
+        var a_iter = try Queries.ReadA.submit(std.testing.allocator, &storage);
+        defer a_iter.deinit(std.testing.allocator);
 
         var index: usize = 0;
         while (a_iter.next()) |item| {
@@ -1920,7 +1997,8 @@ test "query with multiple result component types works" {
     }
 
     {
-        var a_b_iter = Queries.ReadAReadB.submit(&storage);
+        var a_b_iter = try Queries.ReadAReadB.submit(std.testing.allocator, &storage);
+        defer a_b_iter.deinit(std.testing.allocator);
 
         var index: usize = 0;
         while (a_b_iter.next()) |item| {
@@ -1950,7 +2028,8 @@ test "query with single result component ptr type works" {
 
     {
         var index: usize = 0;
-        var a_iter = Queries.WriteA.submit(&storage);
+        var a_iter = try Queries.WriteA.submit(std.testing.allocator, &storage);
+        defer a_iter.deinit(std.testing.allocator);
 
         while (a_iter.next()) |item| {
             item.a.value += 1;
@@ -1960,7 +2039,8 @@ test "query with single result component ptr type works" {
 
     {
         var index: usize = 1;
-        var a_iter = Queries.ReadA.submit(&storage);
+        var a_iter = try Queries.ReadA.submit(std.testing.allocator, &storage);
+        defer a_iter.deinit(std.testing.allocator);
 
         while (a_iter.next()) |item| {
             try std.testing.expectEqual(Testing.Component.A{
@@ -1990,11 +2070,13 @@ test "query with single result component and single exclude works" {
     }
 
     {
-        var iter = StorageStub.Query(
+        var iter = try StorageStub.Query(
             struct { a: Testing.Component.A },
             .{},
             .{Testing.Component.B},
-        ).submit(&storage);
+        ).submit(std.testing.allocator, &storage);
+
+        defer iter.deinit(std.testing.allocator);
 
         var index: usize = 100;
         while (iter.next()) |item| {
@@ -2033,14 +2115,13 @@ test "query with result of single component type and multiple exclude works" {
     }
 
     {
-        var iter = StorageStub.Query(
+        var iter = try StorageStub.Query(
             struct { a: Testing.Component.A },
             .{},
             .{ Testing.Component.B, Testing.Component.C },
-        ).submit(&storage);
+        ).submit(std.testing.allocator, &storage);
 
-        const expected_order = [_]usize{ 1, 0 };
-        try std.testing.expectEqualSlices(usize, &expected_order, &iter.full_set_search_order);
+        defer iter.deinit(std.testing.allocator);
 
         var index: usize = 200;
         while (iter.next()) |item| {
@@ -2079,14 +2160,13 @@ test "query with result of single component, one zero sized exclude and one size
     }
 
     {
-        var iter = StorageStub.Query(
+        var iter = try StorageStub.Query(
             struct { a: Testing.Component.A },
             .{},
             .{ Testing.Component.C, Testing.Component.B },
-        ).submit(&storage);
+        ).submit(std.testing.allocator, &storage);
 
-        const expected_order = [_]usize{ 1, 0 };
-        try std.testing.expectEqualSlices(usize, &expected_order, &iter.full_set_search_order);
+        defer iter.deinit(std.testing.allocator);
 
         var index: usize = 200;
         while (iter.next()) |item| {
@@ -2120,11 +2200,15 @@ test "query with single result component, single include and single (tag compone
     }
 
     {
-        var iter = StorageStub.Query(
+        var iter = try StorageStub.Query(
             struct { a: Testing.Component.A },
             .{Testing.Component.B},
             .{Testing.Component.C},
-        ).submit(&storage);
+        ).submit(
+            std.testing.allocator,
+            &storage,
+        );
+        defer iter.deinit(std.testing.allocator);
 
         var index: usize = 100;
         while (iter.next()) |item| {
@@ -2155,14 +2239,16 @@ test "query with entity only works" {
     }
 
     {
-        var iter = StorageStub.Query(
+        var iter = try StorageStub.Query(
             struct {
                 entity: Entity,
                 a: Testing.Component.A,
             },
             .{},
             .{},
-        ).submit(&storage);
+        ).submit(std.testing.allocator, &storage);
+
+        defer iter.deinit(std.testing.allocator);
 
         var index: usize = 0;
         while (iter.next()) |item| {
@@ -2191,17 +2277,16 @@ test "query with result entity, components and exclude only works" {
 
     {
         // Test with entity as first argument
-        var iter = StorageStub.Query(
+        var iter = try StorageStub.Query(
             struct {
                 entity: Entity,
                 a: Testing.Component.A,
             },
             .{},
             .{Testing.Component.B},
-        ).submit(&storage);
+        ).submit(std.testing.allocator, &storage);
 
-        const expected_order = [_]usize{ 1, 0 };
-        try std.testing.expectEqualSlices(usize, &expected_order, &iter.full_set_search_order);
+        defer iter.deinit(std.testing.allocator);
 
         var index: usize = 0;
         while (iter.next()) |item| {
@@ -2222,17 +2307,16 @@ test "query with result entity, components and exclude only works" {
 
     {
         // Test with entity as second argument
-        var iter = StorageStub.Query(
+        var iter = try StorageStub.Query(
             struct {
                 a: Testing.Component.A,
                 entity: Entity,
             },
             .{},
             .{Testing.Component.B},
-        ).submit(&storage);
+        ).submit(std.testing.allocator, &storage);
 
-        const expected_order = [_]usize{ 1, 0 };
-        try std.testing.expectEqualSlices(usize, &expected_order, &iter.full_set_search_order);
+        defer iter.deinit(std.testing.allocator);
 
         var index: usize = 0;
         while (iter.next()) |item| {
@@ -2253,7 +2337,7 @@ test "query with result entity, components and exclude only works" {
 
     {
         // Test with entity as "sandwiched" between A and B
-        var iter = StorageStub.Query(
+        var iter = try StorageStub.Query(
             struct {
                 a: Testing.Component.A,
                 entity: Entity,
@@ -2261,10 +2345,9 @@ test "query with result entity, components and exclude only works" {
             },
             .{},
             .{},
-        ).submit(&storage);
+        ).submit(std.testing.allocator, &storage);
 
-        const expected_order = [_]usize{ 1, 0 };
-        try std.testing.expectEqualSlices(usize, &expected_order, &iter.full_set_search_order);
+        defer iter.deinit(std.testing.allocator);
 
         var index: usize = 100;
         while (iter.next()) |item| {
@@ -2309,17 +2392,16 @@ test "query wuth include field works" {
     }
 
     {
-        var iter = StorageStub.Query(
+        var iter = try StorageStub.Query(
             struct {
                 entity: Entity,
                 a: Testing.Component.A,
             },
             .{Testing.Component.B},
             .{},
-        ).submit(&storage);
+        ).submit(std.testing.allocator, &storage);
 
-        const expected_order = [_]usize{ 1, 0 };
-        try std.testing.expectEqualSlices(usize, &expected_order, &iter.full_set_search_order);
+        defer iter.deinit(std.testing.allocator);
 
         var index: usize = 100;
         while (iter.next()) |item| {
@@ -2585,19 +2667,6 @@ test "reproducer: MineSweeper index out of bound caused by incorrect mapping of 
         Children,
     });
 
-    const QueryItem = struct {
-        position: transform.Position,
-        rotation: transform.Rotation,
-        scale: transform.Scale,
-        world_transform: *transform.WorldTransform,
-        children: Children,
-    };
-    const Query = RepStorage.Query(
-        QueryItem,
-        .{},
-        // exclude type
-        .{Parent},
-    );
     var storage = try RepStorage.init(testing.allocator);
     defer storage.deinit();
 
@@ -2610,7 +2679,20 @@ test "reproducer: MineSweeper index out of bound caused by incorrect mapping of 
     };
     _ = try storage.createEntity(Node{});
 
-    var iter = Query.submit(&storage);
+    const Query = RepStorage.Query(
+        struct {
+            position: transform.Position,
+            rotation: transform.Rotation,
+            scale: transform.Scale,
+            world_transform: *transform.WorldTransform,
+            children: Children,
+        },
+        .{},
+        // exclude type
+        .{Parent},
+    );
+    var iter = try Query.submit(std.testing.allocator, &storage);
+    defer iter.deinit(std.testing.allocator);
 
     try testing.expect(iter.next() != null);
 }

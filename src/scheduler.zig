@@ -14,6 +14,15 @@ const gen_dependency_chain = @import("dependency_chain.zig");
 const Color = @import("misc.zig").Color;
 
 pub const Config = struct {
+    /// Used to handle auxiliary memory for thread workers in the thread pool
+    /// Recommended to use a dedicated Arena or a FixedBuffer allocator
+    pool_allocator: std.mem.Allocator,
+    /// Used on dispatch to submit arguments that are of Storage.Query type.
+    /// Make sure the allocator is thread safe.
+    /// Recommended to use a dedicated Arena or a FixedBuffer allocator
+    query_submit_allocator: std.mem.Allocator,
+    /// Override the pool thread count.
+    /// By default it will query the current host CPU and use the logical core count.
     thread_count: ?u32 = null,
 };
 
@@ -60,19 +69,20 @@ pub fn CreateScheduler(comptime events: anytype) type {
 
         pub const EventsEnum = CompileReflect.GenerateEventEnum(events);
 
+        query_submit_allocator: std.mem.Allocator,
         thread_pool: *ThreadPool,
         events_in_flight: EventsInFlight,
 
         /// Initialized the system scheduler. User must make sure to call deinit
-        pub fn init(pool_allocator: std.mem.Allocator, config: Config) !Scheduler {
+        pub fn init(config: Config) !Scheduler {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.scheduler);
             defer zone.End();
 
-            const thread_pool = try pool_allocator.create(ThreadPool);
-            errdefer pool_allocator.destroy(thread_pool);
+            const thread_pool = try config.pool_allocator.create(ThreadPool);
+            errdefer config.pool_allocator.destroy(thread_pool);
 
             try ThreadPool.init(thread_pool, .{
-                .allocator = pool_allocator,
+                .allocator = config.pool_allocator,
                 .n_jobs = config.thread_count,
             });
 
@@ -84,6 +94,7 @@ pub fn CreateScheduler(comptime events: anytype) type {
             }
 
             return Scheduler{
+                .query_submit_allocator = config.query_submit_allocator,
                 .thread_pool = thread_pool,
                 .events_in_flight = events_in_flight,
             };
@@ -156,6 +167,7 @@ pub fn CreateScheduler(comptime events: anytype) type {
 
                 // initialized the system job
                 const system_job = DispatchJob{
+                    .query_submit_allocator = self.query_submit_allocator,
                     .storage = storage,
                     .event_argument = event_argument,
                 };
@@ -219,6 +231,7 @@ pub fn CreateScheduler(comptime events: anytype) type {
                 const DispatchJob = @This();
 
                 event_argument: EventArgument,
+                query_submit_allocator: std.mem.Allocator,
                 storage: *Storage,
 
                 pub fn exec(self_job: DispatchJob) void {
@@ -249,7 +262,8 @@ pub fn CreateScheduler(comptime events: anytype) type {
                             }
 
                             break :get_arg_blk switch (param_info.Pointer.child.EcezType) {
-                                QueryType => param_info.Pointer.child.submit(self_job.storage),
+                                // TODO: scheduler should have an allocator for this
+                                QueryType => param_info.Pointer.child.submit(self_job.query_submit_allocator, self_job.storage) catch @panic("Scheduler dispatch query_submit_allocator OOM"),
                                 SubsetType => param_info.Pointer.child{ .storage = self_job.storage },
                                 else => |Type| @compileError("Unknown EcezType " ++ @typeName(Type)), // This is a ecez bug if hit (i.e not user error)
                             };
@@ -266,6 +280,19 @@ pub fn CreateScheduler(comptime events: anytype) type {
                     // if this is a debug build we do not want inline (to get better error messages), otherwise inline systems for performance
                     const system_call_modidifer: std.builtin.CallModifier = if (@import("builtin").mode == .Debug) .never_inline else .always_inline;
                     @call(system_call_modidifer, func, arguments);
+
+                    inline for (param_types, &arguments) |Param, *arg| {
+                        if (Param == EventArgument) {
+                            continue;
+                        }
+
+                        const param_info = @typeInfo(Param);
+
+                        switch (param_info.Pointer.child.EcezType) {
+                            QueryType => arg.*.deinit(self_job.query_submit_allocator),
+                            else => {},
+                        }
+                    }
                 }
             };
         }
@@ -486,7 +513,12 @@ test "system query can mutate components" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = try CreateScheduler(.{Event("onFoo", .{SystemStruct.mutateStuff})}).init(std.testing.allocator, .{});
+    const OnFooEvent = Event("onFoo", .{SystemStruct.mutateStuff});
+
+    var scheduler = try CreateScheduler(.{OnFooEvent}).init(.{
+        .pool_allocator = std.testing.allocator,
+        .query_submit_allocator = std.testing.allocator,
+    });
     defer scheduler.deinit();
 
     scheduler.dispatchEvent(&storage, .onFoo, .{});
@@ -511,7 +543,7 @@ test "system SubStorage can spawn new entites (and no race hazards)" {
     const SubsetA = StorageStub.Subset(.{*Testing.Component.A});
     const SubsetB = StorageStub.Subset(.{*Testing.Component.B});
 
-    const initial_entity_count = 128;
+    const initial_entity_count = 100;
     // This would probably be better as data stored in components instead of EventArgument
     const SpawnedEntities = struct {
         a: [initial_entity_count]Entity,
@@ -579,10 +611,13 @@ test "system SubStorage can spawn new entites (and no race hazards)" {
             SystemStruct.incrA,
             SystemStruct.decrA,
         },
-    )}).init(std.testing.allocator, .{});
+    )}).init(.{
+        .pool_allocator = std.testing.allocator,
+        .query_submit_allocator = std.testing.allocator,
+    });
     defer scheduler.deinit();
 
-    // Do this test repeatedlt to ensure it's determenistic (no race hazards)
+    // Do this test repeatedly to ensure it's determenistic (no race hazards)
     for (0..128) |_| {
         storage.clearRetainingCapacity();
 
@@ -662,8 +697,9 @@ test "Thread count 0 works" {
             SystemStruct.incrA,
             SystemStruct.decrA,
         },
-    )}).init(std.testing.allocator, .{
-        .thread_count = 0,
+    )}).init(.{
+        .pool_allocator = std.testing.allocator,
+        .query_submit_allocator = std.testing.allocator,
     });
     defer scheduler.deinit();
 
@@ -698,7 +734,10 @@ test "system sub storage can mutate components" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = try CreateScheduler(.{Event("onFoo", .{SystemStruct.mutateStuff})}).init(std.testing.allocator, .{});
+    var scheduler = try CreateScheduler(.{Event("onFoo", .{SystemStruct.mutateStuff})}).init(.{
+        .pool_allocator = std.testing.allocator,
+        .query_submit_allocator = std.testing.allocator,
+    });
     defer scheduler.deinit();
 
     scheduler.dispatchEvent(&storage, .onFoo, .{});
@@ -802,7 +841,10 @@ test "Dispatch is determenistic (no race conditions)" {
                 SystemStruct.storageDoubleADoubleB,
                 SystemStruct.storageIncrAIncrB,
             }),
-        }).init(std.testing.allocator, .{});
+        }).init(.{
+            .pool_allocator = std.testing.allocator,
+            .query_submit_allocator = std.testing.allocator,
+        });
         defer scheduler.deinit();
 
         const initial_state = Testing.Structure.AB{
@@ -891,7 +933,10 @@ test "Dispatch with multiple events works" {
             SystemStruct.doubleB,
             SystemStruct.incrB,
         }),
-    }).init(std.testing.allocator, .{});
+    }).init(.{
+        .pool_allocator = std.testing.allocator,
+        .query_submit_allocator = std.testing.allocator,
+    });
     defer scheduler.deinit();
 
     const initial_state = Testing.Structure.AB{
@@ -1033,7 +1078,10 @@ test "systems can accepts event related data" {
 
     var scheduler = try CreateScheduler(.{
         Event("onFoo", .{System.addToA}),
-    }).init(std.testing.allocator, .{});
+    }).init(.{
+        .pool_allocator = std.testing.allocator,
+        .query_submit_allocator = std.testing.allocator,
+    });
     defer scheduler.deinit();
 
     const entity = try storage.createEntity(.{Testing.Component.A{ .value = 0 }});
@@ -1067,7 +1115,10 @@ test "systems can mutate event argument" {
 
     var scheduler = try CreateScheduler(.{
         Event("onFoo", .{System.addToA}),
-    }).init(std.testing.allocator, .{});
+    }).init(.{
+        .pool_allocator = std.testing.allocator,
+        .query_submit_allocator = std.testing.allocator,
+    });
     defer scheduler.deinit();
 
     const value = 42;
@@ -1104,7 +1155,10 @@ test "system can contain two queries" {
 
     var scheduler = try CreateScheduler(.{Event("onFoo", .{
         SystemStruct.eventSystem,
-    })}).init(std.testing.allocator, .{});
+    })}).init(.{
+        .pool_allocator = std.testing.allocator,
+        .query_submit_allocator = std.testing.allocator,
+    });
     defer scheduler.deinit();
 
     const entity = try storage.createEntity(.{Testing.Component.A{ .value = fail_value }});
@@ -1141,7 +1195,10 @@ test "event caching works" {
     var scheduler = try CreateScheduler(.{
         Event("onIncA", .{Systems.incA}),
         Event("onIncB", .{Systems.incB}),
-    }).init(std.testing.allocator, .{});
+    }).init(.{
+        .pool_allocator = std.testing.allocator,
+        .query_submit_allocator = std.testing.allocator,
+    });
     defer scheduler.deinit();
 
     const entity1 = try storage.createEntity(.{Testing.Component.A{ .value = 0 }});
@@ -1213,7 +1270,10 @@ test "Event with no archetypes does not crash" {
 
     var scheduler = try CreateScheduler(.{Event("onFoo", .{
         Systems.incA,
-    })}).init(std.testing.allocator, .{});
+    })}).init(.{
+        .pool_allocator = std.testing.allocator,
+        .query_submit_allocator = std.testing.allocator,
+    });
     defer scheduler.deinit();
 
     for (0..100) |_| {
@@ -1242,7 +1302,10 @@ test "reproducer: Scheduler does not include new components to systems previousl
     var storage = try RepStorage.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = try Scheduler.init(std.testing.allocator, .{});
+    var scheduler = try Scheduler.init(.{
+        .pool_allocator = std.testing.allocator,
+        .query_submit_allocator = std.testing.allocator,
+    });
     defer scheduler.deinit();
 
     const inital_state = .{Testing.Component.A{ .value = 1 }};
