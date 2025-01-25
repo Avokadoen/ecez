@@ -77,8 +77,8 @@ pub fn main() anyerror!void {
             std.log.err("leak detected", .{});
         }
     }
-    var aa = std.heap.ArenaAllocator.init(gpa.allocator());
-    var tracy_allocator = ztracy.TracyAllocator.init(aa.allocator());
+    var tracy_allocator = ztracy.TracyAllocator.init(gpa.allocator());
+
     // optionally profile memory usage with tracy
     const allocator = tracy_allocator.allocator();
 
@@ -91,7 +91,10 @@ pub fn main() anyerror!void {
     var storage = try Storage.init(allocator);
     defer storage.deinit();
 
-    var scheduler = try Scheduler.init(allocator, .{});
+    var scheduler = try Scheduler.init(.{
+        .pool_allocator = allocator,
+        .query_submit_allocator = allocator,
+    });
     defer scheduler.deinit();
 
     const init_seed: u64 = @intCast(std.time.timestamp());
@@ -353,7 +356,10 @@ test "systems produce expected 3x3 grid state" {
     var storage = try Storage.init(std.testing.allocator);
     defer storage.deinit();
 
-    var scheduler = try Scheduler.init(std.testing.allocator, .{});
+    var scheduler = try Scheduler.init(.{
+        .pool_allocator = std.testing.allocator,
+        .query_submit_allocator = std.testing.allocator,
+    });
     defer scheduler.deinit();
 
     var output_buffer: [3 * 3 * characters_per_cell + 3]u8 = undefined;

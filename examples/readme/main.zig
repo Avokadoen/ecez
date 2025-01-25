@@ -76,15 +76,18 @@ pub fn main() anyerror!void {
     try storage.setComponents(my_living_entity, .{Component.Health{ .value = 50 }});
 
     // Using query example:
-    var living_iter = Queries.Living.submit(&storage);
-    while (living_iter.next()) |item| {
-        // Item is the type submitted in the query. In this case it will have 'health' which is pointer to Component.Health
-        // and a member 'pos' which is a Component.Position value.
+    {
+        var living_iter = try Queries.Living.submit(allocator, &storage);
+        defer living_iter.deinit(allocator);
+        while (living_iter.next()) |item| {
+            // Item is the type submitted in the query. In this case it will have 'health' which is pointer to Component.Health
+            // and a member 'pos' which is a Component.Position value.
 
-        // We can mutate health since the query result item has pointer to health component
-        item.health.value += 0.5;
+            // We can mutate health since the query result item has pointer to health component
+            item.health.value += 0.5;
 
-        std.debug.print("{d}\n", .{item.health.value});
+            std.debug.print("{d}\n", .{item.health.value});
+        }
     }
 
     // You can define subsets of the storage.
@@ -136,16 +139,41 @@ pub fn main() anyerror!void {
         }
     };
 
-    // Like a storage, we can define a scheduler. This will execute systems on multiple threads.
-    // The scheduler tracks all reads and writes done on the components in order to safetly do this without race hazards.
-    var scheduler = try ecez.CreateScheduler(.{ecez.Event(
+    // We also define a scheduler to execute systems on
+    // A ecez scheduler consist of Events:
+    const MyFirstEvent = ecez.Event(
+        // A name is given, this will be used to dispatch a given event
         "myFirstEvent",
+        // A tuple of systems is then given. These will be dispatched in the given order (top to bottom),
+        // However they may run in parrallel if there is limited dependencies between them.
         .{
             Systems.iterateLiving,
             Systems.spawnLivingTrail,
             Systems.handleMouseEvent,
         },
-    )}).init(allocator, .{});
+    );
+
+    // Scheduler can have multiple events ...
+    const MySecondEvent = ecez.Event(
+        "mySecondEvent",
+        .{
+            Systems.iterateLiving,
+            Systems.spawnLivingTrail,
+            Systems.handleMouseEvent,
+        },
+    );
+
+    // Create a scheduler type with our events
+    const Scheduler = ecez.CreateScheduler(.{
+        MyFirstEvent,
+        MySecondEvent,
+    });
+
+    // Initialize a instance of our Scheduler type
+    var scheduler = try Scheduler.init(.{
+        .pool_allocator = allocator,
+        .query_submit_allocator = allocator,
+    });
     defer scheduler.deinit();
 
     // Remember that one of our systems request MouseEvent which was not a component, but an EventArgument
@@ -156,6 +184,10 @@ pub fn main() anyerror!void {
 
     // events are async, so we must wait for it to complete
     scheduler.waitEvent(.myFirstEvent);
+
+    // Like the first event we can also dispatch our second event
+    scheduler.dispatchEvent(&storage, .mySecondEvent, mouse_event);
+    scheduler.waitEvent(.mySecondEvent);
 
     // serialize the storage into a slice of bytes
     const bytes = try ezby.serialize(allocator, Storage, storage, .{});
