@@ -267,96 +267,114 @@ pub fn Create(comptime Storage: type, comptime ResultItem: type, comptime includ
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
-            var full_sparse_sets: [full_sparse_set_count]*const set.Sparse.Full = undefined;
-            var dense_sets: CompileReflect.GroupDenseSetsConstPtr(&query_components) = undefined;
-            var tag_sparse_sets: [tag_sparse_set_count]*const set.Sparse.Tag = undefined;
-            var worst_case_entitiy_result_count: EntityId = 0;
-            {
+            const biggest_set_len, const tag_sparse_sets, const full_sparse_sets, const dense_sets = retrieve_component_sets_blk: {
+                var _biggest_set_len: EntityId = 0;
+                var _tag_sparse_sets: [tag_sparse_set_count]*const set.Sparse.Tag = undefined;
+                var _full_sparse_sets: [full_sparse_set_count]*const set.Sparse.Full = undefined;
+                var _dense_sets: CompileReflect.GroupDenseSetsConstPtr(&query_components) = undefined;
+
                 comptime var full_sparse_sets_index: u32 = 0;
                 comptime var tag_sparse_sets_index: u32 = 0;
                 inline for (query_components) |Component| {
                     const sparse_set_ptr = storage.getSparseSetConstPtr(Component);
 
                     if (@sizeOf(Component) > 0) {
-                        worst_case_entitiy_result_count = @max(worst_case_entitiy_result_count, sparse_set_ptr.sparse_len);
+                        _biggest_set_len = @max(_biggest_set_len, sparse_set_ptr.sparse_len);
 
-                        full_sparse_sets[full_sparse_sets_index] = sparse_set_ptr;
+                        _full_sparse_sets[full_sparse_sets_index] = sparse_set_ptr;
                         full_sparse_sets_index += 1;
 
-                        @field(dense_sets, @typeName(Component)) = storage.getDenseSetPtr(Component);
+                        @field(_dense_sets, @typeName(Component)) = storage.getDenseSetPtr(Component);
                     } else {
-                        worst_case_entitiy_result_count = @max(worst_case_entitiy_result_count, sparse_set_ptr.sparse_len * @bitSizeOf(EntityId));
+                        _biggest_set_len = @max(_biggest_set_len, sparse_set_ptr.sparse_len * @bitSizeOf(EntityId));
 
-                        tag_sparse_sets[tag_sparse_sets_index] = sparse_set_ptr;
+                        _tag_sparse_sets[tag_sparse_sets_index] = sparse_set_ptr;
                         tag_sparse_sets_index += 1;
                     }
                 }
 
                 std.debug.assert(full_sparse_sets_index == full_sparse_set_count);
                 std.debug.assert(tag_sparse_sets_index == tag_sparse_set_count);
-            }
 
+                break :retrieve_component_sets_blk .{
+                    _biggest_set_len,
+                    _tag_sparse_sets,
+                    _full_sparse_sets,
+                    _dense_sets,
+                };
+            };
+
+            // Atomically load the current number of entities
             const number_of_entities = storage.number_of_entities.load(.monotonic);
 
-            var global_comp_index: usize = undefined;
-            var current_index: usize = undefined;
-            var current_min_value: usize = undefined;
-            var last_min_value: usize = 0;
-            var full_set_search_order: [full_sparse_set_count]usize = undefined;
-            var full_set_is_include: [full_sparse_set_count]bool = undefined;
-            inline for (&full_set_search_order, &full_set_is_include, 0..) |*search, *is_include, search_index| {
-                current_min_value = std.math.maxInt(usize);
+            // Calculate the full set's search order.
+            // As an example if query ask for Component "A" and "B", There are 10 entities of A, and
+            const full_set_search_order, const full_set_is_include = calc_search_order_blk: {
+                var _full_set_search_order: [full_sparse_set_count]usize = undefined;
+                var _full_set_is_include: [full_sparse_set_count]bool = undefined;
+                var last_min_value: usize = 0;
+                inline for (&_full_set_search_order, &_full_set_is_include, 0..) |*search, *is_include, search_index| {
+                    var current_index: usize = undefined;
+                    var global_comp_index: usize = undefined;
 
-                comptime var sized_comp_index = 0;
-                inline for (query_components, 0..) |QueryComp, q_comp_index| {
-                    if (@sizeOf(QueryComp) == 0) continue;
+                    var current_min_value: usize = std.math.maxInt(usize);
 
-                    defer sized_comp_index += 1;
+                    comptime var sized_comp_index = 0;
+                    inline for (query_components, 0..) |QueryComp, q_comp_index| {
+                        if (@sizeOf(QueryComp) == 0) continue;
 
-                    // Skip indices we already stored
-                    const already_included: bool = already_included_search: {
-                        for (full_set_search_order[0..search_index]) |prev_found| {
-                            if (prev_found == sized_comp_index) {
-                                break :already_included_search true;
+                        defer sized_comp_index += 1;
+
+                        // Skip indices we already stored
+                        const already_included: bool = already_included_search: {
+                            for (_full_set_search_order[0..search_index]) |prev_found| {
+                                if (prev_found == sized_comp_index) {
+                                    break :already_included_search true;
+                                }
                             }
-                        }
-                        break :already_included_search false;
-                    };
-
-                    if (already_included == false) {
-                        const query_candidate_len = get_candidate_len_blk: {
-                            if (@sizeOf(QueryComp) > 0) {
-                                const dense_set = storage.getDenseSetConstPtr(QueryComp);
-                                break :get_candidate_len_blk dense_set.dense_len;
-                            } else {
-                                const sparse_set: *const set.Sparse.Tag = storage.getSparseSetConstPtr(QueryComp);
-                                break :get_candidate_len_blk sparse_set.sparse_len;
-                            }
+                            break :already_included_search false;
                         };
 
-                        const len_value = get_len_blk: {
-                            const is_result_or_include_component = q_comp_index < result_component_count + include_fields.len;
-                            if (is_result_or_include_component) {
-                                break :get_len_blk query_candidate_len;
-                            } else {
-                                break :get_len_blk number_of_entities - query_candidate_len;
-                            }
-                        };
+                        if (already_included == false) {
+                            const query_candidate_len = get_candidate_len_blk: {
+                                if (@sizeOf(QueryComp) > 0) {
+                                    const dense_set = storage.getDenseSetConstPtr(QueryComp);
+                                    break :get_candidate_len_blk dense_set.dense_len;
+                                } else {
+                                    const sparse_set: *const set.Sparse.Tag = storage.getSparseSetConstPtr(QueryComp);
+                                    break :get_candidate_len_blk sparse_set.sparse_len;
+                                }
+                            };
 
-                        if (len_value <= current_min_value and len_value >= last_min_value) {
-                            current_index = sized_comp_index;
-                            current_min_value = len_value;
-                            global_comp_index = q_comp_index;
+                            const len_value = get_len_blk: {
+                                const is_result_or_include_component = q_comp_index < result_component_count + include_fields.len;
+                                if (is_result_or_include_component) {
+                                    break :get_len_blk query_candidate_len;
+                                } else {
+                                    break :get_len_blk number_of_entities - query_candidate_len;
+                                }
+                            };
+
+                            if (len_value <= current_min_value and len_value >= last_min_value) {
+                                current_index = sized_comp_index;
+                                current_min_value = len_value;
+                                global_comp_index = q_comp_index;
+                            }
                         }
                     }
+
+                    is_include.* = global_comp_index < result_component_count + include_fields.len;
+                    search.* = current_index;
+                    last_min_value = current_min_value;
                 }
 
-                is_include.* = global_comp_index < result_component_count + include_fields.len;
-                search.* = current_index;
-                last_min_value = current_min_value;
-            }
+                break :calc_search_order_blk .{
+                    _full_set_search_order,
+                    _full_set_is_include,
+                };
+            };
 
-            const worst_case_bitmap_count = std.math.divCeil(EntityId, worst_case_entitiy_result_count, @bitSizeOf(EntityId)) catch unreachable;
+            const worst_case_bitmap_count = std.math.divCeil(EntityId, biggest_set_len, @bitSizeOf(EntityId)) catch unreachable;
             const result_entities_bitmap = try allocator.alloc(EntityId, worst_case_bitmap_count);
             errdefer allocator.free(result_entities_bitmap);
 
@@ -439,7 +457,7 @@ pub fn Create(comptime Storage: type, comptime ResultItem: type, comptime includ
                 .sparse_cursors = 0,
                 .full_sparse_sets = full_sparse_sets,
                 .dense_sets = dense_sets,
-                .result_entities_bit_count = worst_case_entitiy_result_count,
+                .result_entities_bit_count = biggest_set_len,
                 .result_entities_bitmap = result_entities_bitmap,
             };
         }
