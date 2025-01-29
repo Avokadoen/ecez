@@ -1,7 +1,8 @@
 const std = @import("std");
 const storage = @import("storage.zig");
-const QueryType = storage.QueryType;
 const SubsetType = storage.SubsetType;
+
+const QueryType = @import("query.zig").QueryType;
 
 const Access = struct {
     const Right = enum(u2) {

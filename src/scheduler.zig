@@ -5,7 +5,7 @@ const ztracy = @import("ztracy");
 const ThreadPool = @import("StdThreadPool.zig");
 const ResetEvent = std.Thread.ResetEvent;
 
-const QueryType = @import("storage.zig").QueryType;
+const QueryType = @import("query.zig").QueryType;
 const StorageType = @import("storage.zig").StorageType;
 const SubsetType = @import("storage.zig").SubsetType;
 
