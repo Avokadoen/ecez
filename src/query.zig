@@ -411,6 +411,14 @@ pub fn Create(comptime Storage: type, comptime ResultItem: type, comptime includ
                 const sparse_set = full_sparse_sets[search_order];
 
                 for (sparse_set.sparse[0..sparse_set.sparse_len], 0..) |dense_index, entity| {
+                    // Check if this bitmap entry has any set results, or if we can skip it
+                    if (@rem(entity, @bitSizeOf(EntityId)) == 0) {
+                        const bit_index = @divFloor(entity, @bitSizeOf(EntityId));
+                        if (result_entities_bitmap[bit_index] == 0) {
+                            continue;
+                        }
+                    }
+
                     // Check if we have query hit for entity:
                     const entry_is_set = dense_index != set.Sparse.not_set;
                     const query_hit = entry_is_set == is_include_set;
