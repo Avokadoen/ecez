@@ -633,16 +633,6 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 @typeName(Component),
             );
         }
-
-        fn indexOfStorageComponent(comptime Component: type) usize {
-            inline for (component_type_array, 0..) |StorageComponent, index| {
-                if (Component == StorageComponent) {
-                    return index;
-                }
-            }
-
-            @compileError(@typeName(Component) ++ " is not a compoenent in this storage");
-        }
     };
 }
 
