@@ -54,12 +54,16 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
+            // deinit all dense sets
             inline for (component_type_array) |Component| {
+                // only sized components has dense sets
                 if (@sizeOf(Component) > 0) {
                     const dense_set = self.getDenseSetPtr(Component);
                     dense_set.deinit(self.allocator);
                 }
             }
+
+            // deinit all sparse sets
             inline for (component_type_array) |Component| {
                 const sparse_set = self.getSparseSetPtr(Component);
                 sparse_set.deinit(self.allocator);
@@ -70,6 +74,9 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         pub fn clearRetainingCapacity(self: *Storage) void {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
+
+            // Clear number of entities
+            self.number_of_entities.store(0, .seq_cst);
 
             // clear all dense sets
             inline for (component_type_array) |Component| {
@@ -85,8 +92,6 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 const sparse_set = self.getSparseSetPtr(Component);
                 sparse_set.clearRetainingCapacity();
             }
-
-            self.number_of_entities.store(0, .seq_cst);
         }
 
         /// Create an entity and returns the entity handle
@@ -113,17 +118,20 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             inline for (field_info.Struct.fields) |field| {
                 const Component = field.type;
 
+                // Grow sparse set
                 {
                     var sparse_set = self.getSparseSetPtr(Component);
                     try sparse_set.grow(self.allocator, this_id + 1);
                 }
 
+                // Grow dense set if present
                 if (@sizeOf(Component) > 0) {
                     var dense_set = self.getDenseSetPtr(Component);
                     try dense_set.grow(self.allocator, dense_set.dense_len + 1);
                 }
             }
 
+            // For each component in the new entity
             inline for (field_info.Struct.fields) |field| {
                 const Component = field.type;
                 const component: Component = @field(
@@ -131,6 +139,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     field.name,
                 );
 
+                // Grow component sparse set storage
                 const sparse_set = self.getSparseSetPtr(Component);
                 if (@sizeOf(Component) > 0) {
                     const dense_set = self.getDenseSetPtr(Component);
@@ -262,8 +271,6 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
             const field_info = @typeInfo(@TypeOf(components));
 
-            // TODO: proper errdefer
-            // errdefer
             inline for (field_info.Struct.fields) |field| {
                 const ComponentToCheck = @field(components, field.name);
 
