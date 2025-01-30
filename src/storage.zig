@@ -71,16 +71,19 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
+            // clear all dense sets
             inline for (component_type_array) |Component| {
+                // only sized components has dense sets
                 if (@sizeOf(Component) > 0) {
-                    const sparse_set: *set.Sparse.Full = self.getSparseSetPtr(Component);
                     const dense_set = self.getDenseSetPtr(Component);
-
-                    set.clearRetainingCapacity(sparse_set, dense_set);
-                } else {
-                    const sparse_set: *set.Sparse.Tag = self.getSparseSetPtr(Component);
-                    sparse_set.clearRetainingCapacity();
+                    dense_set.clearRetainingCapacity();
                 }
+            }
+
+            // clear all sparse sets
+            inline for (component_type_array) |Component| {
+                const sparse_set = self.getSparseSetPtr(Component);
+                sparse_set.clearRetainingCapacity();
             }
 
             self.number_of_entities.store(0, .seq_cst);

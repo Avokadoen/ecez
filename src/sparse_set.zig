@@ -112,6 +112,11 @@ pub const Sparse = struct {
 
             return self.sparse[sparse_slot] != not_set;
         }
+
+        pub fn clearRetainingCapacity(self: *SparseSet) void {
+            @memset(self.sparse[0..self.sparse_len], Sparse.not_set);
+            self.sparse_len = 0;
+        }
     };
 };
 
@@ -150,6 +155,10 @@ pub fn Dense(comptime DenseT: type) type {
             const new_len = growSize(self.dense.len, min_size);
             self.dense = try allocator.realloc(self.dense, new_len);
             self.sparse_index = try allocator.realloc(self.sparse_index, new_len);
+        }
+
+        pub fn clearRetainingCapacity(self: *Set) void {
+            self.dense_len = 0;
         }
     };
 }
@@ -245,15 +254,6 @@ pub fn get(
         var zero_size = DenseType{};
         return &zero_size;
     }
-}
-
-pub fn clearRetainingCapacity(
-    sparse: *Sparse.Full,
-    dense: anytype,
-) void {
-    @memset(sparse.sparse, Sparse.not_set);
-    sparse.sparse_len = 0;
-    dense.dense_len = 0;
 }
 
 // "Borrowed" from std.ArrayList :)
@@ -443,7 +443,8 @@ test "SparseSet clearRetainingCapacity clears" {
     setAssumeCapacity(&sparse_set, &dense_set, 6, 3);
     setAssumeCapacity(&sparse_set, &dense_set, 15, 15);
 
-    clearRetainingCapacity(&sparse_set, &dense_set);
+    sparse_set.clearRetainingCapacity();
+    dense_set.clearRetainingCapacity();
 
     const sparse = [_]EntityId{Sparse.not_set} ** 16;
     for (sparse, sparse_set.sparse[0..16]) |expected_entry, actual_entry| {
@@ -469,7 +470,8 @@ test "SparseSet with zero sized type only has sparse" {
     _ = unset(&sparse_set, &dense_set, 6);
     setAssumeCapacity(&sparse_set, &dense_set, 15, .{});
 
-    clearRetainingCapacity(&sparse_set, &dense_set);
+    sparse_set.clearRetainingCapacity();
+    dense_set.clearRetainingCapacity();
 
     const sparse = [_]EntityId{Sparse.not_set} ** 16;
     for (sparse, sparse_set.sparse[0..16]) |expected_entry, actual_entry| {
