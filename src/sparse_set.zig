@@ -169,21 +169,15 @@ pub fn setAssumeCapacity(
     sparse_slot: EntityId,
     dense_item: anytype,
 ) void {
-    const DenseType = @TypeOf(dense_item);
-
     std.debug.assert(sparse.sparse_len > sparse_slot);
-    if (@sizeOf(DenseType) > 0) {
-        std.debug.assert(dense.dense_len < dense.dense.len);
-    }
+    std.debug.assert(dense.dense_len < dense.dense.len);
 
     // Check if sparse already has an item
     {
         const entry = sparse.sparse[sparse_slot];
         if (entry != Sparse.not_set) {
-            if (@sizeOf(DenseType) > 0) {
-                dense.dense[entry] = dense_item;
-                dense.sparse_index[entry] = sparse_slot;
-            }
+            dense.dense[entry] = dense_item;
+            dense.sparse_index[entry] = sparse_slot;
             return;
         }
     }
@@ -194,10 +188,8 @@ pub fn setAssumeCapacity(
         sparse.setAssumeCapacity(sparse_slot, entry);
         dense.dense_len += 1;
 
-        if (@sizeOf(DenseType) > 0) {
-            dense.dense[entry] = dense_item;
-            dense.sparse_index[entry] = sparse_slot;
-        }
+        dense.dense[entry] = dense_item;
+        dense.sparse_index[entry] = sparse_slot;
     }
 }
 
@@ -207,8 +199,6 @@ pub fn unset(
     dense: anytype,
     sparse_slot: EntityId,
 ) bool {
-    const DenseStorage = GetDenseStorage(@TypeOf(dense));
-
     if (sparse.sparse.len <= sparse_slot) {
         return false;
     }
@@ -219,13 +209,11 @@ pub fn unset(
     }
 
     // swap remove
-    if (@sizeOf(DenseStorage.DenseType) > 0) {
-        const swapped_sparse_entry = dense.sparse_index[dense.dense_len - 1];
-        sparse.sparse[swapped_sparse_entry] = entry;
+    const swapped_sparse_entry = dense.sparse_index[dense.dense_len - 1];
+    sparse.sparse[swapped_sparse_entry] = entry;
 
-        dense.dense[entry] = dense.dense[dense.dense_len - 1];
-        dense.sparse_index[entry] = sparse_slot;
-    }
+    dense.dense[entry] = dense.dense[dense.dense_len - 1];
+    dense.sparse_index[entry] = sparse_slot;
 
     sparse.sparse[sparse_slot] = Sparse.not_set;
     dense.dense_len -= 1;
@@ -237,8 +225,6 @@ pub fn get(
     dense: anytype,
     sparse_slot: EntityId,
 ) ?*GetDenseStorage(@TypeOf(dense)).DenseType {
-    const DenseType = GetDenseStorage(@TypeOf(dense)).DenseType;
-
     if (sparse_slot >= sparse.sparse_len) {
         return null;
     }
@@ -248,12 +234,7 @@ pub fn get(
         return null;
     }
 
-    if (@sizeOf(DenseType) > 0) {
-        return &dense.dense[entry];
-    } else {
-        var zero_size = DenseType{};
-        return &zero_size;
-    }
+    return &dense.dense[entry];
 }
 
 // "Borrowed" from std.ArrayList :)
@@ -442,33 +423,6 @@ test "SparseSet clearRetainingCapacity clears" {
     setAssumeCapacity(&sparse_set, &dense_set, 3, 5);
     setAssumeCapacity(&sparse_set, &dense_set, 6, 3);
     setAssumeCapacity(&sparse_set, &dense_set, 15, 15);
-
-    sparse_set.clearRetainingCapacity();
-    dense_set.clearRetainingCapacity();
-
-    const sparse = [_]EntityId{Sparse.not_set} ** 16;
-    for (sparse, sparse_set.sparse[0..16]) |expected_entry, actual_entry| {
-        try std.testing.expectEqual(expected_entry, actual_entry);
-    }
-
-    try std.testing.expectEqual(0, dense_set.dense_len);
-}
-
-test "SparseSet with zero sized type only has sparse" {
-    var sparse_set = Sparse.Full{};
-    defer sparse_set.deinit(std.testing.allocator);
-
-    var dense_set = Dense(void){};
-    defer dense_set.deinit(std.testing.allocator);
-
-    try sparse_set.grow(std.testing.allocator, 16);
-    try dense_set.grow(std.testing.allocator, dense_set.dense_len + 4);
-
-    setAssumeCapacity(&sparse_set, &dense_set, 3, .{});
-    setAssumeCapacity(&sparse_set, &dense_set, 3, .{});
-    setAssumeCapacity(&sparse_set, &dense_set, 6, .{});
-    _ = unset(&sparse_set, &dense_set, 6);
-    setAssumeCapacity(&sparse_set, &dense_set, 15, .{});
 
     sparse_set.clearRetainingCapacity();
     dense_set.clearRetainingCapacity();
