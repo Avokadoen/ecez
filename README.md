@@ -82,6 +82,8 @@ Currently the project has two simple examples in the [example folder](https://gi
  * Implementation of [conway's game of life](https://github.com/Avokadoen/ecez/blob/main/examples/game-of-life/main.zig) which also integrate tracy
  * The code from this [readme](https://github.com/Avokadoen/ecez/blob/main/examples/readme/main.zig)
 
+ There is also [wizard rampage](https://github.com/Avokadoen/wizard_rampage) which is closer to actual game code. This was originally a game jam so some of the code is "hacky" but the ecez usage should be a practical example
+
 ### Test Driven Development
 
 The codebase also utilize TDD to ensure a certain level of robustness, altough I can assure you that there are many bugs to find yet! ;)
