@@ -5,7 +5,9 @@ const ztracy = @import("ztracy");
 const ThreadPool = @import("StdThreadPool.zig");
 const ResetEvent = std.Thread.ResetEvent;
 
-const QueryType = @import("query.zig").QueryType;
+const query = @import("query.zig");
+const QueryType = query.QueryType;
+const QueryAnyType = query.QueryAnyType;
 const StorageType = @import("storage.zig").StorageType;
 const SubsetType = @import("storage.zig").SubsetType;
 
@@ -264,6 +266,7 @@ pub fn CreateScheduler(comptime events: anytype) type {
                             break :get_arg_blk switch (param_info.Pointer.child.EcezType) {
                                 // TODO: scheduler should have an allocator for this
                                 QueryType => param_info.Pointer.child.submit(self_job.query_submit_allocator, self_job.storage) catch @panic("Scheduler dispatch query_submit_allocator OOM"),
+                                QueryAnyType => param_info.Pointer.child.prepare(self_job.storage),
                                 SubsetType => param_info.Pointer.child{ .storage = self_job.storage },
                                 else => |Type| @compileError("Unknown EcezType " ++ @typeName(Type)), // This is a ecez bug if hit (i.e not user error)
                             };
@@ -493,7 +496,8 @@ const StorageStub = CreateStorage(Testing.AllComponentsTuple);
 const Queries = Testing.Queries;
 
 test "system query can mutate components" {
-    const Query = StorageStub.Query(
+    const QueryTypes = Testing.QueryAndQueryAny(
+        StorageStub,
         struct {
             a: *Testing.Component.A,
             b: Testing.Component.B,
@@ -502,41 +506,43 @@ test "system query can mutate components" {
         .{},
     );
 
-    const SystemStruct = struct {
-        pub fn mutateStuff(ab: *Query) void {
-            while (ab.next()) |ent_ab| {
-                ent_ab.a.value += ent_ab.b.value;
+    inline for (QueryTypes) |Query| {
+        const SystemStruct = struct {
+            pub fn mutateStuff(ab: *Query) void {
+                while (ab.next()) |ent_ab| {
+                    ent_ab.a.value += ent_ab.b.value;
+                }
             }
-        }
-    };
+        };
 
-    var storage = try StorageStub.init(testing.allocator);
-    defer storage.deinit();
+        var storage = try StorageStub.init(testing.allocator);
+        defer storage.deinit();
 
-    const OnFooEvent = Event("onFoo", .{SystemStruct.mutateStuff});
+        const OnFooEvent = Event("onFoo", .{SystemStruct.mutateStuff});
 
-    var scheduler = try CreateScheduler(.{OnFooEvent}).init(.{
-        .pool_allocator = std.testing.allocator,
-        .query_submit_allocator = std.testing.allocator,
-    });
-    defer scheduler.deinit();
+        var scheduler = try CreateScheduler(.{OnFooEvent}).init(.{
+            .pool_allocator = std.testing.allocator,
+            .query_submit_allocator = std.testing.allocator,
+        });
+        defer scheduler.deinit();
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{});
-    scheduler.waitEvent(.onFoo);
+        scheduler.dispatchEvent(&storage, .onFoo, .{});
+        scheduler.waitEvent(.onFoo);
 
-    const initial_state = AbEntityType{
-        .a = Testing.Component.A{ .value = 1 },
-        .b = Testing.Component.B{ .value = 2 },
-    };
-    const entity = try storage.createEntity(initial_state);
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 1 },
+            .b = Testing.Component.B{ .value = 2 },
+        };
+        const entity = try storage.createEntity(initial_state);
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{});
-    scheduler.waitEvent(.onFoo);
+        scheduler.dispatchEvent(&storage, .onFoo, .{});
+        scheduler.waitEvent(.onFoo);
 
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 3 },
-        try storage.getComponent(entity, Testing.Component.A),
-    );
+        try testing.expectEqual(
+            Testing.Component.A{ .value = 3 },
+            try storage.getComponent(entity, Testing.Component.A),
+        );
+    }
 }
 
 test "system SubStorage can spawn new entites (and no race hazards)" {
@@ -549,168 +555,171 @@ test "system SubStorage can spawn new entites (and no race hazards)" {
         a: [initial_entity_count]Entity,
         b: [initial_entity_count]Entity,
     };
-
-    const SystemStruct = struct {
-        pub fn incrB(b_query: *Queries.WriteB) void {
-            while (b_query.next()) |item| {
-                item.b.value += 1;
+    inline for (Queries.WriteA, Queries.ReadA, Queries.WriteB, Queries.ReadB) |WriteA, ReadA, WriteB, ReadB| {
+        const SystemStruct = struct {
+            pub fn incrB(b_query: *WriteB) void {
+                while (b_query.next()) |item| {
+                    item.b.value += 1;
+                }
             }
-        }
 
-        pub fn decrB(b_query: *Queries.WriteB) void {
-            while (b_query.next()) |item| {
-                item.b.value -= 1;
+            pub fn decrB(b_query: *WriteB) void {
+                while (b_query.next()) |item| {
+                    item.b.value -= 1;
+                }
             }
-        }
 
-        pub fn incrA(a_query: *Queries.WriteA) void {
-            while (a_query.next()) |item| {
-                item.a.value += 1;
+            pub fn incrA(a_query: *WriteA) void {
+                while (a_query.next()) |item| {
+                    item.a.value += 1;
+                }
             }
-        }
 
-        pub fn decrA(a_query: *Queries.WriteA) void {
-            while (a_query.next()) |item| {
-                item.a.value -= 1;
+            pub fn decrA(a_query: *WriteA) void {
+                while (a_query.next()) |item| {
+                    item.a.value -= 1;
+                }
             }
-        }
 
-        pub fn spawnEntityAFromB(b_query: *Queries.ReadB, a_sub: *SubsetA, spawned_entities: *SpawnedEntities) void {
-            for (&spawned_entities.a) |*entity| {
-                const item = b_query.next().?;
+            pub fn spawnEntityAFromB(b_query: *ReadB, a_sub: *SubsetA, spawned_entities: *SpawnedEntities) void {
+                for (&spawned_entities.a) |*entity| {
+                    const item = b_query.next().?;
 
-                entity.* = a_sub.createEntity(.{
-                    Testing.Component.A{ .value = item.b.value },
-                }) catch @panic("OOM");
+                    entity.* = a_sub.createEntity(.{
+                        Testing.Component.A{ .value = item.b.value },
+                    }) catch @panic("OOM");
+                }
             }
-        }
 
-        pub fn spawnEntityBFromA(a_query: *Queries.ReadA, b_sub: *SubsetB, spawned_entities: *SpawnedEntities) void {
-            // Loop reverse to make it more likely for race conditions to cause issues
-            for (0..spawned_entities.b.len) |reverse_index| {
-                const item = a_query.next().?;
+            pub fn spawnEntityBFromA(a_query: *ReadA, b_sub: *SubsetB, spawned_entities: *SpawnedEntities) void {
+                // Loop reverse to make it more likely for race conditions to cause issues
+                for (0..spawned_entities.b.len) |reverse_index| {
+                    const item = a_query.next().?;
 
-                const index = spawned_entities.b.len - reverse_index - 1;
-                spawned_entities.b[index] = b_sub.createEntity(.{
-                    Testing.Component.B{ .value = @intCast(item.a.value) },
-                }) catch @panic("OOM");
+                    const index = spawned_entities.b.len - reverse_index - 1;
+                    spawned_entities.b[index] = b_sub.createEntity(.{
+                        Testing.Component.B{ .value = @intCast(item.a.value) },
+                    }) catch @panic("OOM");
+                }
             }
-        }
-    };
+        };
 
-    var storage = try StorageStub.init(testing.allocator);
-    defer storage.deinit();
+        var storage = try StorageStub.init(testing.allocator);
+        defer storage.deinit();
 
-    var scheduler = try CreateScheduler(.{Event(
-        "onFoo",
-        .{
-            SystemStruct.incrB,
-            SystemStruct.decrB,
-            SystemStruct.spawnEntityAFromB,
-            SystemStruct.spawnEntityBFromA,
-            SystemStruct.incrA,
-            SystemStruct.decrA,
-        },
-    )}).init(.{
-        .pool_allocator = std.testing.allocator,
-        .query_submit_allocator = std.testing.allocator,
-    });
-    defer scheduler.deinit();
+        var scheduler = try CreateScheduler(.{Event(
+            "onFoo",
+            .{
+                SystemStruct.incrB,
+                SystemStruct.decrB,
+                SystemStruct.spawnEntityAFromB,
+                SystemStruct.spawnEntityBFromA,
+                SystemStruct.incrA,
+                SystemStruct.decrA,
+            },
+        )}).init(.{
+            .pool_allocator = std.testing.allocator,
+            .query_submit_allocator = std.testing.allocator,
+        });
+        defer scheduler.deinit();
 
-    // Do this test repeatedly to ensure it's determenistic (no race hazards)
-    for (0..128) |_| {
-        storage.clearRetainingCapacity();
+        // Do this test repeatedly to ensure it's determenistic (no race hazards)
+        for (0..128) |_| {
+            storage.clearRetainingCapacity();
 
-        var initial_entites: [initial_entity_count]Entity = undefined;
-        for (&initial_entites, 0..) |*entity, iter| {
-            entity.* = try storage.createEntity(.{
-                Testing.Component.B{ .value = @intCast(iter) },
-            });
-        }
+            var initial_entites: [initial_entity_count]Entity = undefined;
+            for (&initial_entites, 0..) |*entity, iter| {
+                entity.* = try storage.createEntity(.{
+                    Testing.Component.B{ .value = @intCast(iter) },
+                });
+            }
 
-        var spawned_entites: SpawnedEntities = undefined;
-        scheduler.dispatchEvent(&storage, .onFoo, &spawned_entites);
-        scheduler.waitEvent(.onFoo);
+            var spawned_entites: SpawnedEntities = undefined;
+            scheduler.dispatchEvent(&storage, .onFoo, &spawned_entites);
+            scheduler.waitEvent(.onFoo);
 
-        for (&initial_entites, 0..) |entity, iter| {
-            try testing.expectEqual(
-                Testing.Component.B{ .value = @intCast(iter) },
-                try storage.getComponent(entity, Testing.Component.B),
-            );
-        }
+            for (&initial_entites, 0..) |entity, iter| {
+                try testing.expectEqual(
+                    Testing.Component.B{ .value = @intCast(iter) },
+                    try storage.getComponent(entity, Testing.Component.B),
+                );
+            }
 
-        for (spawned_entites.a, 0..) |entity, iter| {
-            try testing.expectEqual(
-                Testing.Component.A{ .value = @intCast(iter) },
-                try storage.getComponent(entity, Testing.Component.A),
-            );
-        }
+            for (spawned_entites.a, 0..) |entity, iter| {
+                try testing.expectEqual(
+                    Testing.Component.A{ .value = @intCast(iter) },
+                    try storage.getComponent(entity, Testing.Component.A),
+                );
+            }
 
-        for (spawned_entites.b, 0..) |entity, iter| {
-            // Make sure these entities is not the ones we spawned in this for loop
-            try std.testing.expect(entity.id != iter);
+            for (spawned_entites.b, 0..) |entity, iter| {
+                // Make sure these entities is not the ones we spawned in this for loop
+                try std.testing.expect(entity.id != iter);
 
-            const reverse = initial_entity_count - iter - 1;
-            try testing.expectEqual(
-                Testing.Component.B{ .value = @intCast(reverse) },
-                try storage.getComponent(entity, Testing.Component.B),
-            );
+                const reverse = initial_entity_count - iter - 1;
+                try testing.expectEqual(
+                    Testing.Component.B{ .value = @intCast(reverse) },
+                    try storage.getComponent(entity, Testing.Component.B),
+                );
+            }
         }
     }
 }
 
 test "Thread count 0 works" {
-    const SystemStruct = struct {
-        pub fn incrB(b_query: *Queries.WriteB) void {
-            while (b_query.next()) |item| {
-                item.b.value += 1;
+    inline for (Queries.WriteA, Queries.WriteB) |WriteA, WriteB| {
+        const SystemStruct = struct {
+            pub fn incrB(b_query: *WriteB) void {
+                while (b_query.next()) |item| {
+                    item.b.value += 1;
+                }
             }
-        }
 
-        pub fn decrB(b_query: *Queries.WriteB) void {
-            while (b_query.next()) |item| {
-                item.b.value -= 1;
+            pub fn decrB(b_query: *WriteB) void {
+                while (b_query.next()) |item| {
+                    item.b.value -= 1;
+                }
             }
-        }
 
-        pub fn incrA(a_query: *Queries.WriteA) void {
-            while (a_query.next()) |item| {
-                item.a.value += 1;
+            pub fn incrA(a_query: *WriteA) void {
+                while (a_query.next()) |item| {
+                    item.a.value += 1;
+                }
             }
-        }
 
-        pub fn decrA(a_query: *Queries.WriteA) void {
-            while (a_query.next()) |item| {
-                item.a.value -= 1;
+            pub fn decrA(a_query: *WriteA) void {
+                while (a_query.next()) |item| {
+                    item.a.value -= 1;
+                }
             }
-        }
-    };
+        };
 
-    var storage = try StorageStub.init(testing.allocator);
-    defer storage.deinit();
+        var storage = try StorageStub.init(testing.allocator);
+        defer storage.deinit();
 
-    var scheduler = try CreateScheduler(.{Event(
-        "onFoo",
-        .{
-            SystemStruct.incrB,
-            SystemStruct.decrB,
-            SystemStruct.incrA,
-            SystemStruct.decrA,
-        },
-    )}).init(.{
-        .pool_allocator = std.testing.allocator,
-        .query_submit_allocator = std.testing.allocator,
-    });
-    defer scheduler.deinit();
-
-    for (0..128) |iter| {
-        _ = try storage.createEntity(.{
-            Testing.Component.B{ .value = @intCast(iter) },
+        var scheduler = try CreateScheduler(.{Event(
+            "onFoo",
+            .{
+                SystemStruct.incrB,
+                SystemStruct.decrB,
+                SystemStruct.incrA,
+                SystemStruct.decrA,
+            },
+        )}).init(.{
+            .pool_allocator = std.testing.allocator,
+            .query_submit_allocator = std.testing.allocator,
         });
-    }
+        defer scheduler.deinit();
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{});
-    scheduler.waitEvent(.onFoo);
+        for (0..128) |iter| {
+            _ = try storage.createEntity(.{
+                Testing.Component.B{ .value = @intCast(iter) },
+            });
+        }
+
+        scheduler.dispatchEvent(&storage, .onFoo, .{});
+        scheduler.waitEvent(.onFoo);
+    }
 }
 
 test "system sub storage can mutate components" {
@@ -763,83 +772,178 @@ test "Dispatch is determenistic (no race conditions)" {
         *Testing.Component.B,
     });
 
-    const SystemStruct = struct {
-        pub fn incrA(q: *Queries.WriteA) void {
-            while (q.next()) |item| {
-                item.a.value += 1;
-            }
-        }
-
-        pub fn incrB(q: *Queries.WriteB) void {
-            while (q.next()) |item| {
-                item.b.value += 1;
-            }
-        }
-
-        pub fn doubleA(q: *Queries.WriteA) void {
-            while (q.next()) |item| {
-                item.a.value *= 2;
-            }
-        }
-
-        pub fn doubleB(q: *Queries.WriteB) void {
-            while (q.next()) |item| {
-                item.b.value *= 2;
-            }
-        }
-
-        pub fn storageIncrAIncrB(entities: *Queries.Entities, sub: *AbSubStorage) void {
-            while (entities.next()) |item| {
-                const ab = sub.getComponents(item.entity, struct {
-                    a: *Testing.Component.A,
-                    b: *Testing.Component.B,
-                }) catch @panic("oof");
-
-                ab.a.value += 1;
-                ab.b.value += 1;
-            }
-        }
-
-        pub fn storageDoubleADoubleB(entities: *Queries.Entities, sub: *AbSubStorage) void {
-            while (entities.next()) |item| {
-                const ab = sub.getComponents(item.entity, struct {
-                    a: *Testing.Component.A,
-                    b: *Testing.Component.B,
-                }) catch @panic("oof");
-
-                ab.a.value *= 2;
-                ab.b.value *= 2;
-            }
-        }
-
-        pub fn storageZeroAZeroB(entities: *Queries.Entities, sub: *AbSubStorage) void {
-            while (entities.next()) |item| {
-                sub.setComponents(item.entity, .{
-                    Testing.Component.A{ .value = 0 },
-                    Testing.Component.B{ .value = 0 },
-                }) catch @panic("oof");
-            }
-        }
-    };
-
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    // Run the test many times, expect the same result
-    for (0..128) |_| {
-        defer storage.clearRetainingCapacity();
+    inline for (Queries.WriteA, Queries.WriteB) |WriteA, WriteB| {
+        const SystemStruct = struct {
+            pub fn incrA(q: *WriteA) void {
+                while (q.next()) |item| {
+                    item.a.value += 1;
+                }
+            }
+
+            pub fn incrB(q: *WriteB) void {
+                while (q.next()) |item| {
+                    item.b.value += 1;
+                }
+            }
+
+            pub fn doubleA(q: *WriteA) void {
+                while (q.next()) |item| {
+                    item.a.value *= 2;
+                }
+            }
+
+            pub fn doubleB(q: *WriteB) void {
+                while (q.next()) |item| {
+                    item.b.value *= 2;
+                }
+            }
+
+            pub fn storageIncrAIncrB(entities: *Queries.Entities, sub: *AbSubStorage) void {
+                while (entities.next()) |item| {
+                    const ab = sub.getComponents(item.entity, struct {
+                        a: *Testing.Component.A,
+                        b: *Testing.Component.B,
+                    }) catch @panic("oof");
+
+                    ab.a.value += 1;
+                    ab.b.value += 1;
+                }
+            }
+
+            pub fn storageDoubleADoubleB(entities: *Queries.Entities, sub: *AbSubStorage) void {
+                while (entities.next()) |item| {
+                    const ab = sub.getComponents(item.entity, struct {
+                        a: *Testing.Component.A,
+                        b: *Testing.Component.B,
+                    }) catch @panic("oof");
+
+                    ab.a.value *= 2;
+                    ab.b.value *= 2;
+                }
+            }
+
+            pub fn storageZeroAZeroB(entities: *Queries.Entities, sub: *AbSubStorage) void {
+                while (entities.next()) |item| {
+                    sub.setComponents(item.entity, .{
+                        Testing.Component.A{ .value = 0 },
+                        Testing.Component.B{ .value = 0 },
+                    }) catch @panic("oof");
+                }
+            }
+        };
+
+        // Run the test many times, expect the same result
+        for (0..128) |_| {
+            defer storage.clearRetainingCapacity();
+
+            var scheduler = try CreateScheduler(.{
+                Event("onFoo", .{
+                    SystemStruct.storageZeroAZeroB,
+                    SystemStruct.incrA,
+                    SystemStruct.doubleA,
+                    SystemStruct.incrA,
+                    SystemStruct.incrB,
+                    SystemStruct.doubleB,
+                    SystemStruct.incrB,
+                    SystemStruct.storageDoubleADoubleB,
+                    SystemStruct.storageIncrAIncrB,
+                }),
+            }).init(.{
+                .pool_allocator = std.testing.allocator,
+                .query_submit_allocator = std.testing.allocator,
+            });
+            defer scheduler.deinit();
+
+            const initial_state = Testing.Structure.AB{
+                .a = Testing.Component.A{ .value = 42 },
+                .b = Testing.Component.B{ .value = 42 },
+            };
+            var entities: [128]Entity = undefined;
+            for (&entities) |*entity| {
+                entity.* = try storage.createEntity(initial_state);
+            }
+
+            // (((0 + 1) * 2) + 1) * 2 + 1 = 7
+            const expected_value = 7;
+
+            scheduler.dispatchEvent(&storage, .onFoo, .{});
+            scheduler.waitEvent(.onFoo);
+
+            for (entities) |entity| {
+                const ab = try storage.getComponents(entity, Testing.Structure.AB);
+                try testing.expectEqual(
+                    Testing.Component.A{ .value = expected_value },
+                    ab.a,
+                );
+                try testing.expectEqual(
+                    Testing.Component.B{ .value = expected_value },
+                    ab.b,
+                );
+            }
+
+            // (((0 + 1) * 2) + 1) * 2 + 1 = 7
+            scheduler.dispatchEvent(&storage, .onFoo, .{});
+            scheduler.waitEvent(.onFoo);
+
+            for (entities) |entity| {
+                const ab = try storage.getComponents(entity, Testing.Structure.AB);
+                try testing.expectEqual(
+                    Testing.Component.A{ .value = expected_value },
+                    ab.a,
+                );
+                try testing.expectEqual(
+                    Testing.Component.B{ .value = expected_value },
+                    ab.b,
+                );
+            }
+        }
+    }
+}
+
+test "Dispatch with multiple events works" {
+    inline for (Queries.WriteA, Queries.WriteB) |WriteA, WriteB| {
+        const SystemStruct = struct {
+            pub fn incrA(q: *WriteA) void {
+                while (q.next()) |item| {
+                    item.a.value += 1;
+                }
+            }
+
+            pub fn incrB(q: *WriteB) void {
+                while (q.next()) |item| {
+                    item.b.value += 1;
+                }
+            }
+
+            pub fn doubleA(q: *WriteA) void {
+                while (q.next()) |item| {
+                    item.a.value *= 2;
+                }
+            }
+
+            pub fn doubleB(q: *WriteB) void {
+                while (q.next()) |item| {
+                    item.b.value *= 2;
+                }
+            }
+        };
+
+        var storage = try StorageStub.init(testing.allocator);
+        defer storage.deinit();
 
         var scheduler = try CreateScheduler(.{
-            Event("onFoo", .{
-                SystemStruct.storageZeroAZeroB,
+            Event("onA", .{
                 SystemStruct.incrA,
                 SystemStruct.doubleA,
                 SystemStruct.incrA,
+            }),
+            Event("onB", .{
                 SystemStruct.incrB,
                 SystemStruct.doubleB,
                 SystemStruct.incrB,
-                SystemStruct.storageDoubleADoubleB,
-                SystemStruct.storageIncrAIncrB,
             }),
         }).init(.{
             .pool_allocator = std.testing.allocator,
@@ -848,20 +952,35 @@ test "Dispatch is determenistic (no race conditions)" {
         defer scheduler.deinit();
 
         const initial_state = Testing.Structure.AB{
-            .a = Testing.Component.A{ .value = 42 },
-            .b = Testing.Component.B{ .value = 42 },
+            .a = Testing.Component.A{ .value = 0 },
+            .b = Testing.Component.B{ .value = 0 },
         };
-        var entities: [128]Entity = undefined;
+        var entities: [1]Entity = undefined;
         for (&entities) |*entity| {
             entity.* = try storage.createEntity(initial_state);
         }
 
-        // (((0 + 1) * 2) + 1) * 2 + 1 = 7
-        const expected_value = 7;
+        // ((0 + 1) * 2) + 1 = 3
+        scheduler.dispatchEvent(&storage, .onA, .{});
+        scheduler.dispatchEvent(&storage, .onB, .{});
+        scheduler.waitIdle();
 
-        scheduler.dispatchEvent(&storage, .onFoo, .{});
-        scheduler.waitEvent(.onFoo);
+        // ((3 + 1) * 2) + 1 = 9
+        scheduler.dispatchEvent(&storage, .onA, .{});
+        scheduler.dispatchEvent(&storage, .onB, .{});
+        scheduler.waitIdle();
 
+        // ((9 + 1) * 2) + 1 = 21
+        scheduler.dispatchEvent(&storage, .onA, .{});
+        scheduler.dispatchEvent(&storage, .onB, .{});
+        scheduler.waitIdle();
+
+        // ((21 + 1) * 2) + 1 = 45
+        scheduler.dispatchEvent(&storage, .onA, .{});
+        scheduler.dispatchEvent(&storage, .onB, .{});
+        scheduler.waitIdle();
+
+        const expected_value = 45;
         for (entities) |entity| {
             const ab = try storage.getComponents(entity, Testing.Structure.AB);
             try testing.expectEqual(
@@ -873,188 +992,84 @@ test "Dispatch is determenistic (no race conditions)" {
                 ab.b,
             );
         }
-
-        // (((0 + 1) * 2) + 1) * 2 + 1 = 7
-        scheduler.dispatchEvent(&storage, .onFoo, .{});
-        scheduler.waitEvent(.onFoo);
-
-        for (entities) |entity| {
-            const ab = try storage.getComponents(entity, Testing.Structure.AB);
-            try testing.expectEqual(
-                Testing.Component.A{ .value = expected_value },
-                ab.a,
-            );
-            try testing.expectEqual(
-                Testing.Component.B{ .value = expected_value },
-                ab.b,
-            );
-        }
-    }
-}
-
-test "Dispatch with multiple events works" {
-    const SystemStruct = struct {
-        pub fn incrA(q: *Queries.WriteA) void {
-            while (q.next()) |item| {
-                item.a.value += 1;
-            }
-        }
-
-        pub fn incrB(q: *Queries.WriteB) void {
-            while (q.next()) |item| {
-                item.b.value += 1;
-            }
-        }
-
-        pub fn doubleA(q: *Queries.WriteA) void {
-            while (q.next()) |item| {
-                item.a.value *= 2;
-            }
-        }
-
-        pub fn doubleB(q: *Queries.WriteB) void {
-            while (q.next()) |item| {
-                item.b.value *= 2;
-            }
-        }
-    };
-
-    var storage = try StorageStub.init(testing.allocator);
-    defer storage.deinit();
-
-    var scheduler = try CreateScheduler(.{
-        Event("onA", .{
-            SystemStruct.incrA,
-            SystemStruct.doubleA,
-            SystemStruct.incrA,
-        }),
-        Event("onB", .{
-            SystemStruct.incrB,
-            SystemStruct.doubleB,
-            SystemStruct.incrB,
-        }),
-    }).init(.{
-        .pool_allocator = std.testing.allocator,
-        .query_submit_allocator = std.testing.allocator,
-    });
-    defer scheduler.deinit();
-
-    const initial_state = Testing.Structure.AB{
-        .a = Testing.Component.A{ .value = 0 },
-        .b = Testing.Component.B{ .value = 0 },
-    };
-    var entities: [1]Entity = undefined;
-    for (&entities) |*entity| {
-        entity.* = try storage.createEntity(initial_state);
-    }
-
-    // ((0 + 1) * 2) + 1 = 3
-    scheduler.dispatchEvent(&storage, .onA, .{});
-    scheduler.dispatchEvent(&storage, .onB, .{});
-    scheduler.waitIdle();
-
-    // ((3 + 1) * 2) + 1 = 9
-    scheduler.dispatchEvent(&storage, .onA, .{});
-    scheduler.dispatchEvent(&storage, .onB, .{});
-    scheduler.waitIdle();
-
-    // ((9 + 1) * 2) + 1 = 21
-    scheduler.dispatchEvent(&storage, .onA, .{});
-    scheduler.dispatchEvent(&storage, .onB, .{});
-    scheduler.waitIdle();
-
-    // ((21 + 1) * 2) + 1 = 45
-    scheduler.dispatchEvent(&storage, .onA, .{});
-    scheduler.dispatchEvent(&storage, .onB, .{});
-    scheduler.waitIdle();
-
-    const expected_value = 45;
-    for (entities) |entity| {
-        const ab = try storage.getComponents(entity, Testing.Structure.AB);
-        try testing.expectEqual(
-            Testing.Component.A{ .value = expected_value },
-            ab.a,
-        );
-        try testing.expectEqual(
-            Testing.Component.B{ .value = expected_value },
-            ab.b,
-        );
     }
 }
 
 test "dumpDependencyChain" {
-    const SystemStruct = struct {
-        pub fn incrA(q: *Queries.WriteA) void {
-            while (q.next()) |item| {
-                item.a.value += 1;
+    inline for (Queries.WriteA, Queries.WriteB) |WriteA, WriteB| {
+        const SystemStruct = struct {
+            pub fn incrA(q: *WriteA) void {
+                while (q.next()) |item| {
+                    item.a.value += 1;
+                }
             }
-        }
 
-        pub fn incrB(q: *Queries.WriteB) void {
-            while (q.next()) |item| {
-                item.b.value += 1;
+            pub fn incrB(q: *WriteB) void {
+                while (q.next()) |item| {
+                    item.b.value += 1;
+                }
             }
-        }
 
-        pub fn doubleA(q: *Queries.WriteA) void {
-            while (q.next()) |item| {
-                item.a.value *= 2;
+            pub fn doubleA(q: *WriteA) void {
+                while (q.next()) |item| {
+                    item.a.value *= 2;
+                }
             }
-        }
 
-        pub fn doubleB(q: *Queries.WriteB) void {
-            while (q.next()) |item| {
-                item.b.value *= 2;
+            pub fn doubleB(q: *WriteB) void {
+                while (q.next()) |item| {
+                    item.b.value *= 2;
+                }
             }
-        }
-    };
-
-    var storage = try StorageStub.init(testing.allocator);
-    defer storage.deinit();
-
-    const Scheduler = CreateScheduler(.{
-        Event("onA", .{
-            SystemStruct.incrA,
-            SystemStruct.doubleA,
-            SystemStruct.incrA,
-        }),
-        Event("onB", .{
-            SystemStruct.incrB,
-            SystemStruct.incrA,
-            SystemStruct.doubleB,
-            SystemStruct.incrB,
-        }),
-    });
-
-    {
-        const expectedDumpOnA = [_]gen_dependency_chain.Dependency{
-            .{ .wait_on_indices = &[_]u32{} },
-            .{ .wait_on_indices = &[_]u32{0} },
-            .{ .wait_on_indices = &[_]u32{1} },
         };
-        const actualDumpOnA = comptime Scheduler.dumpDependencyChain(.onA);
-        for (&expectedDumpOnA, actualDumpOnA) |expected, actual| {
-            try std.testing.expectEqualSlices(
-                u32,
-                expected.wait_on_indices,
-                actual.wait_on_indices,
-            );
+
+        var storage = try StorageStub.init(testing.allocator);
+        defer storage.deinit();
+
+        const Scheduler = CreateScheduler(.{
+            Event("onA", .{
+                SystemStruct.incrA,
+                SystemStruct.doubleA,
+                SystemStruct.incrA,
+            }),
+            Event("onB", .{
+                SystemStruct.incrB,
+                SystemStruct.incrA,
+                SystemStruct.doubleB,
+                SystemStruct.incrB,
+            }),
+        });
+
+        {
+            const expectedDumpOnA = [_]gen_dependency_chain.Dependency{
+                .{ .wait_on_indices = &[_]u32{} },
+                .{ .wait_on_indices = &[_]u32{0} },
+                .{ .wait_on_indices = &[_]u32{1} },
+            };
+            const actualDumpOnA = comptime Scheduler.dumpDependencyChain(.onA);
+            for (&expectedDumpOnA, actualDumpOnA) |expected, actual| {
+                try std.testing.expectEqualSlices(
+                    u32,
+                    expected.wait_on_indices,
+                    actual.wait_on_indices,
+                );
+            }
         }
-    }
-    {
-        const expectedDumpOnB = [_]gen_dependency_chain.Dependency{
-            .{ .wait_on_indices = &[_]u32{} },
-            .{ .wait_on_indices = &[_]u32{} },
-            .{ .wait_on_indices = &[_]u32{0} },
-            .{ .wait_on_indices = &[_]u32{2} },
-        };
-        const actualDumpOnB = comptime Scheduler.dumpDependencyChain(.onB);
-        for (&expectedDumpOnB, actualDumpOnB) |expected, actual| {
-            try std.testing.expectEqualSlices(
-                u32,
-                expected.wait_on_indices,
-                actual.wait_on_indices,
-            );
+        {
+            const expectedDumpOnB = [_]gen_dependency_chain.Dependency{
+                .{ .wait_on_indices = &[_]u32{} },
+                .{ .wait_on_indices = &[_]u32{} },
+                .{ .wait_on_indices = &[_]u32{0} },
+                .{ .wait_on_indices = &[_]u32{2} },
+            };
+            const actualDumpOnB = comptime Scheduler.dumpDependencyChain(.onB);
+            for (&expectedDumpOnB, actualDumpOnB) |expected, actual| {
+                try std.testing.expectEqualSlices(
+                    u32,
+                    expected.wait_on_indices,
+                    actual.wait_on_indices,
+                );
+            }
         }
     }
 }
@@ -1064,36 +1079,38 @@ test "systems can accepts event related data" {
         v: u32,
     };
 
-    // define a system type
-    const System = struct {
-        pub fn addToA(q: *Queries.WriteA, add_value: AddValue) void {
-            while (q.next()) |item| {
-                item.a.value += add_value.v;
+    inline for (Queries.WriteA) |WriteA| {
+        // define a system type
+        const System = struct {
+            pub fn addToA(q: *WriteA, add_value: AddValue) void {
+                while (q.next()) |item| {
+                    item.a.value += add_value.v;
+                }
             }
-        }
-    };
+        };
 
-    var storage = try StorageStub.init(testing.allocator);
-    defer storage.deinit();
+        var storage = try StorageStub.init(testing.allocator);
+        defer storage.deinit();
 
-    var scheduler = try CreateScheduler(.{
-        Event("onFoo", .{System.addToA}),
-    }).init(.{
-        .pool_allocator = std.testing.allocator,
-        .query_submit_allocator = std.testing.allocator,
-    });
-    defer scheduler.deinit();
+        var scheduler = try CreateScheduler(.{
+            Event("onFoo", .{System.addToA}),
+        }).init(.{
+            .pool_allocator = std.testing.allocator,
+            .query_submit_allocator = std.testing.allocator,
+        });
+        defer scheduler.deinit();
 
-    const entity = try storage.createEntity(.{Testing.Component.A{ .value = 0 }});
+        const entity = try storage.createEntity(.{Testing.Component.A{ .value = 0 }});
 
-    const value = 42;
-    scheduler.dispatchEvent(&storage, .onFoo, AddValue{ .v = value });
-    scheduler.waitEvent(.onFoo);
+        const value = 42;
+        scheduler.dispatchEvent(&storage, .onFoo, AddValue{ .v = value });
+        scheduler.waitEvent(.onFoo);
 
-    try testing.expectEqual(
-        Testing.Component.A{ .value = value },
-        try storage.getComponent(entity, Testing.Component.A),
-    );
+        try testing.expectEqual(
+            Testing.Component.A{ .value = value },
+            try storage.getComponent(entity, Testing.Component.A),
+        );
+    }
 }
 
 test "systems can mutate event argument" {
@@ -1101,184 +1118,192 @@ test "systems can mutate event argument" {
         v: u32,
     };
 
-    // define a system type
-    const System = struct {
-        pub fn addToA(q: *Queries.ReadA, add_value: *AddValue) void {
-            while (q.next()) |item| {
-                add_value.v += item.a.value;
+    inline for (Queries.ReadA) |ReadA| {
+        // define a system type
+        const System = struct {
+            pub fn addToA(q: *ReadA, add_value: *AddValue) void {
+                while (q.next()) |item| {
+                    add_value.v += item.a.value;
+                }
             }
-        }
-    };
+        };
 
-    var storage = try StorageStub.init(testing.allocator);
-    defer storage.deinit();
+        var storage = try StorageStub.init(testing.allocator);
+        defer storage.deinit();
 
-    var scheduler = try CreateScheduler(.{
-        Event("onFoo", .{System.addToA}),
-    }).init(.{
-        .pool_allocator = std.testing.allocator,
-        .query_submit_allocator = std.testing.allocator,
-    });
-    defer scheduler.deinit();
+        var scheduler = try CreateScheduler(.{
+            Event("onFoo", .{System.addToA}),
+        }).init(.{
+            .pool_allocator = std.testing.allocator,
+            .query_submit_allocator = std.testing.allocator,
+        });
+        defer scheduler.deinit();
 
-    const value = 42;
-    _ = try storage.createEntity(.{Testing.Component.A{ .value = value }});
+        const value = 42;
+        _ = try storage.createEntity(.{Testing.Component.A{ .value = value }});
 
-    var event_argument = AddValue{ .v = 0 };
-    scheduler.dispatchEvent(&storage, .onFoo, &event_argument);
-    scheduler.waitEvent(.onFoo);
+        var event_argument = AddValue{ .v = 0 };
+        scheduler.dispatchEvent(&storage, .onFoo, &event_argument);
+        scheduler.waitEvent(.onFoo);
 
-    try testing.expectEqual(
-        value,
-        event_argument.v,
-    );
+        try testing.expectEqual(
+            value,
+            event_argument.v,
+        );
+    }
 }
 
 test "system can contain two queries" {
     const pass_value = 99;
     const fail_value = 100;
 
-    const SystemStruct = struct {
-        pub fn eventSystem(query_mut: *Queries.WriteA, query_const: *Queries.ReadA) void {
-            const mut_item = query_mut.next().?;
-            const const_item = query_const.next().?;
-            if (mut_item.a.value == const_item.a.value) {
-                mut_item.a.value = pass_value;
-            } else {
-                mut_item.a.value = fail_value;
+    inline for (Queries.WriteA, Queries.ReadA) |WriteA, ReadA| {
+        const SystemStruct = struct {
+            pub fn eventSystem(query_mut: *WriteA, query_const: *ReadA) void {
+                const mut_item = query_mut.next().?;
+                const const_item = query_const.next().?;
+                if (mut_item.a.value == const_item.a.value) {
+                    mut_item.a.value = pass_value;
+                } else {
+                    mut_item.a.value = fail_value;
+                }
             }
-        }
-    };
+        };
 
-    var storage = try StorageStub.init(testing.allocator);
-    defer storage.deinit();
+        var storage = try StorageStub.init(testing.allocator);
+        defer storage.deinit();
 
-    var scheduler = try CreateScheduler(.{Event("onFoo", .{
-        SystemStruct.eventSystem,
-    })}).init(.{
-        .pool_allocator = std.testing.allocator,
-        .query_submit_allocator = std.testing.allocator,
-    });
-    defer scheduler.deinit();
+        var scheduler = try CreateScheduler(.{Event("onFoo", .{
+            SystemStruct.eventSystem,
+        })}).init(.{
+            .pool_allocator = std.testing.allocator,
+            .query_submit_allocator = std.testing.allocator,
+        });
+        defer scheduler.deinit();
 
-    const entity = try storage.createEntity(.{Testing.Component.A{ .value = fail_value }});
+        const entity = try storage.createEntity(.{Testing.Component.A{ .value = fail_value }});
 
-    scheduler.dispatchEvent(&storage, .onFoo, .{});
-    scheduler.waitEvent(.onFoo);
+        scheduler.dispatchEvent(&storage, .onFoo, .{});
+        scheduler.waitEvent(.onFoo);
 
-    try testing.expectEqual(
-        Testing.Component.A{ .value = pass_value },
-        try storage.getComponent(entity, Testing.Component.A),
-    );
+        try testing.expectEqual(
+            Testing.Component.A{ .value = pass_value },
+            try storage.getComponent(entity, Testing.Component.A),
+        );
+    }
 }
 
 // NOTE: we don't use a cache anymore, but the test can stay for now since it might be good for
 //       detecting potential regressions
 test "event caching works" {
-    const Systems = struct {
-        pub fn incA(q: *Queries.WriteA) void {
-            while (q.next()) |item| {
-                item.a.value += 1;
+    inline for (Queries.WriteA, Queries.WriteB) |WriteA, WriteB| {
+        const Systems = struct {
+            pub fn incA(q: *WriteA) void {
+                while (q.next()) |item| {
+                    item.a.value += 1;
+                }
             }
-        }
 
-        pub fn incB(q: *Queries.WriteB) void {
-            while (q.next()) |item| {
-                item.b.value += 1;
+            pub fn incB(q: *WriteB) void {
+                while (q.next()) |item| {
+                    item.b.value += 1;
+                }
             }
-        }
-    };
-
-    var storage = try StorageStub.init(testing.allocator);
-    defer storage.deinit();
-
-    var scheduler = try CreateScheduler(.{
-        Event("onIncA", .{Systems.incA}),
-        Event("onIncB", .{Systems.incB}),
-    }).init(.{
-        .pool_allocator = std.testing.allocator,
-        .query_submit_allocator = std.testing.allocator,
-    });
-    defer scheduler.deinit();
-
-    const entity1 = try storage.createEntity(.{Testing.Component.A{ .value = 0 }});
-
-    scheduler.dispatchEvent(&storage, .onIncA, .{});
-    scheduler.waitEvent(.onIncA);
-
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 1 },
-        try storage.getComponent(entity1, Testing.Component.A),
-    );
-
-    // move entity to archetype A, B
-    try storage.setComponents(entity1, .{Testing.Component.B{ .value = 0 }});
-
-    scheduler.dispatchEvent(&storage, .onIncA, .{});
-    scheduler.waitEvent(.onIncA);
-
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 2 },
-        try storage.getComponent(entity1, Testing.Component.A),
-    );
-
-    scheduler.dispatchEvent(&storage, .onIncB, .{});
-    scheduler.waitEvent(.onIncB);
-
-    try testing.expectEqual(
-        Testing.Component.B{ .value = 1 },
-        try storage.getComponent(entity1, Testing.Component.B),
-    );
-
-    const entity2 = blk: {
-        const initial_state = AbcEntityType{
-            .a = .{ .value = 0 },
-            .b = .{ .value = 0 },
-            .c = .{},
         };
-        break :blk try storage.createEntity(initial_state);
-    };
 
-    scheduler.dispatchEvent(&storage, .onIncA, .{});
-    scheduler.waitEvent(.onIncA);
+        var storage = try StorageStub.init(testing.allocator);
+        defer storage.deinit();
 
-    try testing.expectEqual(
-        Testing.Component.A{ .value = 1 },
-        try storage.getComponent(entity2, Testing.Component.A),
-    );
+        var scheduler = try CreateScheduler(.{
+            Event("onIncA", .{Systems.incA}),
+            Event("onIncB", .{Systems.incB}),
+        }).init(.{
+            .pool_allocator = std.testing.allocator,
+            .query_submit_allocator = std.testing.allocator,
+        });
+        defer scheduler.deinit();
 
-    scheduler.dispatchEvent(&storage, .onIncB, .{});
-    scheduler.waitEvent(.onIncB);
+        const entity1 = try storage.createEntity(.{Testing.Component.A{ .value = 0 }});
 
-    try testing.expectEqual(
-        Testing.Component.B{ .value = 1 },
-        try storage.getComponent(entity2, Testing.Component.B),
-    );
+        scheduler.dispatchEvent(&storage, .onIncA, .{});
+        scheduler.waitEvent(.onIncA);
+
+        try testing.expectEqual(
+            Testing.Component.A{ .value = 1 },
+            try storage.getComponent(entity1, Testing.Component.A),
+        );
+
+        // move entity to archetype A, B
+        try storage.setComponents(entity1, .{Testing.Component.B{ .value = 0 }});
+
+        scheduler.dispatchEvent(&storage, .onIncA, .{});
+        scheduler.waitEvent(.onIncA);
+
+        try testing.expectEqual(
+            Testing.Component.A{ .value = 2 },
+            try storage.getComponent(entity1, Testing.Component.A),
+        );
+
+        scheduler.dispatchEvent(&storage, .onIncB, .{});
+        scheduler.waitEvent(.onIncB);
+
+        try testing.expectEqual(
+            Testing.Component.B{ .value = 1 },
+            try storage.getComponent(entity1, Testing.Component.B),
+        );
+
+        const entity2 = blk: {
+            const initial_state = AbcEntityType{
+                .a = .{ .value = 0 },
+                .b = .{ .value = 0 },
+                .c = .{},
+            };
+            break :blk try storage.createEntity(initial_state);
+        };
+
+        scheduler.dispatchEvent(&storage, .onIncA, .{});
+        scheduler.waitEvent(.onIncA);
+
+        try testing.expectEqual(
+            Testing.Component.A{ .value = 1 },
+            try storage.getComponent(entity2, Testing.Component.A),
+        );
+
+        scheduler.dispatchEvent(&storage, .onIncB, .{});
+        scheduler.waitEvent(.onIncB);
+
+        try testing.expectEqual(
+            Testing.Component.B{ .value = 1 },
+            try storage.getComponent(entity2, Testing.Component.B),
+        );
+    }
 }
 
 test "Event with no archetypes does not crash" {
-    const Systems = struct {
-        pub fn incA(q: *Queries.WriteA) void {
-            while (q.next()) |item| {
-                item.a.value += 1;
+    inline for (Queries.WriteA) |WriteA| {
+        const Systems = struct {
+            pub fn incA(q: *WriteA) void {
+                while (q.next()) |item| {
+                    item.a.value += 1;
+                }
             }
+        };
+
+        var storage = try StorageStub.init(testing.allocator);
+        defer storage.deinit();
+
+        var scheduler = try CreateScheduler(.{Event("onFoo", .{
+            Systems.incA,
+        })}).init(.{
+            .pool_allocator = std.testing.allocator,
+            .query_submit_allocator = std.testing.allocator,
+        });
+        defer scheduler.deinit();
+
+        for (0..100) |_| {
+            scheduler.dispatchEvent(&storage, .onFoo, .{});
+            scheduler.waitEvent(.onFoo);
         }
-    };
-
-    var storage = try StorageStub.init(testing.allocator);
-    defer storage.deinit();
-
-    var scheduler = try CreateScheduler(.{Event("onFoo", .{
-        Systems.incA,
-    })}).init(.{
-        .pool_allocator = std.testing.allocator,
-        .query_submit_allocator = std.testing.allocator,
-    });
-    defer scheduler.deinit();
-
-    for (0..100) |_| {
-        scheduler.dispatchEvent(&storage, .onFoo, .{});
-        scheduler.waitEvent(.onFoo);
     }
 }
 
@@ -1288,44 +1313,46 @@ test "reproducer: Scheduler does not include new components to systems previousl
         count: u32,
     };
 
-    const Systems = struct {
-        pub fn addToTracker(q: *Queries.WriteA, tracker: *Tracker) void {
-            while (q.next()) |item| {
-                tracker.count += item.a.value;
+    inline for (Queries.WriteA) |WriteA| {
+        const Systems = struct {
+            pub fn addToTracker(q: *WriteA, tracker: *Tracker) void {
+                while (q.next()) |item| {
+                    tracker.count += item.a.value;
+                }
             }
-        }
-    };
+        };
 
-    const RepStorage = CreateStorage(Testing.AllComponentsTuple);
-    const Scheduler = CreateScheduler(.{Event("onFoo", .{Systems.addToTracker})});
+        const RepStorage = CreateStorage(Testing.AllComponentsTuple);
+        const Scheduler = CreateScheduler(.{Event("onFoo", .{Systems.addToTracker})});
 
-    var storage = try RepStorage.init(testing.allocator);
-    defer storage.deinit();
+        var storage = try RepStorage.init(testing.allocator);
+        defer storage.deinit();
 
-    var scheduler = try Scheduler.init(.{
-        .pool_allocator = std.testing.allocator,
-        .query_submit_allocator = std.testing.allocator,
-    });
-    defer scheduler.deinit();
+        var scheduler = try Scheduler.init(.{
+            .pool_allocator = std.testing.allocator,
+            .query_submit_allocator = std.testing.allocator,
+        });
+        defer scheduler.deinit();
 
-    const inital_state = .{Testing.Component.A{ .value = 1 }};
-    _ = try storage.createEntity(inital_state);
-    _ = try storage.createEntity(inital_state);
+        const inital_state = .{Testing.Component.A{ .value = 1 }};
+        _ = try storage.createEntity(inital_state);
+        _ = try storage.createEntity(inital_state);
 
-    var tracker = Tracker{ .count = 0 };
+        var tracker = Tracker{ .count = 0 };
 
-    scheduler.dispatchEvent(&storage, .onFoo, &tracker);
-    scheduler.waitEvent(.onFoo);
+        scheduler.dispatchEvent(&storage, .onFoo, &tracker);
+        scheduler.waitEvent(.onFoo);
 
-    _ = try storage.createEntity(inital_state);
-    _ = try storage.createEntity(inital_state);
+        _ = try storage.createEntity(inital_state);
+        _ = try storage.createEntity(inital_state);
 
-    scheduler.dispatchEvent(&storage, .onFoo, &tracker);
-    scheduler.waitEvent(.onFoo);
+        scheduler.dispatchEvent(&storage, .onFoo, &tracker);
+        scheduler.waitEvent(.onFoo);
 
-    // at this point we expect tracker to have a count of:
-    // t1: 1 + 1 = 2
-    // t2: t1 + 1 + 1 + 1 + 1
-    // = 6
-    try testing.expectEqual(@as(u32, 6), tracker.count);
+        // at this point we expect tracker to have a count of:
+        // t1: 1 + 1 = 2
+        // t2: t1 + 1 + 1 + 1 + 1
+        // = 6
+        try testing.expectEqual(@as(u32, 6), tracker.count);
+    }
 }
