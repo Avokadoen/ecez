@@ -588,6 +588,8 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///                      A field does not have to be a component if it is of type Entity and it's the first
         ///                      field.
         ///
+        ///     - include_types: All the components that should be included from the query result
+        ///
         ///     - exclude_types: All the components that should be excluded from the query result
         ///
         /// Example:
@@ -599,7 +601,39 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         /// }
         /// ```
         pub fn Query(comptime ResultItem: type, comptime include_types: anytype, comptime exclude_types: anytype) type {
-            return @import("query.zig").Create(Storage, ResultItem, include_types, exclude_types);
+            const any_result_query = false;
+
+            return @import("query.zig").Create(Storage, ResultItem, include_types, exclude_types, any_result_query);
+        }
+
+        /// Query for any entity with components.
+        ///
+        /// This should not be used to iterate. Use normal Query instead for this use case.
+        /// This query type should be used when a single or few items are desired.
+        ///
+        /// Parameters:
+        ///
+        ///     - ResultItem:    All the components you would like to iterate over in a single struct.
+        ///                      Each component in the struct will belong to the same entity.
+        ///                      A field does not have to be a component if it is of type Entity and it's the first
+        ///                      field.
+        ///
+        ///     - include_types: All the components that should be included from the query result
+        ///
+        ///     - exclude_types: All the components that should be excluded from the query result
+        ///
+        /// Example:
+        /// ```
+        /// var any_living = Storage.QueryAnyItem(struct{ entity: Entity, a: Health }, .{LivingTag} .{DeadTag}).submit(std.testing.allocator, &storage);
+        ///
+        /// const living = any_living.getAny();
+        /// std.debug.print("{d}", .{item.entity});
+        /// std.debug.print("{any}", .{item.a});
+        /// ```
+        pub fn QueryAny(comptime ResultItem: type, comptime include_types: anytype, comptime exclude_types: anytype) type {
+            const any_result_query = true;
+
+            return @import("query.zig").Create(Storage, ResultItem, include_types, exclude_types, any_result_query);
         }
 
         /// Retrieve the dense set for a component type.
@@ -1383,9 +1417,9 @@ test "query with single result component type works" {
         });
     }
 
-    {
+    inline for (0..Testing.query_type_count) |query_type_index| {
         var index: usize = 0;
-        var a_iter = try Queries.ReadA.submit(std.testing.allocator, &storage);
+        var a_iter = try Queries.ReadA[query_type_index].submit(std.testing.allocator, &storage);
         defer a_iter.deinit(std.testing.allocator);
 
         while (a_iter.next()) |item| {
@@ -1409,8 +1443,8 @@ test "query skip works" {
         });
     }
 
-    {
-        var a_iter = try Queries.ReadA.submit(std.testing.allocator, &storage);
+    inline for (Queries.ReadA) |ReadA| {
+        var a_iter = try ReadA.submit(std.testing.allocator, &storage);
         defer a_iter.deinit(std.testing.allocator);
 
         var index: usize = 50;
@@ -1437,8 +1471,8 @@ test "query reset works" {
         });
     }
 
-    {
-        var a_iter = try Queries.ReadA.submit(std.testing.allocator, &storage);
+    inline for (Queries.ReadA) |ReadA| {
+        var a_iter = try ReadA.submit(std.testing.allocator, &storage);
         defer a_iter.deinit(std.testing.allocator);
 
         var index: usize = 0;
@@ -1473,8 +1507,8 @@ test "query with multiple result component types works" {
         });
     }
 
-    {
-        var a_b_iter = try Queries.ReadAReadB.submit(std.testing.allocator, &storage);
+    inline for (Queries.ReadAReadB) |ReadAReadB| {
+        var a_b_iter = try ReadAReadB.submit(std.testing.allocator, &storage);
         defer a_b_iter.deinit(std.testing.allocator);
 
         var index: usize = 0;
@@ -1496,35 +1530,39 @@ test "query with single result component ptr type works" {
     var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
-    for (0..100) |index| {
-        _ = try storage.createEntity(AbEntityType{
-            .a = .{ .value = @as(u32, @intCast(index)) },
-            .b = .{ .value = @as(u8, @intCast(index)) },
-        });
-    }
+    inline for (Queries.WriteA, Queries.ReadA) |WriteA, ReadA| {
+        storage.clearRetainingCapacity();
 
-    {
-        var index: usize = 0;
-        var a_iter = try Queries.WriteA.submit(std.testing.allocator, &storage);
-        defer a_iter.deinit(std.testing.allocator);
-
-        while (a_iter.next()) |item| {
-            item.a.value += 1;
-            index += 1;
+        for (0..100) |index| {
+            _ = try storage.createEntity(AbEntityType{
+                .a = .{ .value = @as(u32, @intCast(index)) },
+                .b = .{ .value = @as(u8, @intCast(index)) },
+            });
         }
-    }
 
-    {
-        var index: usize = 1;
-        var a_iter = try Queries.ReadA.submit(std.testing.allocator, &storage);
-        defer a_iter.deinit(std.testing.allocator);
+        {
+            var index: usize = 0;
+            var a_iter = try WriteA.submit(std.testing.allocator, &storage);
+            defer a_iter.deinit(std.testing.allocator);
 
-        while (a_iter.next()) |item| {
-            try std.testing.expectEqual(Testing.Component.A{
-                .value = @as(u32, @intCast(index)),
-            }, item.a);
+            while (a_iter.next()) |item| {
+                item.a.value += 1;
+                index += 1;
+            }
+        }
 
-            index += 1;
+        {
+            var index: usize = 1;
+            var a_iter = try ReadA.submit(std.testing.allocator, &storage);
+            defer a_iter.deinit(std.testing.allocator);
+
+            while (a_iter.next()) |item| {
+                try std.testing.expectEqual(Testing.Component.A{
+                    .value = @as(u32, @intCast(index)),
+                }, item.a);
+
+                index += 1;
+            }
         }
     }
 }
@@ -1546,12 +1584,15 @@ test "query with single result component and single exclude works" {
         });
     }
 
-    {
-        var iter = try StorageStub.Query(
-            struct { a: Testing.Component.A },
-            .{},
-            .{Testing.Component.B},
-        ).submit(std.testing.allocator, &storage);
+    const TQueries = Testing.QueryAndQueryAny(
+        StorageStub,
+        struct { a: Testing.Component.A },
+        .{},
+        .{Testing.Component.B},
+    );
+
+    inline for (TQueries) |Query| {
+        var iter = try Query.submit(std.testing.allocator, &storage);
 
         defer iter.deinit(std.testing.allocator);
 
@@ -1591,12 +1632,15 @@ test "query with result of single component type and multiple exclude works" {
         });
     }
 
-    {
-        var iter = try StorageStub.Query(
-            struct { a: Testing.Component.A },
-            .{},
-            .{ Testing.Component.B, Testing.Component.C },
-        ).submit(std.testing.allocator, &storage);
+    const TQueries = Testing.QueryAndQueryAny(
+        StorageStub,
+        struct { a: Testing.Component.A },
+        .{},
+        .{ Testing.Component.B, Testing.Component.C },
+    );
+
+    inline for (TQueries) |Query| {
+        var iter = try Query.submit(std.testing.allocator, &storage);
 
         defer iter.deinit(std.testing.allocator);
 
@@ -1636,12 +1680,15 @@ test "query with result of single component, one zero sized exclude and one size
         });
     }
 
-    {
-        var iter = try StorageStub.Query(
-            struct { a: Testing.Component.A },
-            .{},
-            .{ Testing.Component.C, Testing.Component.B },
-        ).submit(std.testing.allocator, &storage);
+    const TQueries = Testing.QueryAndQueryAny(
+        StorageStub,
+        struct { a: Testing.Component.A },
+        .{},
+        .{ Testing.Component.C, Testing.Component.B },
+    );
+
+    inline for (TQueries) |Query| {
+        var iter = try Query.submit(std.testing.allocator, &storage);
 
         defer iter.deinit(std.testing.allocator);
 
@@ -1676,15 +1723,15 @@ test "query with single result component, single include and single (tag compone
         });
     }
 
-    {
-        var iter = try StorageStub.Query(
-            struct { a: Testing.Component.A },
-            .{Testing.Component.B},
-            .{Testing.Component.C},
-        ).submit(
-            std.testing.allocator,
-            &storage,
-        );
+    const TQueries = Testing.QueryAndQueryAny(
+        StorageStub,
+        struct { a: Testing.Component.A },
+        .{Testing.Component.B},
+        .{Testing.Component.C},
+    );
+
+    inline for (TQueries) |Query| {
+        var iter = try Query.submit(std.testing.allocator, &storage);
         defer iter.deinit(std.testing.allocator);
 
         var index: usize = 100;
@@ -1715,15 +1762,18 @@ test "query with entity only works" {
         });
     }
 
-    {
-        var iter = try StorageStub.Query(
-            struct {
-                entity: Entity,
-                a: Testing.Component.A,
-            },
-            .{},
-            .{},
-        ).submit(std.testing.allocator, &storage);
+    const TQueries = Testing.QueryAndQueryAny(
+        StorageStub,
+        struct {
+            entity: Entity,
+            a: Testing.Component.A,
+        },
+        .{},
+        .{},
+    );
+
+    inline for (TQueries) |Query| {
+        var iter = try Query.submit(std.testing.allocator, &storage);
 
         defer iter.deinit(std.testing.allocator);
 
@@ -1753,68 +1803,78 @@ test "query with result entity, components and exclude only works" {
     }
 
     {
-        // Test with entity as first argument
-        var iter = try StorageStub.Query(
+        const TQueries = Testing.QueryAndQueryAny(
+            StorageStub,
             struct {
                 entity: Entity,
                 a: Testing.Component.A,
             },
             .{},
             .{Testing.Component.B},
-        ).submit(std.testing.allocator, &storage);
+        );
 
-        defer iter.deinit(std.testing.allocator);
+        inline for (TQueries) |Query| {
+            // Test with entity as first argument
+            var iter = try Query.submit(std.testing.allocator, &storage);
 
-        var index: usize = 0;
-        while (iter.next()) |item| {
-            try std.testing.expectEqual(
-                entities[index],
-                item.entity,
-            );
+            defer iter.deinit(std.testing.allocator);
 
-            try std.testing.expectEqual(
-                Testing.Component.A{
-                    .value = @as(u32, @intCast(index)),
-                },
-                item.a,
-            );
-            index += 1;
+            var index: usize = 0;
+            while (iter.next()) |item| {
+                try std.testing.expectEqual(
+                    entities[index],
+                    item.entity,
+                );
+
+                try std.testing.expectEqual(
+                    Testing.Component.A{
+                        .value = @as(u32, @intCast(index)),
+                    },
+                    item.a,
+                );
+                index += 1;
+            }
         }
     }
 
     {
-        // Test with entity as second argument
-        var iter = try StorageStub.Query(
+        const TQueries = Testing.QueryAndQueryAny(
+            StorageStub,
             struct {
                 a: Testing.Component.A,
                 entity: Entity,
             },
             .{},
             .{Testing.Component.B},
-        ).submit(std.testing.allocator, &storage);
+        );
 
-        defer iter.deinit(std.testing.allocator);
+        inline for (TQueries) |Query| {
+            // Test with entity as second argument
+            var iter = try Query.submit(std.testing.allocator, &storage);
 
-        var index: usize = 0;
-        while (iter.next()) |item| {
-            try std.testing.expectEqual(
-                entities[index],
-                item.entity,
-            );
+            defer iter.deinit(std.testing.allocator);
 
-            try std.testing.expectEqual(
-                Testing.Component.A{
-                    .value = @as(u32, @intCast(index)),
-                },
-                item.a,
-            );
-            index += 1;
+            var index: usize = 0;
+            while (iter.next()) |item| {
+                try std.testing.expectEqual(
+                    entities[index],
+                    item.entity,
+                );
+
+                try std.testing.expectEqual(
+                    Testing.Component.A{
+                        .value = @as(u32, @intCast(index)),
+                    },
+                    item.a,
+                );
+                index += 1;
+            }
         }
     }
 
     {
-        // Test with entity as "sandwiched" between A and B
-        var iter = try StorageStub.Query(
+        const TQueries = Testing.QueryAndQueryAny(
+            StorageStub,
             struct {
                 a: Testing.Component.A,
                 entity: Entity,
@@ -1822,31 +1882,36 @@ test "query with result entity, components and exclude only works" {
             },
             .{},
             .{},
-        ).submit(std.testing.allocator, &storage);
+        );
 
-        defer iter.deinit(std.testing.allocator);
+        inline for (TQueries) |Query| {
+            // Test with entity as "sandwiched" between A and B
+            var iter = try Query.submit(std.testing.allocator, &storage);
 
-        var index: usize = 100;
-        while (iter.next()) |item| {
-            try std.testing.expectEqual(
-                entities[index],
-                item.entity,
-            );
+            defer iter.deinit(std.testing.allocator);
 
-            try std.testing.expectEqual(
-                Testing.Component.A{
-                    .value = @as(u32, @intCast(index)),
-                },
-                item.a,
-            );
+            var index: usize = 100;
+            while (iter.next()) |item| {
+                try std.testing.expectEqual(
+                    entities[index],
+                    item.entity,
+                );
 
-            try std.testing.expectEqual(
-                Testing.Component.B{
-                    .value = @as(u8, @intCast(index)),
-                },
-                item.b,
-            );
-            index += 1;
+                try std.testing.expectEqual(
+                    Testing.Component.A{
+                        .value = @as(u32, @intCast(index)),
+                    },
+                    item.a,
+                );
+
+                try std.testing.expectEqual(
+                    Testing.Component.B{
+                        .value = @as(u8, @intCast(index)),
+                    },
+                    item.b,
+                );
+                index += 1;
+            }
         }
     }
 }
@@ -1868,15 +1933,18 @@ test "query wuth include field works" {
         });
     }
 
-    {
-        var iter = try StorageStub.Query(
-            struct {
-                entity: Entity,
-                a: Testing.Component.A,
-            },
-            .{Testing.Component.B},
-            .{},
-        ).submit(std.testing.allocator, &storage);
+    const TQueries = Testing.QueryAndQueryAny(
+        StorageStub,
+        struct {
+            entity: Entity,
+            a: Testing.Component.A,
+        },
+        .{Testing.Component.B},
+        .{},
+    );
+
+    inline for (TQueries) |Query| {
+        var iter = try Query.submit(std.testing.allocator, &storage);
 
         defer iter.deinit(std.testing.allocator);
 
@@ -2156,7 +2224,8 @@ test "reproducer: MineSweeper index out of bound caused by incorrect mapping of 
     };
     _ = try storage.createEntity(Node{});
 
-    const Query = RepStorage.Query(
+    const TQueries = Testing.QueryAndQueryAny(
+        RepStorage,
         struct {
             position: transform.Position,
             rotation: transform.Rotation,
@@ -2168,8 +2237,11 @@ test "reproducer: MineSweeper index out of bound caused by incorrect mapping of 
         // exclude type
         .{Parent},
     );
-    var iter = try Query.submit(std.testing.allocator, &storage);
-    defer iter.deinit(std.testing.allocator);
 
-    try testing.expect(iter.next() != null);
+    inline for (TQueries) |Query| {
+        var iter = try Query.submit(std.testing.allocator, &storage);
+        defer iter.deinit(std.testing.allocator);
+
+        try testing.expect(iter.next() != null);
+    }
 }
