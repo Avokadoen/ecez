@@ -1567,6 +1567,69 @@ test "query with single result component ptr type works" {
     }
 }
 
+test "query with interleaved results works" {
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
+
+    var rem_5_index: usize = 0;
+    var else_index: usize = 0;
+    {
+        for (0..300) |index| {
+            if (@rem(index, 5) == 0) {
+                _ = try storage.createEntity(AbEntityType{
+                    .a = .{ .value = @as(u32, @intCast(rem_5_index)) },
+                    .b = .{ .value = @as(u8, @intCast(rem_5_index)) },
+                });
+
+                rem_5_index += 1;
+            } else {
+                _ = try storage.createEntity(.{
+                    Testing.Component.A{ .value = @as(u32, @intCast(else_index)) },
+                });
+
+                else_index += 1;
+            }
+        }
+    }
+
+    inline for (Queries.ReadAReadB, Queries.ReadANotB) |ReadAReadB, ReadANotB| {
+        {
+            var index: usize = 0;
+            var a_b_iter = try ReadAReadB.submit(std.testing.allocator, &storage);
+            defer a_b_iter.deinit(std.testing.allocator);
+
+            while (a_b_iter.next()) |item| {
+                try std.testing.expectEqual(Testing.Component.A{
+                    .value = @as(u32, @intCast(index)),
+                }, item.a);
+                try std.testing.expectEqual(Testing.Component.B{
+                    .value = @as(u8, @intCast(index)),
+                }, item.b);
+
+                index += 1;
+            }
+
+            try std.testing.expectEqual(rem_5_index, index);
+        }
+
+        {
+            var index: usize = 0;
+            var a_iter = try ReadANotB.submit(std.testing.allocator, &storage);
+            defer a_iter.deinit(std.testing.allocator);
+
+            while (a_iter.next()) |item| {
+                try std.testing.expectEqual(Testing.Component.A{
+                    .value = @as(u32, @intCast(index)),
+                }, item.a);
+
+                index += 1;
+            }
+
+            try std.testing.expectEqual(else_index, index);
+        }
+    }
+}
+
 test "query with single result component and single exclude works" {
     var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();

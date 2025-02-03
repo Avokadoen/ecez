@@ -88,6 +88,15 @@ pub const Queries = struct {
         .{},
     );
 
+    pub const ReadANotB = QueryAndQueryAny(
+        StorageStub,
+        struct {
+            a: Component.A,
+        },
+        .{},
+        .{Component.B},
+    );
+
     pub const WriteA = QueryAndQueryAny(
         StorageStub,
         struct {
