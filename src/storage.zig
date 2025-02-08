@@ -115,7 +115,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const this_id = self.number_of_entities.fetchAdd(1, .acq_rel);
 
             // Ensure capacity first to avoid errdefer
-            inline for (field_info.Struct.fields) |field| {
+            inline for (field_info.@"struct".fields) |field| {
                 const Component = field.type;
 
                 // Grow sparse set
@@ -132,7 +132,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             }
 
             // For each component in the new entity
-            inline for (field_info.Struct.fields) |field| {
+            inline for (field_info.@"struct".fields) |field| {
                 const Component = field.type;
                 const component: Component = @field(
                     entity_state,
@@ -183,7 +183,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const field_info = @typeInfo(@TypeOf(struct_of_components));
 
             // Ensure capacity first to avoid errdefer
-            inline for (field_info.Struct.fields) |field| {
+            inline for (field_info.@"struct".fields) |field| {
                 const Component = field.type;
                 {
                     var sparse_set = self.getSparseSetPtr(Component);
@@ -196,7 +196,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 }
             }
 
-            inline for (field_info.Struct.fields) |field| {
+            inline for (field_info.@"struct".fields) |field| {
                 const Component = field.type;
                 const component: Component = @field(
                     struct_of_components,
@@ -235,7 +235,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             );
 
             const field_info = @typeInfo(@TypeOf(struct_of_remove_components));
-            inline for (field_info.Struct.fields) |field| {
+            inline for (field_info.@"struct".fields) |field| {
                 const ComponentToRemove = @field(struct_of_remove_components, field.name);
 
                 const sparse_set = self.getSparseSetPtr(ComponentToRemove);
@@ -271,7 +271,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
             const field_info = @typeInfo(@TypeOf(components));
 
-            inline for (field_info.Struct.fields) |field| {
+            inline for (field_info.@"struct".fields) |field| {
                 const ComponentToCheck = @field(components, field.name);
 
                 if (self.getSparseSetConstPtr(ComponentToCheck).isSet(entity.id) == false) {
@@ -306,11 +306,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
             var result: Components = undefined;
             const field_info = @typeInfo(Components);
-            if (field_info != .Struct) {
+            if (field_info != .@"struct") {
                 @compileError(@src().fn_name ++ " expect Components type arg to be a struct of components");
             }
 
-            inline for (field_info.Struct.fields) |field| {
+            inline for (field_info.@"struct".fields) |field| {
                 const component_to_get = CompileReflect.compactComponentRequest(field.type);
 
                 const sparse_set = self.getSparseSetConstPtr(component_to_get.type);
@@ -431,7 +431,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     // Validate that the correct access was requested in subset type
                     comptime {
                         const entity_state_info = @typeInfo(@TypeOf(entity_state));
-                        get_validation_loop: for (entity_state_info.Struct.fields) |field| {
+                        get_validation_loop: for (entity_state_info.@"struct".fields) |field| {
                             const FieldType = field.type;
                             for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
                                 if (FieldType == InnerSubsetComp) {
@@ -456,7 +456,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     // Validate that the correct access was requested in subset type
                     comptime {
                         const set_info = @typeInfo(@TypeOf(struct_of_components));
-                        get_validation_loop: for (set_info.Struct.fields) |field| {
+                        get_validation_loop: for (set_info.@"struct".fields) |field| {
                             const FieldType = field.type;
                             for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
                                 if (FieldType == InnerSubsetComp) {
@@ -481,7 +481,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     // Validate that the correct access was requested in subset type
                     comptime {
                         const unset_info = @typeInfo(@TypeOf(struct_of_remove_components));
-                        get_validation_loop: for (unset_info.Struct.fields) |field| {
+                        get_validation_loop: for (unset_info.@"struct".fields) |field| {
                             const FieldType = @field(struct_of_remove_components, field.name);
                             for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
                                 if (FieldType == InnerSubsetComp) {
@@ -516,7 +516,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     // Validate that the correct access was requested in subset type
                     comptime {
                         const get_info = @typeInfo(Components);
-                        get_validation_loop: for (get_info.Struct.fields) |field| {
+                        get_validation_loop: for (get_info.@"struct".fields) |field| {
                             const component_to_get = CompileReflect.compactComponentRequest(field.type);
 
                             for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
@@ -694,11 +694,11 @@ pub const CompileReflect = struct {
         const type_info = @typeInfo(ComponentPtrOrValueType);
 
         return switch (type_info) {
-            .Struct => .{
+            .@"struct" => .{
                 .type = ComponentPtrOrValueType,
                 .attr = .value,
             },
-            .Pointer => |ptr_info| .{
+            .pointer => |ptr_info| .{
                 .type = ptr_info.child,
                 .attr = .ptr,
             },
@@ -714,12 +714,12 @@ pub const CompileReflect = struct {
             field.* = std.builtin.Type.StructField{
                 .name = @typeName(Component),
                 .type = SparseSet,
-                .default_value = @ptrCast(&default_value),
+                .default_value_ptr = @ptrCast(&default_value),
                 .is_comptime = false,
                 .alignment = @alignOf(SparseSet),
             };
         }
-        const group_type = std.builtin.Type{ .Struct = .{
+        const group_type = std.builtin.Type{ .@"struct" = .{
             .layout = .auto,
             .fields = &struct_fields,
             .decls = &[_]std.builtin.Type.Declaration{},
@@ -742,14 +742,14 @@ pub const CompileReflect = struct {
             struct_fields[non_zero_component_count] = std.builtin.Type.StructField{
                 .name = @typeName(Component),
                 .type = DenseSet,
-                .default_value = @ptrCast(&default_value),
+                .default_value_ptr = @ptrCast(&default_value),
                 .is_comptime = false,
                 .alignment = @alignOf(DenseSet),
             };
 
             non_zero_component_count += 1;
         }
-        const group_type = std.builtin.Type{ .Struct = .{
+        const group_type = std.builtin.Type{ .@"struct" = .{
             .layout = .auto,
             .fields = struct_fields[0..non_zero_component_count],
             .decls = &[_]std.builtin.Type.Declaration{},
@@ -770,14 +770,14 @@ pub const CompileReflect = struct {
             struct_fields[non_zero_component_count] = std.builtin.Type.StructField{
                 .name = @typeName(Component),
                 .type = *const DenseSet,
-                .default_value = null,
+                .default_value_ptr = null,
                 .is_comptime = false,
                 .alignment = @alignOf(*DenseSet),
             };
 
             non_zero_component_count += 1;
         }
-        const group_type = std.builtin.Type{ .Struct = .{
+        const group_type = std.builtin.Type{ .@"struct" = .{
             .layout = .auto,
             .fields = struct_fields[0..non_zero_component_count],
             .decls = &[_]std.builtin.Type.Declaration{},
@@ -789,21 +789,21 @@ pub const CompileReflect = struct {
     /// Produce a flat array of component types if the 'components' tuple is valid
     fn verifyComponentTuple(comptime components: anytype) return_type_blk: {
         const components_info = @typeInfo(@TypeOf(components));
-        if (components_info != .Struct) {
+        if (components_info != .@"struct") {
             @compileError("components was not a tuple of types");
         }
 
-        break :return_type_blk [components_info.Struct.fields.len]type;
+        break :return_type_blk [components_info.@"struct".fields.len]type;
     } {
         const components_info = @typeInfo(@TypeOf(components));
-        var field_types: [components_info.Struct.fields.len]type = undefined;
-        for (&field_types, components_info.Struct.fields, 0..) |*field_type, field, component_index| {
-            if (@typeInfo(field.type) != .Type) {
+        var field_types: [components_info.@"struct".fields.len]type = undefined;
+        for (&field_types, components_info.@"struct".fields, 0..) |*field_type, field, component_index| {
+            if (@typeInfo(field.type) != .type) {
                 @compileError("components must be a struct of types, field '" ++ field.name ++ "' was " ++ @typeName(field.type));
             }
 
             const compo_field_info = @typeInfo(components[component_index]);
-            if (compo_field_info != .Struct and compo_field_info != .Pointer) {
+            if (compo_field_info != .@"struct" and compo_field_info != .pointer) {
                 @compileError("component types must be a struct or pointer, field '" ++ field.name ++ "' was '" ++ @typeName(components[component_index]));
             }
 
@@ -821,7 +821,7 @@ pub const CompileReflect = struct {
         const TupleUnwrapped = if (@TypeOf(type_tuple) == type) type_tuple else @TypeOf(type_tuple);
 
         const type_tuple_info = @typeInfo(TupleUnwrapped);
-        field_loop: for (type_tuple_info.Struct.fields) |field| {
+        field_loop: for (type_tuple_info.@"struct".fields) |field| {
             const FieldTypeUnwrapped = if (field.type == type) @field(type_tuple, field.name) else field.type;
             const InnerType = compactComponentRequest(FieldTypeUnwrapped).type;
 

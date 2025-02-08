@@ -36,17 +36,17 @@ pub fn buildDependencyList(
         access: []const Access,
     };
 
-    const systems_fields = @typeInfo(@TypeOf(systems)).Struct.fields;
+    const systems_fields = @typeInfo(@TypeOf(systems)).@"struct".fields;
 
     const final_systems_dependencies = comptime calc_dependencies_blk: {
         var graph: [system_count]Node = undefined;
         system_loop: for (&graph, systems_fields) |*this_node, system_field_info| {
             const system_info = @typeInfo(system_field_info.type);
-            if (system_info != .Fn) {
+            if (system_info != .@"fn") {
                 continue :system_loop;
             }
 
-            const params = system_info.Fn.params;
+            const params = system_info.@"fn".params;
             var access_params: [params.len]std.builtin.Type.Fn.Param = undefined;
             var access_params_len: usize = 0;
             var access_count = 0;
@@ -220,7 +220,7 @@ fn globalArrayVariableRefWorkaround(array: anytype) @TypeOf(array) {
 
     var tmp: ArrayType = undefined;
     switch (arr_info) {
-        .Array => {
+        .array => {
             @memcpy(&tmp, &array);
         },
         else => @compileError("ecez bug: invalid " ++ @src().fn_name ++ " array type" ++ @typeName(ArrayType)),

@@ -98,7 +98,7 @@ pub fn main() anyerror!void {
     defer scheduler.deinit();
 
     const init_seed: u64 = @intCast(std.time.timestamp());
-    var rng = std.rand.DefaultPrng.init(init_seed);
+    var rng = std.Random.DefaultPrng.init(init_seed);
 
     // initialize the output buffer on the stack
     var output_buffer: [dimension_x * dimension_y * characters_per_cell + dimension_y]u8 = undefined;
