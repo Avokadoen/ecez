@@ -34,32 +34,31 @@ pub fn CreateScheduler(comptime events: anytype) type {
     const event_count = CompileReflect.countAndVerifyEvents(events);
 
     // Store each individual ResetEvent
-    const EventsInFlight = blk: {
+    const EventsInFlight = comptime blk: {
         // TODO: move to meta
         const Type = std.builtin.Type;
         var fields: [event_count]Type.StructField = undefined;
-        inline for (&fields, events, 0..) |*field, event, i| {
+        for (&fields, events, 0..) |*field, event, i| {
             const system_count = CompileReflect.countAndVerifySystems(event);
 
             const default_value = [_]ResetEvent{.{}} ** system_count;
-            var num_buf: [8:0]u8 = undefined;
-            const name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable;
-            num_buf[name.len] = 0;
+            const name = CompileReflect.getEventsInFlightFieldName(i);
 
             field.* = Type.StructField{
                 .name = name[0.. :0],
                 .type = [system_count]ResetEvent,
-                .default_value = @ptrCast(&default_value),
+                .default_value_ptr = @ptrCast(&default_value),
                 .is_comptime = false,
                 .alignment = @alignOf([system_count]ResetEvent),
             };
         }
 
-        break :blk @Type(Type{ .Struct = .{
+        break :blk @Type(Type{ .@"struct" = Type.Struct{
             .layout = .auto,
+            .backing_integer = null,
             .fields = &fields,
             .decls = &[0]Type.Declaration{},
-            .is_tuple = true,
+            .is_tuple = false,
         } });
     };
 
@@ -90,7 +89,9 @@ pub fn CreateScheduler(comptime events: anytype) type {
 
             var events_in_flight = EventsInFlight{};
             inline for (0..event_count) |event_index| {
-                for (&events_in_flight[event_index]) |*system_in_flight| {
+                const field_name = comptime CompileReflect.getEventsInFlightFieldName(event_index);
+                const systems_in_flight: []std.Thread.ResetEvent = &@field(events_in_flight, field_name);
+                for (systems_in_flight) |*system_in_flight| {
                     system_in_flight.set();
                 }
             }
@@ -131,11 +132,11 @@ pub fn CreateScheduler(comptime events: anytype) type {
             const Storage = get_storage_type_blk: {
                 const StoragePtr = @TypeOf(storage);
                 const storage_ptr = @typeInfo(StoragePtr);
-                if (storage_ptr != .Pointer) {
+                if (storage_ptr != .pointer) {
                     @compileError(@src().fn_name ++ " expected argument storage to be pointer to a ecez.Storage, got " ++ @typeName(StoragePtr));
                 }
 
-                const child_type = storage_ptr.Pointer.child;
+                const child_type = storage_ptr.pointer.child;
                 const is_storage_type = check_if_storage_type_blk: {
                     if (@hasDecl(child_type, "EcezType") == false) {
                         break :check_if_storage_type_blk false;
@@ -155,9 +156,15 @@ pub fn CreateScheduler(comptime events: anytype) type {
                 break :get_storage_type_blk child_type;
             };
 
-            const event_index = @intFromEnum(event);
-            const event_in_flight = &self.events_in_flight[event_index];
-            const triggered_event = events[event_index];
+            const event_in_flight, const triggered_event = extract_event_blk: {
+                const event_index = @intFromEnum(event);
+                const event_field_name = comptime CompileReflect.getEventsInFlightFieldName(event_index);
+
+                break :extract_event_blk .{
+                    &@field(self.events_in_flight, event_field_name),
+                    events[event_index],
+                };
+            };
 
             const event_dependencies = @field(Dependencies, triggered_event._name);
             inline for (triggered_event._systems, event_dependencies, 0..) |system, system_dependencies, system_index| {
@@ -196,7 +203,8 @@ pub fn CreateScheduler(comptime events: anytype) type {
             const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.scheduler);
             defer zone.End();
 
-            const event_in_flight = &self.events_in_flight[@intFromEnum(event)];
+            const event_field_name = comptime CompileReflect.getEventsInFlightFieldName(@intFromEnum(event));
+            const event_in_flight = &@field(self.events_in_flight, event_field_name);
             for (event_in_flight) |*system_event| {
                 system_event.wait();
             }
@@ -243,8 +251,8 @@ pub fn CreateScheduler(comptime events: anytype) type {
                     const FuncType = @TypeOf(func);
                     const param_types = comptime get_param_types_blk: {
                         const func_info = @typeInfo(FuncType);
-                        var types: [func_info.Fn.params.len]type = undefined;
-                        for (&types, func_info.Fn.params) |*Type, param| {
+                        var types: [func_info.@"fn".params.len]type = undefined;
+                        for (&types, func_info.@"fn".params) |*Type, param| {
                             Type.* = param.type.?;
                         }
 
@@ -259,15 +267,15 @@ pub fn CreateScheduler(comptime events: anytype) type {
                             }
 
                             const param_info = @typeInfo(Param);
-                            if (param_info != .Pointer) {
+                            if (param_info != .pointer) {
                                 @compileError("System Query and Subset arguments must be pointer type");
                             }
 
-                            break :get_arg_blk switch (param_info.Pointer.child.EcezType) {
+                            break :get_arg_blk switch (param_info.pointer.child.EcezType) {
                                 // TODO: scheduler should have an allocator for this
-                                QueryType => param_info.Pointer.child.submit(self_job.query_submit_allocator, self_job.storage) catch @panic("Scheduler dispatch query_submit_allocator OOM"),
-                                QueryAnyType => param_info.Pointer.child.prepare(self_job.storage),
-                                SubsetType => param_info.Pointer.child{ .storage = self_job.storage },
+                                QueryType => param_info.pointer.child.submit(self_job.query_submit_allocator, self_job.storage) catch @panic("Scheduler dispatch query_submit_allocator OOM"),
+                                QueryAnyType => param_info.pointer.child.prepare(self_job.storage),
+                                SubsetType => param_info.pointer.child{ .storage = self_job.storage },
                                 else => |Type| @compileError("Unknown EcezType " ++ @typeName(Type)), // This is a ecez bug if hit (i.e not user error)
                             };
                         };
@@ -291,7 +299,7 @@ pub fn CreateScheduler(comptime events: anytype) type {
 
                         const param_info = @typeInfo(Param);
 
-                        switch (param_info.Pointer.child.EcezType) {
+                        switch (param_info.pointer.child.EcezType) {
                             QueryType => arg.*.deinit(self_job.query_submit_allocator),
                             else => {},
                         }
@@ -305,14 +313,14 @@ pub fn CreateScheduler(comptime events: anytype) type {
 pub const EventType = struct {};
 
 pub fn Event(comptime name: []const u8, comptime systems: anytype) type {
-    const systems_fields = @typeInfo(@TypeOf(systems));
-    if (systems_fields != .Struct) {
+    const systems_fields: std.builtin.Type = @typeInfo(@TypeOf(systems));
+    if (systems_fields != .@"struct") {
         @compileError("Event expect systems to be a tuple of systems");
     }
 
-    for (systems_fields.Struct.fields, 0..) |system_field, system_index| {
+    for (systems_fields.@"struct".fields, 0..) |system_field, system_index| {
         const system_field_info = @typeInfo(system_field.type);
-        if (system_field_info != .Fn) {
+        if (system_field_info != .@"fn") {
             const error_msg = std.fmt.comptimePrint("Event must be populated with functions, system number '{d}' was {s}", .{
                 system_index,
                 @typeName(system_field.type),
@@ -332,9 +340,9 @@ pub fn Event(comptime name: []const u8, comptime systems: anytype) type {
         pub fn getSystemCount() u32 {
             comptime var system_count = 0;
             const systems_info = @typeInfo(@TypeOf(ThisEvent._systems));
-            system_loop: inline for (systems_info.Struct.fields) |field_system| {
+            system_loop: inline for (systems_info.@"struct".fields) |field_system| {
                 const system_info = @typeInfo(field_system.type);
-                if (system_info != .Fn) {
+                if (system_info != .@"fn") {
                     continue :system_loop;
                 }
                 system_count += 1;
@@ -347,21 +355,29 @@ pub fn Event(comptime name: []const u8, comptime systems: anytype) type {
 
 // TODO: move scheduler and dependency_chain to same folder. Move this logic in this folder out of this file
 pub const CompileReflect = struct {
+    pub inline fn getEventsInFlightFieldName(comptime index: u32) []const u8 {
+        var num_buf: [8:0]u8 = undefined;
+        const name = std.fmt.bufPrint(&num_buf, "{d}", .{index}) catch unreachable;
+        num_buf[name.len] = 0;
+
+        return name;
+    }
+
     pub fn countAndVerifyEvents(comptime events: anytype) u32 {
         const events_info = events_info_blk: {
             const info: std.builtin.Type = @typeInfo(@TypeOf(events));
-            if (info != .Struct) {
+            if (info != .@"struct") {
                 @compileError("expected events to be a struct of Event");
             }
-            break :events_info_blk info.Struct;
+            break :events_info_blk info.@"struct";
         };
 
         inline for (events_info.fields, 0..) |events_fields, event_index| {
-            if (events_fields.default_value == null) {
+            if (events_fields.default_value_ptr == null) {
                 @compileError(std.fmt.comptimePrint("event number {d} is not an event. Events must be created with ecez.Event()", .{event_index}));
             }
 
-            const this_event = @as(*const events_fields.type, @ptrCast(events_fields.default_value.?)).*;
+            const this_event = @as(*const events_fields.type, @ptrCast(events_fields.default_value_ptr.?)).*;
             const has_EcezType = @hasField(this_event, "EcezType");
             const has_name = @hasField(this_event, "_name");
             const has_systems = @hasField(this_event, "_systems");
@@ -389,21 +405,21 @@ pub const CompileReflect = struct {
     pub fn countAndVerifySystems(comptime event: anytype) u32 {
         {
             const info: std.builtin.Type = @typeInfo(event);
-            if (info != .Struct) {
+            if (info != .@"struct") {
                 @compileError("expected events to be a struct of Event");
             }
         }
 
         comptime var system_count = 0;
         const systems_info = @typeInfo(@TypeOf(event._systems));
-        system_loop: inline for (systems_info.Struct.fields) |field_system| {
+        system_loop: inline for (systems_info.@"struct".fields) |field_system| {
             const system_info = @typeInfo(field_system.type);
-            if (system_info != .Fn) {
+            if (system_info != .@"fn") {
                 continue :system_loop;
             }
 
             // Ensure arguments are queries
-            const params = system_info.Fn.params;
+            const params = system_info.@"fn".params;
             for (params) |param| {
                 if (param.is_generic) {
                     @compileError("system of type " ++ @typeName(field_system.type) ++ " has generic parameter, expected ecez storage query, or event argument");
@@ -437,16 +453,16 @@ pub const CompileReflect = struct {
     }
 
     pub fn GenerateEventEnum(comptime events: anytype) type {
-        const events_info = @typeInfo(@TypeOf(events)).Struct;
+        const events_info = @typeInfo(@TypeOf(events)).@"struct";
 
         var enum_fields: [events_info.fields.len]std.builtin.Type.EnumField = undefined;
         inline for (&enum_fields, events_info.fields, 0..) |*enum_field, events_fields, enum_value| {
-            const this_event = @as(*const events_fields.type, @ptrCast(events_fields.default_value.?)).*;
+            const this_event = @as(*const events_fields.type, @ptrCast(events_fields.default_value_ptr.?)).*;
             enum_field.name = this_event._name[0.. :0];
             enum_field.value = enum_value;
         }
 
-        const enum_info = std.builtin.Type{ .Enum = .{
+        const enum_info = std.builtin.Type{ .@"enum" = .{
             .tag_type = u32,
             .fields = &enum_fields,
             .decls = &[_]std.builtin.Type.Declaration{},
@@ -466,13 +482,13 @@ pub const CompileReflect = struct {
             dependency_lists_type_field.* = .{
                 .name = event._name[0.. :0],
                 .type = DependecyArrayType,
-                .default_value = @ptrCast(&value),
+                .default_value_ptr = @ptrCast(&value),
                 .is_comptime = true,
                 .alignment = @alignOf(DependecyArrayType),
             };
         }
 
-        return @Type(std.builtin.Type{ .Struct = .{
+        return @Type(std.builtin.Type{ .@"struct" = .{
             .layout = .auto,
             .fields = &dependency_lists_type_fields,
             .decls = &[_]std.builtin.Type.Declaration{},

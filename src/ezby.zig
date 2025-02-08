@@ -247,7 +247,7 @@ pub fn deserialize(
 
     var cursor = ezby_bytes;
 
-    var ezby: *Chunk.Ezby = undefined;
+    var ezby: *const Chunk.Ezby = undefined;
     cursor = try Chunk.parseEzby(cursor, &ezby);
 
     if (ezby.version_major != version_major) {
@@ -256,7 +256,7 @@ pub fn deserialize(
 
     storage.number_of_entities.store(@intCast(ezby.number_of_entities), .seq_cst);
     while (cursor.len > @sizeOf(Chunk.Comp) and mem.eql(u8, cursor[0..4], "COMP")) {
-        var comp: *Chunk.Comp = undefined;
+        var comp: *const Chunk.Comp = undefined;
         var component_bytes: Chunk.Comp.ComponentBytes = undefined;
         var entity_ids: Chunk.Comp.EntityIds = undefined;
         cursor = Chunk.parseComp(
@@ -399,7 +399,7 @@ test "serializing then using Chunk.parseEzby produce expected EZBY chunk" {
     );
     defer testing.allocator.free(bytes);
 
-    var ezby: *Chunk.Ezby = undefined;
+    var ezby: *const Chunk.Ezby = undefined;
     _ = try Chunk.parseEzby(bytes, &ezby);
 
     try testing.expectEqual(Chunk.Ezby{
@@ -431,11 +431,11 @@ test "Chunk.parseComp" {
 
     var cursor = bytes;
 
-    var ezby: *Chunk.Ezby = undefined;
-    cursor = try Chunk.parseEzby(cursor, &ezby);
+    var ezby: *const Chunk.Ezby = undefined;
+    cursor = try Chunk.parseEzby(bytes, &ezby);
 
     inline for (Testing.AllComponentsArr) |Component| {
-        var comp: *Chunk.Comp = undefined;
+        var comp: *const Chunk.Comp = undefined;
         var entity_ids: Chunk.Comp.EntityIds = undefined;
         var component_bytes: Chunk.Comp.ComponentBytes = undefined;
         cursor = Chunk.parseComp(

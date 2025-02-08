@@ -32,12 +32,12 @@ pub fn Create(
 
     // Start by reflecting on ResultItem type
     const result_type_info = @typeInfo(ResultItem);
-    if (result_type_info != .Struct) {
+    if (result_type_info != .@"struct") {
         const error_message = std.fmt.comptimePrint("Query ResultItem '{s}' must be a struct of components", .{@typeName(ResultItem)});
         @compileError(error_message);
     }
 
-    const fields = result_type_info.Struct.fields;
+    const fields = result_type_info.@"struct".fields;
     if (fields.len < 1) {
         const error_message = std.fmt.comptimePrint("Query ResultItem '{s}' must have atleast one field", .{@typeName(ResultItem)});
         @compileError(error_message);
@@ -84,16 +84,16 @@ pub fn Create(
     const result_component_count = result_end - result_start_index;
 
     const include_type_info = @typeInfo(@TypeOf(include_types));
-    if (include_type_info != .Struct) {
+    if (include_type_info != .@"struct") {
         @compileError("query exclude types must be a tuple of types");
     }
-    const include_fields = include_type_info.Struct.fields;
+    const include_fields = include_type_info.@"struct".fields;
 
     const exclude_type_info = @typeInfo(@TypeOf(exclude_types));
-    if (exclude_type_info != .Struct) {
+    if (exclude_type_info != .@"struct") {
         @compileError("query exclude types must be a tuple of types");
     }
-    const exclude_fields = exclude_type_info.Struct.fields;
+    const exclude_fields = exclude_type_info.@"struct".fields;
     const query_components = reflect_on_query_blk: {
         const type_count = result_component_count + include_fields.len + exclude_fields.len;
         var raw_component_types: [type_count]type = undefined;

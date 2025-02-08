@@ -248,7 +248,7 @@ inline fn growSize(current_len: usize, min_size: usize) usize {
 }
 
 fn GetDenseStorage(comptime DensePtr: type) type {
-    const dense_ptr_info = @typeInfo(DensePtr).Pointer;
+    const dense_ptr_info = @typeInfo(DensePtr).pointer;
     return dense_ptr_info.child;
 }
 
