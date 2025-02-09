@@ -323,7 +323,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                         entity.id,
                     ) orelse return error.MissingComponent;
                     switch (component_to_get.attr) {
-                        .ptr => @field(result, field.name) = get_ptr,
+                        .ptr, .const_ptr => @field(result, field.name) = get_ptr,
                         .value => @field(result, field.name) = get_ptr.*,
                     }
                 } else {
@@ -382,7 +382,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 entity.id,
             ) orelse return error.MissingComponent;
             switch (component_to_get.attr) {
-                .ptr => return get_ptr,
+                .ptr, .const_ptr => return get_ptr,
                 .value => return get_ptr.*,
             }
         }
@@ -406,7 +406,13 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const inner_comp_types = get_inner_blk: {
                 var inner: [comp_types.len]type = undefined;
                 for (&inner, comp_types) |*Inner, CompType| {
-                    Inner.* = CompileReflect.compactComponentRequest(CompType).type;
+                    const component_request = CompileReflect.compactComponentRequest(CompType);
+                    if (component_request.attr == .const_ptr) {
+                        // It does not make sense to express a const ptr for a subset type (you can still use it when retrieving a component)
+                        @compileError("Subset with const ptr to '" ++ @typeName(component_request.type) ++ "' is not legal, must be either pointer or value when creating a Subset type");
+                    }
+
+                    Inner.* = component_request.type;
                 }
                 break :get_inner_blk inner;
             };
@@ -431,6 +437,8 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     // Validate that the correct access was requested in subset type
                     comptime {
                         const entity_state_info = @typeInfo(@TypeOf(entity_state));
+
+                        // Look up each component in the new entity and verify that each component is registered as write access
                         get_validation_loop: for (entity_state_info.@"struct".fields) |field| {
                             const FieldType = field.type;
                             for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
@@ -456,6 +464,8 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     // Validate that the correct access was requested in subset type
                     comptime {
                         const set_info = @typeInfo(@TypeOf(struct_of_components));
+
+                        // Look up each component in the new entity and verify that each component is registered as write access
                         get_validation_loop: for (set_info.@"struct".fields) |field| {
                             const FieldType = field.type;
                             for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
@@ -481,6 +491,8 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     // Validate that the correct access was requested in subset type
                     comptime {
                         const unset_info = @typeInfo(@TypeOf(struct_of_remove_components));
+
+                        // Look up each component in the new entity and verify that each component is registered as write access
                         get_validation_loop: for (unset_info.@"struct".fields) |field| {
                             const FieldType = @field(struct_of_remove_components, field.name);
                             for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
@@ -685,6 +697,7 @@ pub const CompileReflect = struct {
         pub const Attr = enum {
             value,
             ptr,
+            const_ptr,
         };
 
         type: type,
@@ -700,7 +713,7 @@ pub const CompileReflect = struct {
             },
             .pointer => |ptr_info| .{
                 .type = ptr_info.child,
-                .attr = .ptr,
+                .attr = if (ptr_info.is_const) .const_ptr else .ptr,
             },
             else => @compileError(@typeName(ComponentPtrOrValueType) ++ " is not pointer, nor a struct."),
         };
@@ -1197,6 +1210,66 @@ test "getComponent() retrieve component values" {
     try testing.expectEqual(entity_initial_state.b, try storage.getComponent(entity, Testing.Component.B));
 }
 
+test "getComponent() with const ptr retrieve component" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 0 },
+            .b = Testing.Component.B{ .value = 0 },
+        };
+        _ = try storage.createEntity(initial_state);
+    }
+
+    {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 1 },
+            .b = Testing.Component.B{ .value = 1 },
+        };
+        _ = try storage.createEntity(initial_state);
+    }
+
+    {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 2 },
+            .b = Testing.Component.B{ .value = 2 },
+        };
+        _ = try storage.createEntity(initial_state);
+    }
+
+    const entity_initial_state = AbEntityType{
+        .a = Testing.Component.A{ .value = 123 },
+        .b = Testing.Component.B{ .value = 123 },
+    };
+    const entity = try storage.createEntity(entity_initial_state);
+
+    {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 3 },
+            .b = Testing.Component.B{ .value = 3 },
+        };
+        _ = try storage.createEntity(initial_state);
+    }
+
+    {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 4 },
+            .b = Testing.Component.B{ .value = 4 },
+        };
+        _ = try storage.createEntity(initial_state);
+    }
+
+    try testing.expectEqual(
+        entity_initial_state.a,
+        (try storage.getComponent(entity, *const Testing.Component.A)).*,
+    );
+    try testing.expectEqual(
+        entity_initial_state.b,
+        (try storage.getComponent(entity, *const Testing.Component.B)).*,
+    );
+}
+
 test "getComponent() can mutate component value with ptr" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
@@ -1560,6 +1633,47 @@ test "query with single result component ptr type works" {
                 try std.testing.expectEqual(Testing.Component.A{
                     .value = @as(u32, @intCast(index)),
                 }, item.a);
+
+                index += 1;
+            }
+        }
+    }
+}
+
+test "query with single const ptr result component ptr type works" {
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
+
+    inline for (Queries.WriteA, Queries.ReadAConstPtr) |WriteA, ReadAConstPtr| {
+        storage.clearRetainingCapacity();
+
+        for (0..100) |index| {
+            _ = try storage.createEntity(AbEntityType{
+                .a = .{ .value = @as(u32, @intCast(index)) },
+                .b = .{ .value = @as(u8, @intCast(index)) },
+            });
+        }
+
+        {
+            var index: usize = 0;
+            var a_iter = try WriteA.submit(std.testing.allocator, &storage);
+            defer a_iter.deinit(std.testing.allocator);
+
+            while (a_iter.next()) |item| {
+                item.a.value += 1;
+                index += 1;
+            }
+        }
+
+        {
+            var index: usize = 1;
+            var a_iter = try ReadAConstPtr.submit(std.testing.allocator, &storage);
+            defer a_iter.deinit(std.testing.allocator);
+
+            while (a_iter.next()) |item| {
+                try std.testing.expectEqual(Testing.Component.A{
+                    .value = @as(u32, @intCast(index)),
+                }, item.a.*);
 
                 index += 1;
             }

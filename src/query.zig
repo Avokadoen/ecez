@@ -126,13 +126,17 @@ pub fn Create(
                 incl_index,
             | {
                 const request = CompileReflect.compactComponentRequest(include_types[incl_index]);
-                if (request.attr == .ptr) {
-                    const error_message = std.fmt.comptimePrint(
-                        "Query include_type {s} cant be a pointer",
-                        .{@typeName(request.type)},
-                    );
-                    @compileError(error_message);
+                switch (request.attr) {
+                    .ptr, .const_ptr => {
+                        const error_message = std.fmt.comptimePrint(
+                            "Query include_type {s} cant be a pointer",
+                            .{@typeName(request.type)},
+                        );
+                        @compileError(error_message);
+                    },
+                    .value => {},
                 }
+
                 query_component.* = include_types[incl_index];
             }
         }
@@ -149,12 +153,15 @@ pub fn Create(
                 excl_index,
             | {
                 const request = CompileReflect.compactComponentRequest(exclude_types[excl_index]);
-                if (request.attr == .ptr) {
-                    const error_message = std.fmt.comptimePrint(
-                        "Query include_type {s} cant be a pointer",
-                        .{@typeName(request.type)},
-                    );
-                    @compileError(error_message);
+                switch (request.attr) {
+                    .ptr, .const_ptr => {
+                        const error_message = std.fmt.comptimePrint(
+                            "Query include_type {s} cant be a pointer",
+                            .{@typeName(request.type)},
+                        );
+                        @compileError(error_message);
+                    },
+                    .value => {},
                 }
 
                 query_component.* = exclude_types[excl_index];
@@ -531,7 +538,7 @@ pub fn Create(
                     const component_ptr = set.get(sparse_set, dense_set, self.sparse_cursors).?;
 
                     switch (component_to_get.attr) {
-                        .ptr => @field(result, result_field.name) = component_ptr,
+                        .ptr, .const_ptr => @field(result, result_field.name) = component_ptr,
                         .value => @field(result, result_field.name) = component_ptr.*,
                     }
                 }
@@ -723,7 +730,7 @@ pub fn Create(
                     const component_ptr = set.get(sparse_set, dense_set, self.sparse_cursors).?;
 
                     switch (component_to_get.attr) {
-                        .ptr => @field(result, result_field.name) = component_ptr,
+                        .ptr, .const_ptr => @field(result, result_field.name) = component_ptr,
                         .value => @field(result, result_field.name) = component_ptr.*,
                     }
                 }
