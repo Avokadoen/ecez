@@ -2,7 +2,7 @@ const std = @import("std");
 
 const ztracy = @import("ztracy");
 
-const ThreadPool = @import("StdThreadPool.zig");
+const thread_pool_impl = @import("thread_pool.zig");
 const ResetEvent = std.Thread.ResetEvent;
 
 const query = @import("query.zig");
@@ -66,6 +66,8 @@ pub fn CreateScheduler(comptime events: anytype) type {
     const Dependencies = CompileReflect.DependencyListsType(events, event_count){};
 
     return struct {
+        pub const ThreadPool = thread_pool_impl.Create();
+
         const Scheduler = @This();
 
         pub const EventsEnum = CompileReflect.GenerateEventEnum(events);
