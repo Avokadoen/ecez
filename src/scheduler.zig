@@ -184,10 +184,8 @@ pub fn CreateScheduler(comptime events: anytype) type {
                 // Assert current system is not executing
                 std.debug.assert(event_in_flight[system_index].isSet());
 
-                // NOTE: Work around compiler crash: dont use reference to empty structs
-                const dependencies = comptime if (system_dependencies.wait_on_indices.len == 0) &[0]u32{} else system_dependencies.wait_on_indices;
                 self.thread_pool.spawnRe(
-                    dependencies,
+                    system_dependencies.wait_on_indices,
                     event_in_flight,
                     system_index,
                     DispatchJob.exec,
