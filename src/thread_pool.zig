@@ -122,7 +122,7 @@ pub fn Create() type {
                         }
                     }
 
-                    @call(.auto, func, closure.arguments);
+                    @call(.auto, func, .{closure.arguments});
                     closure.event_collection[closure.spawned_event_index].set();
 
                     // The thread pool's allocator is protected by the mutex.
@@ -147,7 +147,6 @@ pub fn Create() type {
             comptime event_dependency_indices: []const u32,
             event_collection: []ResetEvent,
             spawned_event_index: u32,
-            comptime func: anytype,
             args: anytype,
         ) void {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.job_queue);
@@ -155,21 +154,23 @@ pub fn Create() type {
 
             event_collection[spawned_event_index].reset();
 
+            const Args = @TypeOf(args);
+            const dispatch_exec_func = Args.exec;
+
             if (builtin.single_threaded or pool.threads.len == 0) {
-                @call(.auto, func, args);
+                @call(.auto, dispatch_exec_func, .{args});
                 event_collection[spawned_event_index].set();
                 return;
             }
 
-            const Args = @TypeOf(args);
-            const ClosureT = Closure(Args, func);
+            const ClosureT = Closure(Args, dispatch_exec_func);
             {
                 pool.mutex.lock();
 
                 // TODO: avoid constant alloc, pool previous allocs, or use a more fitting allocator for the pool
                 const closure = pool.allocator.create(ClosureT) catch {
                     pool.mutex.unlock();
-                    @call(.auto, func, args);
+                    @call(.auto, dispatch_exec_func, .{args});
                     event_collection[spawned_event_index].set();
                     return;
                 };

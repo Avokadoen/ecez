@@ -190,8 +190,7 @@ pub fn CreateScheduler(comptime events: anytype) type {
                     system_dependencies.wait_on_indices,
                     event_in_flight,
                     system_index,
-                    DispatchJob.exec,
-                    .{system_job},
+                    system_job,
                 );
             }
         }
