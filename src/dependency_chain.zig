@@ -36,17 +36,17 @@ pub fn buildDependencyList(
         access: []const Access,
     };
 
-    const systems_fields = @typeInfo(@TypeOf(systems)).Struct.fields;
+    const systems_fields = @typeInfo(@TypeOf(systems)).@"struct".fields;
 
     const final_systems_dependencies = comptime calc_dependencies_blk: {
         var graph: [system_count]Node = undefined;
         system_loop: for (&graph, systems_fields) |*this_node, system_field_info| {
             const system_info = @typeInfo(system_field_info.type);
-            if (system_info != .Fn) {
+            if (system_info != .@"fn") {
                 continue :system_loop;
             }
 
-            const params = system_info.Fn.params;
+            const params = system_info.@"fn".params;
             var access_params: [params.len]std.builtin.Type.Fn.Param = undefined;
             var access_params_len: usize = 0;
             var access_count = 0;
@@ -68,6 +68,7 @@ pub fn buildDependencyList(
                 if (TypeParam.EcezType == QueryType) {}
             }
 
+            // Compute each systems component access and store it in the system node
             const all_access = get_access_blk: {
                 var access_index = 0;
                 var access: [access_count]Access = undefined;
@@ -80,7 +81,7 @@ pub fn buildDependencyList(
                                 const req = storage.CompileReflect.compactComponentRequest(component_field.type);
                                 access[access_index] = Access{
                                     .type = req.type,
-                                    .right = if (req.attr == .value) .read else .write,
+                                    .right = if (req.attr == .value or req.attr == .const_ptr) .read else .write,
                                 };
                                 access_index += 1;
                             }
@@ -104,7 +105,7 @@ pub fn buildDependencyList(
                                 const req = storage.CompileReflect.compactComponentRequest(Component);
                                 access[access_index] = Access{
                                     .type = req.type,
-                                    .right = if (req.attr == .value) .read else .write,
+                                    .right = if (req.attr == .value or req.attr == .const_ptr) .read else .write,
                                 };
                                 access_index += 1;
                             }
@@ -124,26 +125,28 @@ pub fn buildDependencyList(
         var systems_dependencies: [system_count]Dependency = undefined;
         systems_dependencies[0] = Dependency{ .wait_on_indices = &[_]u32{} };
         for (systems_dependencies[1..], graph[1..], 1..) |*system_dependencies, this_node, node_index| {
-            var access_not_locked: [this_node.access.len]Access = undefined;
-            var access_not_locked_len = access_not_locked.len;
+            var this_node_access_not_locked: [this_node.access.len]Access = undefined;
+            var this_node_access_not_locked_len = this_node_access_not_locked.len;
 
             var access_not_locked_read_to_write = [_]bool{false} ** this_node.access.len;
-
-            @memcpy(&access_not_locked, this_node.access);
+            @memcpy(&this_node_access_not_locked, this_node.access);
 
             const dependencies = calc_deps_blk: {
                 var dependency_len: u32 = 0;
                 var dependency_slots: [node_index]u32 = undefined;
+
+                // Loop all previous nodes
                 for (0..node_index) |prev_node_index| {
 
                     // Reverse index to iterate backwards
                     const other_node_index = (node_index - prev_node_index) - 1;
                     const other_node = graph[other_node_index];
 
+                    // foearch access in previous node
                     for (other_node.access) |other_access| {
                         var access_not_locked_index: u32 = 0;
-                        access_loop: while (access_not_locked_index < access_not_locked_len) {
-                            const this_access = access_not_locked[access_not_locked_index];
+                        access_loop: while (access_not_locked_index < this_node_access_not_locked_len) {
+                            const this_access = this_node_access_not_locked[access_not_locked_index];
 
                             if (this_access.type != other_access.type) {
                                 access_not_locked_index += 1;
@@ -158,9 +161,8 @@ pub fn buildDependencyList(
                             }
 
                             var remove_access_not_locked = is_read_to_write == false;
-
                             if (is_read_to_write or is_any_write) {
-                                // TODO: potentially mark unlikely branch
+                                @branchHint(.unlikely);
 
                                 // Store dependency
                                 set_dependency_slot_blk: {
@@ -171,15 +173,16 @@ pub fn buildDependencyList(
                                         }
                                     }
 
-                                    // If we have registered a read to write, and now are hitting a write to write,
-                                    // then we skip write to write since the read is already blocked on the write
+                                    // If we previously registered a read to write, and now are hitting a write to write, then we must track all current reads
                                     //
                                     // Example scenario:
                                     //
-                                    //       nodes: a(w) -> a(r) -> a(r) -> a(w)
-                                    //               ^       v ^    v ^       v
-                                    //                \     /   \---/-\      /
-                                    //                 ----/-------/   \----/
+                                    //       nodes: a1(w) -> a2(r) -> a3(r) -> a4(w)
+                                    //               ^        v ^     v ^       v
+                                    //                \      /   \----/-\      /
+                                    //                 -----/--------/   \----/
+                                    //
+                                    // Example showing a1 will wait for a2 and a3 and ignore a4 as there is a implicit dependency already.
                                     if (access_not_locked_read_to_write[access_not_locked_index] and this_access.right == .write and other_access.right == .write) {
                                         remove_access_not_locked = true;
                                         break :set_dependency_slot_blk;
@@ -191,9 +194,9 @@ pub fn buildDependencyList(
 
                                 // swap remove access if we hit a write
                                 if (remove_access_not_locked) {
-                                    access_not_locked[access_not_locked_index] = access_not_locked[access_not_locked_len - 1];
-                                    access_not_locked_read_to_write[access_not_locked_index] = access_not_locked_read_to_write[access_not_locked_len - 1];
-                                    access_not_locked_len -= 1;
+                                    this_node_access_not_locked[access_not_locked_index] = this_node_access_not_locked[this_node_access_not_locked_len - 1];
+                                    access_not_locked_read_to_write[access_not_locked_index] = access_not_locked_read_to_write[this_node_access_not_locked_len - 1];
+                                    this_node_access_not_locked_len -= 1;
                                 }
                             }
 
@@ -204,7 +207,7 @@ pub fn buildDependencyList(
                         }
                     }
                 }
-                break :calc_deps_blk globalArrayVariableRefWorkaround(dependency_slots)[0..dependency_len];
+                break :calc_deps_blk globalArrayVariableRefWorkaround(dependency_slots, dependency_len)[0..dependency_len];
             };
             system_dependencies.* = Dependency{ .wait_on_indices = dependencies };
         }
@@ -214,17 +217,19 @@ pub fn buildDependencyList(
     return final_systems_dependencies;
 }
 
-fn globalArrayVariableRefWorkaround(array: anytype) @TypeOf(array) {
+fn globalArrayVariableRefWorkaround(comptime array: anytype, comptime len: u32) @TypeOf(array) {
     const ArrayType = @TypeOf(array);
     const arr_info = @typeInfo(ArrayType);
 
     var tmp: ArrayType = undefined;
     switch (arr_info) {
-        .Array => {
-            @memcpy(&tmp, &array);
+        .array => {
+            @memcpy(tmp[0..len], array[0..len]);
+            std.mem.reverse(arr_info.array.child, tmp[0..len]);
         },
         else => @compileError("ecez bug: invalid " ++ @src().fn_name ++ " array type" ++ @typeName(ArrayType)),
     }
+
     const const_local = tmp;
     return const_local;
 }
@@ -244,11 +249,21 @@ test buildDependencyList {
         // Use entity for some queries to ensure it does not affect dependency tracking
         const Entity = @import("entity_type.zig").Entity;
 
-        pub const ReadA = Testing.QueryAndQueryAny(
+        pub const ReadAValue = Testing.QueryAndQueryAny(
             StorageStub,
             struct {
                 entitiy: Entity,
                 a: Testing.Component.A,
+            },
+            .{},
+            .{},
+        );
+
+        pub const ReadAConstPtr = Testing.QueryAndQueryAny(
+            StorageStub,
+            struct {
+                entitiy: Entity,
+                a: *const Testing.Component.A,
             },
             .{},
             .{},
@@ -418,7 +433,10 @@ test buildDependencyList {
 
     const SingleQuerySystems = [2]type{
         struct {
-            pub fn readA(a: *Queries.ReadA[0]) void {
+            pub fn readAValue(a: *Queries.ReadAValue[0]) void {
+                _ = a;
+            }
+            pub fn readAConstPtr(a: *Queries.ReadAConstPtr[0]) void {
                 _ = a;
             }
             pub fn writeA(a: *Queries.WriteA[0]) void {
@@ -462,7 +480,10 @@ test buildDependencyList {
             }
         },
         struct {
-            pub fn readA(a: *Queries.ReadA[1]) void {
+            pub fn readAValue(a: *Queries.ReadAValue[1]) void {
+                _ = a;
+            }
+            pub fn readAConstPtr(a: *Queries.ReadAConstPtr[1]) void {
                 _ = a;
             }
             pub fn writeA(a: *Queries.WriteA[1]) void {
@@ -506,7 +527,7 @@ test buildDependencyList {
 
     const TwoQuerySystems = [2]type{
         struct {
-            pub fn readAReadB(a: *Queries.ReadA[0], b: *Queries.ReadB[0]) void {
+            pub fn readAReadB(a: *Queries.ReadAValue[0], b: *Queries.ReadB[0]) void {
                 _ = a;
                 _ = b;
             }
@@ -516,7 +537,7 @@ test buildDependencyList {
             }
         },
         struct {
-            pub fn readAReadB(a: *Queries.ReadA[1], b: *Queries.ReadB[1]) void {
+            pub fn readAReadB(a: *Queries.ReadAValue[1], b: *Queries.ReadB[1]) void {
                 _ = a;
                 _ = b;
             }
@@ -529,7 +550,7 @@ test buildDependencyList {
 
     const ThreeQuerySystems = [2]type{
         struct {
-            pub fn readAReadBReadD(a: *Queries.ReadA[0], b: *Queries.ReadB[0], d: *Queries.ReadD[0]) void {
+            pub fn readAReadBReadD(a: *Queries.ReadAValue[0], b: *Queries.ReadB[0], d: *Queries.ReadD[0]) void {
                 _ = a;
                 _ = b;
                 _ = d;
@@ -541,7 +562,7 @@ test buildDependencyList {
             }
         },
         struct {
-            pub fn readAReadBReadD(a: *Queries.ReadA[1], b: *Queries.ReadB[1], d: *Queries.ReadD[1]) void {
+            pub fn readAReadBReadD(a: *Queries.ReadAValue[1], b: *Queries.ReadB[1], d: *Queries.ReadD[1]) void {
                 _ = a;
                 _ = b;
                 _ = d;
@@ -583,7 +604,7 @@ test buildDependencyList {
             pub fn SpamA(
                 qa_0: *Queries.WriteA[0],
                 qa_1: *Queries.WriteA[0],
-                qa_2: *Queries.ReadA[0],
+                qa_2: *Queries.ReadAValue[0],
                 sa_0: *SubStorages.WriteA,
                 sa_1: *SubStorages.WriteA,
                 sa_2: *SubStorages.ReadA,
@@ -600,7 +621,7 @@ test buildDependencyList {
             pub fn SpamA(
                 qa_0: *Queries.WriteA[1],
                 qa_1: *Queries.WriteA[1],
-                qa_2: *Queries.ReadA[1],
+                qa_2: *Queries.ReadAValue[1],
                 sa_0: *SubStorages.WriteA,
                 sa_1: *SubStorages.WriteA,
                 sa_2: *SubStorages.ReadA,
@@ -617,10 +638,10 @@ test buildDependencyList {
 
     // Single type testing
     {
-        // Read to write
+        // Read value to write
         inline for (SingleQuerySystems) |SingleQuerySystemsT| {
             const dependencies = comptime buildDependencyList(.{
-                SingleQuerySystemsT.readA,
+                SingleQuerySystemsT.readAValue,
                 SingleQuerySystemsT.writeA,
             }, 2);
             const expected_dependencies = [_]Dependency{
@@ -633,11 +654,27 @@ test buildDependencyList {
             }
         }
 
-        // Read to read
+        // Read const ptr to write
         inline for (SingleQuerySystems) |SingleQuerySystemsT| {
             const dependencies = comptime buildDependencyList(.{
-                SingleQuerySystemsT.readA,
-                SingleQuerySystemsT.readA,
+                SingleQuerySystemsT.readAConstPtr,
+                SingleQuerySystemsT.writeA,
+            }, 2);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+            };
+
+            for (dependencies, expected_dependencies) |system_dependencies, expected_system_dependencies| {
+                try std.testing.expectEqualSlices(u32, system_dependencies.wait_on_indices, expected_system_dependencies.wait_on_indices);
+            }
+        }
+
+        // Read value to read value
+        inline for (SingleQuerySystems) |SingleQuerySystemsT| {
+            const dependencies = comptime buildDependencyList(.{
+                SingleQuerySystemsT.readAValue,
+                SingleQuerySystemsT.readAValue,
             }, 2);
             const expected_dependencies = [_]Dependency{
                 Dependency{ .wait_on_indices = &[_]u32{} },
@@ -649,11 +686,27 @@ test buildDependencyList {
             }
         }
 
-        // Write to read
+        // Read const ptr to read const ptr
+        inline for (SingleQuerySystems) |SingleQuerySystemsT| {
+            const dependencies = comptime buildDependencyList(.{
+                SingleQuerySystemsT.readAConstPtr,
+                SingleQuerySystemsT.readAConstPtr,
+            }, 2);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{} },
+            };
+
+            for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            }
+        }
+
+        // Write to read value
         inline for (SingleQuerySystems) |SingleQuerySystemsT| {
             const dependencies = comptime buildDependencyList(.{
                 SingleQuerySystemsT.writeA,
-                SingleQuerySystemsT.readA,
+                SingleQuerySystemsT.readAValue,
             }, 2);
             const expected_dependencies = [_]Dependency{
                 Dependency{ .wait_on_indices = &[_]u32{} },
@@ -665,17 +718,15 @@ test buildDependencyList {
             }
         }
 
-        // Read, read, write
+        // Write to read const ptr
         inline for (SingleQuerySystems) |SingleQuerySystemsT| {
             const dependencies = comptime buildDependencyList(.{
-                SingleQuerySystemsT.readA,
-                SingleQuerySystemsT.readA,
                 SingleQuerySystemsT.writeA,
-            }, 3);
+                SingleQuerySystemsT.readAConstPtr,
+            }, 2);
             const expected_dependencies = [_]Dependency{
                 Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[2]u32{ 1, 0 } },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -683,19 +734,55 @@ test buildDependencyList {
             }
         }
 
-        // Write, read, read, write
+        // Read value, read value, write
+        inline for (SingleQuerySystems) |SingleQuerySystemsT| {
+            const dependencies = comptime buildDependencyList(.{
+                SingleQuerySystemsT.readAValue,
+                SingleQuerySystemsT.readAValue,
+                SingleQuerySystemsT.writeA,
+            }, 3);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[2]u32{ 0, 1 } },
+            };
+
+            for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            }
+        }
+
+        // Read const ptr, read const ptr, write
+        inline for (SingleQuerySystems) |SingleQuerySystemsT| {
+            const dependencies = comptime buildDependencyList(.{
+                SingleQuerySystemsT.readAConstPtr,
+                SingleQuerySystemsT.readAConstPtr,
+                SingleQuerySystemsT.writeA,
+            }, 3);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[2]u32{ 0, 1 } },
+            };
+
+            for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            }
+        }
+
+        // Write, read value, read value, write
         inline for (SingleQuerySystems) |SingleQuerySystemsT| {
             const dependencies = comptime buildDependencyList(.{
                 SingleQuerySystemsT.writeA,
-                SingleQuerySystemsT.readA,
-                SingleQuerySystemsT.readA,
+                SingleQuerySystemsT.readAValue,
+                SingleQuerySystemsT.readAValue,
                 SingleQuerySystemsT.writeA,
             }, 4);
             const expected_dependencies = [_]Dependency{
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -703,12 +790,34 @@ test buildDependencyList {
             }
         }
 
+        // Write, const ptr value, const ptr value, write
+        inline for (SingleQuerySystems) |SingleQuerySystemsT| {
+            const dependencies = comptime buildDependencyList(.{
+                SingleQuerySystemsT.writeA,
+                SingleQuerySystemsT.readAConstPtr,
+                SingleQuerySystemsT.readAConstPtr,
+                SingleQuerySystemsT.writeA,
+            }, 4);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
+            };
+
+            for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            }
+        }
+
+        // NOTE: From here on out, we assume access by value and by const ptr is functionally the same ...
+
         // Write, read, read, write, write
         inline for (SingleQuerySystems) |SingleQuerySystemsT| {
             const dependencies = comptime buildDependencyList(.{
                 SingleQuerySystemsT.writeA,
-                SingleQuerySystemsT.readA,
-                SingleQuerySystemsT.readA,
+                SingleQuerySystemsT.readAValue,
+                SingleQuerySystemsT.readAValue,
                 SingleQuerySystemsT.writeA,
                 SingleQuerySystemsT.writeA,
             }, 5);
@@ -716,7 +825,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
                 Dependency{ .wait_on_indices = &[_]u32{3} },
             };
 
@@ -729,8 +838,8 @@ test buildDependencyList {
         inline for (SingleQuerySystems) |SingleQuerySystemsT| {
             const dependencies = comptime buildDependencyList(.{
                 SingleQuerySystemsT.writeA,
-                SingleQuerySystemsT.readA,
-                SingleQuerySystemsT.readA,
+                SingleQuerySystemsT.readAValue,
+                SingleQuerySystemsT.readAValue,
                 SingleQuerySystemsT.writeA,
                 SingleQuerySystemsT.writeA,
             }, 5);
@@ -738,7 +847,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
                 Dependency{ .wait_on_indices = &[_]u32{3} },
             };
 
@@ -760,7 +869,7 @@ test buildDependencyList {
             const expected_dependencies = [_]Dependency{
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 0, 1 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -790,7 +899,7 @@ test buildDependencyList {
         inline for (SingleQuerySystems) |SingleQuerySystemsT| {
             const dependencies = comptime buildDependencyList(.{
                 SingleQuerySystemsT.writeAWriteB,
-                SingleQuerySystemsT.readA,
+                SingleQuerySystemsT.readAValue,
                 SingleQuerySystemsT.readB,
             }, 3);
             const expected_dependencies = [_]Dependency{
@@ -807,14 +916,14 @@ test buildDependencyList {
         // single type reads to double writes
         inline for (SingleQuerySystems) |SingleQuerySystemsT| {
             const dependencies = comptime buildDependencyList(.{
-                SingleQuerySystemsT.readA,
+                SingleQuerySystemsT.readAValue,
                 SingleQuerySystemsT.readB,
                 SingleQuerySystemsT.writeAWriteB,
             }, 3);
             const expected_dependencies = [_]Dependency{
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 0, 1 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -834,7 +943,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -855,7 +964,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
                 Dependency{ .wait_on_indices = &[_]u32{3} },
             };
 
@@ -877,7 +986,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
                 Dependency{ .wait_on_indices = &[_]u32{3} },
             };
 
@@ -891,7 +1000,7 @@ test buildDependencyList {
             const dependencies = comptime buildDependencyList(.{
                 SingleQuerySystemsT.writeA,
                 SingleQuerySystemsT.readB,
-                SingleQuerySystemsT.readA,
+                SingleQuerySystemsT.readAValue,
                 SingleQuerySystemsT.writeA,
                 SingleQuerySystemsT.readB,
                 SingleQuerySystemsT.writeB,
@@ -905,10 +1014,10 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{0} }, // 2: readA,
                 Dependency{ .wait_on_indices = &[_]u32{2} }, // 3: writeA,
                 Dependency{ .wait_on_indices = &[_]u32{} }, // 4: readB,
-                Dependency{ .wait_on_indices = &[_]u32{ 4, 1 } }, // 5: writeB,
-                Dependency{ .wait_on_indices = &[_]u32{ 5, 3 } }, // 6: readAreadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 5, 3 } }, // 7: readAreadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 7, 6 } }, // 8: writeAwriteB,
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 4 } }, // 5: writeB,
+                Dependency{ .wait_on_indices = &[_]u32{ 3, 5 } }, // 6: readAreadB,
+                Dependency{ .wait_on_indices = &[_]u32{ 3, 5 } }, // 7: readAreadB,
+                Dependency{ .wait_on_indices = &[_]u32{ 6, 7 } }, // 8: writeAwriteB,
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -931,7 +1040,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1, 0 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 0, 1, 2 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -963,7 +1072,7 @@ test buildDependencyList {
         inline for (SingleQuerySystems) |SingleQuerySystemsT| {
             const dependencies = comptime buildDependencyList(.{
                 SingleQuerySystemsT.writeAWriteBWriteD,
-                SingleQuerySystemsT.readA,
+                SingleQuerySystemsT.readAValue,
                 SingleQuerySystemsT.readB,
                 SingleQuerySystemsT.readD,
             }, 4);
@@ -982,7 +1091,7 @@ test buildDependencyList {
         // single type reads to triple writes
         inline for (SingleQuerySystems) |SingleQuerySystemsT| {
             const dependencies = comptime buildDependencyList(.{
-                SingleQuerySystemsT.readA,
+                SingleQuerySystemsT.readAValue,
                 SingleQuerySystemsT.readB,
                 SingleQuerySystemsT.readD,
                 SingleQuerySystemsT.writeAWriteBWriteD,
@@ -991,7 +1100,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1, 0 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 0, 1, 2 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1004,7 +1113,7 @@ test buildDependencyList {
             const dependencies = comptime buildDependencyList(.{
                 SingleQuerySystemsT.writeA,
                 SingleQuerySystemsT.writeAWriteBWriteD,
-                SingleQuerySystemsT.readA,
+                SingleQuerySystemsT.readAValue,
                 SingleQuerySystemsT.readD,
                 SingleQuerySystemsT.readB,
                 SingleQuerySystemsT.readAReadB,
@@ -1022,8 +1131,8 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{1} }, // 4: readB,
                 Dependency{ .wait_on_indices = &[_]u32{1} }, // 5: readAReadB,
                 Dependency{ .wait_on_indices = &[_]u32{1} }, // 6: readAReadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 6, 5, 4, 2 } }, // 7: writeAWriteB,
-                Dependency{ .wait_on_indices = &[_]u32{ 7, 3 } }, // 8: writeAWriteBWriteD,
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 4, 5, 6 } }, // 7: writeAWriteB,
+                Dependency{ .wait_on_indices = &[_]u32{ 3, 7 } }, // 8: writeAWriteBWriteD,
                 Dependency{ .wait_on_indices = &[_]u32{8} }, // 9: readAReadB,
                 Dependency{ .wait_on_indices = &[_]u32{8} }, // 10: readAReadBInclD,
             };
@@ -1048,7 +1157,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1066,7 +1175,7 @@ test buildDependencyList {
             const expected_dependencies = [_]Dependency{
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 0, 1 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1077,14 +1186,14 @@ test buildDependencyList {
         // single type reads to double writes
         inline for (SingleQuerySystems, TwoQuerySystems) |SingleQuerySystemsT, TwoQuerySystemsT| {
             const dependencies = comptime buildDependencyList(.{
-                SingleQuerySystemsT.readA,
+                SingleQuerySystemsT.readAValue,
                 SingleQuerySystemsT.readB,
                 TwoQuerySystemsT.writeAWriteB,
             }, 3);
             const expected_dependencies = [_]Dependency{
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 0, 1 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1097,7 +1206,7 @@ test buildDependencyList {
             const dependencies = comptime buildDependencyList(.{
                 SingleQuerySystemsT.writeA,
                 ThreeQuerySystemsT.writeAWriteBWriteD,
-                SingleQuerySystemsT.readA,
+                SingleQuerySystemsT.readAValue,
                 SingleQuerySystemsT.readD,
                 SingleQuerySystemsT.readB,
                 TwoQuerySystemsT.readAReadB,
@@ -1115,8 +1224,8 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{1} }, // 4: readB,
                 Dependency{ .wait_on_indices = &[_]u32{1} }, // 5: readAReadB,
                 Dependency{ .wait_on_indices = &[_]u32{1} }, // 6: readAReadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 6, 5, 4, 2 } }, // 7: writeAWriteB,
-                Dependency{ .wait_on_indices = &[_]u32{ 7, 3 } }, // 8: writeAWriteBWriteC,
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 4, 5, 6 } }, // 7: writeAWriteB,
+                Dependency{ .wait_on_indices = &[_]u32{ 3, 7 } }, // 8: writeAWriteBWriteC,
                 Dependency{ .wait_on_indices = &[_]u32{8} }, // 9: readAReadB,
                 Dependency{ .wait_on_indices = &[_]u32{8} }, // 10: readAReadBInclD,
             };
@@ -1139,7 +1248,7 @@ test buildDependencyList {
             const expected_dependencies = [_]Dependency{
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 0, 1 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1169,7 +1278,7 @@ test buildDependencyList {
         inline for (SingleQuerySystems) |SingleQuerySystemsT| {
             const dependencies = comptime buildDependencyList(.{
                 SingleSubStorageSystems.writeAWriteB,
-                SingleQuerySystemsT.readA,
+                SingleQuerySystemsT.readAValue,
                 SingleQuerySystemsT.readB,
             }, 3);
             const expected_dependencies = [_]Dependency{
@@ -1186,14 +1295,14 @@ test buildDependencyList {
         // single type reads to double writes
         inline for (SingleQuerySystems) |SingleQuerySystemsT| {
             const dependencies = comptime buildDependencyList(.{
-                SingleQuerySystemsT.readA,
+                SingleQuerySystemsT.readAValue,
                 SingleQuerySystemsT.readB,
                 SingleSubStorageSystems.writeAWriteB,
             }, 3);
             const expected_dependencies = [_]Dependency{
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 0, 1 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1213,7 +1322,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1234,7 +1343,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
                 Dependency{ .wait_on_indices = &[_]u32{3} },
             };
 
@@ -1256,7 +1365,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
                 Dependency{ .wait_on_indices = &[_]u32{3} },
             };
 
@@ -1270,7 +1379,7 @@ test buildDependencyList {
             const dependencies = comptime buildDependencyList(.{
                 SingleSubStorageSystems.writeA,
                 SingleQuerySystemsT.readB,
-                SingleQuerySystemsT.readA,
+                SingleQuerySystemsT.readAValue,
                 SingleSubStorageSystems.writeA,
                 SingleQuerySystemsT.readB,
                 SingleSubStorageSystems.writeB,
@@ -1284,10 +1393,10 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{0} }, // 2: readA,
                 Dependency{ .wait_on_indices = &[_]u32{2} }, // 3: writeA,
                 Dependency{ .wait_on_indices = &[_]u32{} }, // 4: readB,
-                Dependency{ .wait_on_indices = &[_]u32{ 4, 1 } }, // 5: writeB,
-                Dependency{ .wait_on_indices = &[_]u32{ 5, 3 } }, // 6: readAreadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 5, 3 } }, // 7: readAreadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 7, 6 } }, // 8: writeAwriteB,
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 4 } }, // 5: writeB,
+                Dependency{ .wait_on_indices = &[_]u32{ 3, 5 } }, // 6: readAreadB,
+                Dependency{ .wait_on_indices = &[_]u32{ 3, 5 } }, // 7: readAreadB,
+                Dependency{ .wait_on_indices = &[_]u32{ 6, 7 } }, // 8: writeAwriteB,
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1300,7 +1409,7 @@ test buildDependencyList {
             const dependencies = comptime buildDependencyList(.{
                 SingleSubStorageSystems.writeA,
                 SingleSubStorageSystems.writeAWriteBWriteC,
-                SingleQuerySystemsT.readA,
+                SingleQuerySystemsT.readAValue,
                 SingleQuerySystemsT.readD,
                 SingleQuerySystemsT.readB,
                 TwoQuerySystemsT.readAReadB,
@@ -1318,8 +1427,9 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{1} }, // 4: readB,
                 Dependency{ .wait_on_indices = &[_]u32{1} }, // 5: readAReadB,
                 Dependency{ .wait_on_indices = &[_]u32{1} }, // 6: readAReadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 6, 5, 4, 2 } }, // 7: writeAWriteB,
-                Dependency{ .wait_on_indices = &[_]u32{ 7, 1 } }, // 8: writeAWriteBWriteC,
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 4, 5, 6 } }, // 7: writeAWriteB,
+                // TODO: issue #205
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 7 } }, // 8: writeAWriteBWriteC,
                 Dependency{ .wait_on_indices = &[_]u32{8} }, // 9: readAReadB,
                 Dependency{ .wait_on_indices = &[_]u32{8} }, // 10: readAReadBReadC,
             };
@@ -1335,7 +1445,7 @@ test buildDependencyList {
         const dependencies = comptime buildDependencyList(.{
             SingleSubStorageSystems.writeA,
             SingleQuerySystemsT.writeA,
-            SingleQuerySystemsT.readA,
+            SingleQuerySystemsT.readAValue,
             MiscSystemsT.SpamA,
             SingleQuerySystemsT.writeA,
         }, 5);
@@ -1343,7 +1453,7 @@ test buildDependencyList {
             Dependency{ .wait_on_indices = &[_]u32{} },
             Dependency{ .wait_on_indices = &[_]u32{0} },
             Dependency{ .wait_on_indices = &[_]u32{1} },
-            Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+            Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
             Dependency{ .wait_on_indices = &[_]u32{3} },
         };
 
@@ -1363,8 +1473,8 @@ test buildDependencyList {
         const expected_dependencies = [_]Dependency{
             Dependency{ .wait_on_indices = &[_]u32{} },
             Dependency{ .wait_on_indices = &[_]u32{0} },
-            Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
-            Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+            Dependency{ .wait_on_indices = &[_]u32{ 0, 1 } },
+            Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
             Dependency{ .wait_on_indices = &[_]u32{2} },
         };
 
@@ -1408,8 +1518,8 @@ test buildDependencyList {
             Dependency{ .wait_on_indices = &[_]u32{0} },
             Dependency{ .wait_on_indices = &[_]u32{0} },
             Dependency{ .wait_on_indices = &[_]u32{0} },
-            Dependency{ .wait_on_indices = &[_]u32{ 3, 2, 1 } },
-            Dependency{ .wait_on_indices = &[_]u32{ 3, 1 } },
+            Dependency{ .wait_on_indices = &[_]u32{ 1, 2, 3 } },
+            Dependency{ .wait_on_indices = &[_]u32{ 1, 3 } },
         };
 
         for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1432,7 +1542,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
                 Dependency{ .wait_on_indices = &[_]u32{3} },
             };
 
@@ -1454,7 +1564,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
                 Dependency{ .wait_on_indices = &[_]u32{3} },
             };
 

@@ -43,8 +43,8 @@ pub fn main() anyerror!void {
         pub const Living = Storage.Query(
             // Any result item will be of this type
             struct {
-                health: *Component.Health,
-                pos: Component.Position,
+                health: *Component.Health, // health can be mutated because it's a pointer
+                pos: Component.Position, // pos is read-only acces as we are requesting the value, you can also request a const ptr as read-only
             },
             // include types:
             .{

@@ -69,6 +69,15 @@ pub const Queries = struct {
         .{},
     );
 
+    pub const ReadAConstPtr = QueryAndQueryAny(
+        StorageStub,
+        struct {
+            a: *const Component.A,
+        },
+        .{},
+        .{},
+    );
+
     pub const ReadB = QueryAndQueryAny(
         StorageStub,
         struct {

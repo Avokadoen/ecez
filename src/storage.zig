@@ -99,6 +99,15 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         /// Parameters:
         ///
         ///     - entity_state: the components that the new entity should be assigned
+        ///
+        /// Example:
+        /// ```
+        ///    const new_entity = try storage.createEntity(.{
+        ///         Component.A{ .value = 42 },
+        ///         Component.B{},
+        ///    });
+        /// ```
+        ///
         pub fn createEntity(self: *Storage, entity_state: anytype) error{OutOfMemory}!Entity {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
@@ -115,7 +124,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const this_id = self.number_of_entities.fetchAdd(1, .acq_rel);
 
             // Ensure capacity first to avoid errdefer
-            inline for (field_info.Struct.fields) |field| {
+            inline for (field_info.@"struct".fields) |field| {
                 const Component = field.type;
 
                 // Grow sparse set
@@ -132,7 +141,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             }
 
             // For each component in the new entity
-            inline for (field_info.Struct.fields) |field| {
+            inline for (field_info.@"struct".fields) |field| {
                 const Component = field.type;
                 const component: Component = @field(
                     entity_state,
@@ -170,6 +179,15 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///
         ///     It's undefined behaviour to call setComponents, then read a stale query result (returned from Query.next) item pointer field.
         ///     The same is true for returned getComponent(s) that are pointers. Be sure to call setComponents AFTER any component pointer access.
+        ///
+        /// Example:
+        /// ```
+        ///     try storage.setComponents(my_entity, .{
+        ///         Component.A{ .value = 50 },
+        ///         Component.B{ .value = 50 },
+        ///     });
+        /// ```
+        ///
         pub fn setComponents(self: *Storage, entity: Entity, struct_of_components: anytype) error{OutOfMemory}!void {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
@@ -183,7 +201,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const field_info = @typeInfo(@TypeOf(struct_of_components));
 
             // Ensure capacity first to avoid errdefer
-            inline for (field_info.Struct.fields) |field| {
+            inline for (field_info.@"struct".fields) |field| {
                 const Component = field.type;
                 {
                     var sparse_set = self.getSparseSetPtr(Component);
@@ -196,7 +214,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 }
             }
 
-            inline for (field_info.Struct.fields) |field| {
+            inline for (field_info.@"struct".fields) |field| {
                 const Component = field.type;
                 const component: Component = @field(
                     struct_of_components,
@@ -224,6 +242,17 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///
         ///     - entity:    the entity being mutated
         ///     - components: the components to remove in a tuple/struct
+        ///
+        /// Hazards:
+        ///
+        ///     It's undefined behaviour to call unsetComponents, then read a stale query result (returned from Query.next) item pointer field.
+        ///     The same is true for returned getComponent(s) that are pointers. Be sure to call unsetComponents AFTER any component pointer access.
+        ///
+        /// Example:
+        /// ```
+        ///     storage.unsetComponents(my_entity, .{Component.A, Component.B});
+        /// ```
+        ///
         pub fn unsetComponents(self: *Storage, entity: Entity, comptime struct_of_remove_components: anytype) void {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
@@ -235,7 +264,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             );
 
             const field_info = @typeInfo(@TypeOf(struct_of_remove_components));
-            inline for (field_info.Struct.fields) |field| {
+            inline for (field_info.@"struct".fields) |field| {
                 const ComponentToRemove = @field(struct_of_remove_components, field.name);
 
                 const sparse_set = self.getSparseSetPtr(ComponentToRemove);
@@ -259,6 +288,14 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///
         ///     - entity:     the entity to check for type Components
         ///     - components: a tuple of component types to check after
+        ///
+        /// Example:
+        /// ```
+        ///     if(storage.hasComponents(my_entity, .{Component.A})) {
+        ///         print("my_entity has A", .{});
+        ///     }
+        ///
+        /// ```
         pub fn hasComponents(self: Storage, entity: Entity, comptime components: anytype) bool {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
@@ -271,7 +308,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
             const field_info = @typeInfo(@TypeOf(components));
 
-            inline for (field_info.Struct.fields) |field| {
+            inline for (field_info.@"struct".fields) |field| {
                 const ComponentToCheck = @field(components, field.name);
 
                 if (self.getSparseSetConstPtr(ComponentToCheck).isSet(entity.id) == false) {
@@ -292,8 +329,20 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///
         /// Hazards:
         ///
-        ///     it's undefined behaviour to read component pointers after a call setComponents with the same component type(s),
-        ///     even it it's not on the same entity.
+        ///     it's undefined behaviour to read component pointers after a call to setComponents or other state mutating functions with the same component type,
+        ///     even if it's not on the same entity.
+        ///
+        /// Example:
+        /// ```
+        ///     const a_b_c = try storage.getComponents(my_entity, .{
+        ///         a: *Component.A,        // we can mutate a
+        ///         b: Component.B,         // b is read only
+        ///         c: *const Component.C   // c is read only
+        ///     });
+        ///
+        ///     a_b_c.a.value = 51;
+        /// ```
+        ///
         pub fn getComponents(self: *const Storage, entity: Entity, comptime Components: type) error{MissingComponent}!Components {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
@@ -306,11 +355,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
             var result: Components = undefined;
             const field_info = @typeInfo(Components);
-            if (field_info != .Struct) {
+            if (field_info != .@"struct") {
                 @compileError(@src().fn_name ++ " expect Components type arg to be a struct of components");
             }
 
-            inline for (field_info.Struct.fields) |field| {
+            inline for (field_info.@"struct".fields) |field| {
                 const component_to_get = CompileReflect.compactComponentRequest(field.type);
 
                 const sparse_set = self.getSparseSetConstPtr(component_to_get.type);
@@ -323,7 +372,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                         entity.id,
                     ) orelse return error.MissingComponent;
                     switch (component_to_get.attr) {
-                        .ptr => @field(result, field.name) = get_ptr,
+                        .ptr, .const_ptr => @field(result, field.name) = get_ptr,
                         .value => @field(result, field.name) = get_ptr.*,
                     }
                 } else {
@@ -354,8 +403,15 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///
         /// Hazards:
         ///
-        ///     it's undefined behaviour to read component pointers after a call setComponents with the same component type,
-        ///     even it it's not on the same entity.
+        ///     it's undefined behaviour to read component pointers after a call to setComponents or other state mutating functions with the same component type,
+        ///     even if it's not on the same entity.
+        ///
+        /// Example:
+        /// ```
+        ///     const a = try storage.getComponent(my_entity, Component.A);
+        ///     const b = try storage.getComponent(my_entity, *Component.B);
+        ///     const c = try storage.getComponent(my_entity, *const Component.C);
+        /// ```
         pub fn getComponent(self: *const Storage, entity: Entity, comptime Component: type) error{MissingComponent}!Component {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
@@ -382,7 +438,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 entity.id,
             ) orelse return error.MissingComponent;
             switch (component_to_get.attr) {
-                .ptr => return get_ptr,
+                .ptr, .const_ptr => return get_ptr,
                 .value => return get_ptr.*,
             }
         }
@@ -399,6 +455,16 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         /// need to be accounted for in a system when present as a system argument.
         ///
         /// Request a component as a pointer for write access. Value for read-only access
+        ///
+        /// Example:
+        /// ```
+        ///     const StorageSubset = Storage.Subset(
+        ///         .{
+        ///             *Component.A, // Request A by pointer access (subset has write and read access for this type)
+        ///             Component.B, // Request B by value only (subset has read only access for this type)
+        ///         },
+        ///     );
+        /// ```
         pub fn Subset(comptime component_subset: anytype) type {
 
             // Check if tuple is valid and get array of types instead if valid
@@ -406,7 +472,13 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const inner_comp_types = get_inner_blk: {
                 var inner: [comp_types.len]type = undefined;
                 for (&inner, comp_types) |*Inner, CompType| {
-                    Inner.* = CompileReflect.compactComponentRequest(CompType).type;
+                    const component_request = CompileReflect.compactComponentRequest(CompType);
+                    if (component_request.attr == .const_ptr) {
+                        // It does not make sense to express a const ptr for a subset type (you can still use it when retrieving a component)
+                        @compileError("Subset with const ptr to '" ++ @typeName(component_request.type) ++ "' is not legal, must be either pointer or value when creating a Subset type");
+                    }
+
+                    Inner.* = component_request.type;
                 }
                 break :get_inner_blk inner;
             };
@@ -431,7 +503,9 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     // Validate that the correct access was requested in subset type
                     comptime {
                         const entity_state_info = @typeInfo(@TypeOf(entity_state));
-                        get_validation_loop: for (entity_state_info.Struct.fields) |field| {
+
+                        // Look up each component in the new entity and verify that each component is registered as write access
+                        get_validation_loop: for (entity_state_info.@"struct".fields) |field| {
                             const FieldType = field.type;
                             for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
                                 if (FieldType == InnerSubsetComp) {
@@ -456,7 +530,9 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     // Validate that the correct access was requested in subset type
                     comptime {
                         const set_info = @typeInfo(@TypeOf(struct_of_components));
-                        get_validation_loop: for (set_info.Struct.fields) |field| {
+
+                        // Look up each component in the new entity and verify that each component is registered as write access
+                        get_validation_loop: for (set_info.@"struct".fields) |field| {
                             const FieldType = field.type;
                             for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
                                 if (FieldType == InnerSubsetComp) {
@@ -481,7 +557,9 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     // Validate that the correct access was requested in subset type
                     comptime {
                         const unset_info = @typeInfo(@TypeOf(struct_of_remove_components));
-                        get_validation_loop: for (unset_info.Struct.fields) |field| {
+
+                        // Look up each component in the new entity and verify that each component is registered as write access
+                        get_validation_loop: for (unset_info.@"struct".fields) |field| {
                             const FieldType = @field(struct_of_remove_components, field.name);
                             for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
                                 if (FieldType == InnerSubsetComp) {
@@ -516,7 +594,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     // Validate that the correct access was requested in subset type
                     comptime {
                         const get_info = @typeInfo(Components);
-                        get_validation_loop: for (get_info.Struct.fields) |field| {
+                        get_validation_loop: for (get_info.@"struct".fields) |field| {
                             const component_to_get = CompileReflect.compactComponentRequest(field.type);
 
                             for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
@@ -685,6 +763,7 @@ pub const CompileReflect = struct {
         pub const Attr = enum {
             value,
             ptr,
+            const_ptr,
         };
 
         type: type,
@@ -694,13 +773,13 @@ pub const CompileReflect = struct {
         const type_info = @typeInfo(ComponentPtrOrValueType);
 
         return switch (type_info) {
-            .Struct => .{
+            .@"struct" => .{
                 .type = ComponentPtrOrValueType,
                 .attr = .value,
             },
-            .Pointer => |ptr_info| .{
+            .pointer => |ptr_info| .{
                 .type = ptr_info.child,
-                .attr = .ptr,
+                .attr = if (ptr_info.is_const) .const_ptr else .ptr,
             },
             else => @compileError(@typeName(ComponentPtrOrValueType) ++ " is not pointer, nor a struct."),
         };
@@ -714,12 +793,12 @@ pub const CompileReflect = struct {
             field.* = std.builtin.Type.StructField{
                 .name = @typeName(Component),
                 .type = SparseSet,
-                .default_value = @ptrCast(&default_value),
+                .default_value_ptr = @ptrCast(&default_value),
                 .is_comptime = false,
                 .alignment = @alignOf(SparseSet),
             };
         }
-        const group_type = std.builtin.Type{ .Struct = .{
+        const group_type = std.builtin.Type{ .@"struct" = .{
             .layout = .auto,
             .fields = &struct_fields,
             .decls = &[_]std.builtin.Type.Declaration{},
@@ -742,14 +821,14 @@ pub const CompileReflect = struct {
             struct_fields[non_zero_component_count] = std.builtin.Type.StructField{
                 .name = @typeName(Component),
                 .type = DenseSet,
-                .default_value = @ptrCast(&default_value),
+                .default_value_ptr = @ptrCast(&default_value),
                 .is_comptime = false,
                 .alignment = @alignOf(DenseSet),
             };
 
             non_zero_component_count += 1;
         }
-        const group_type = std.builtin.Type{ .Struct = .{
+        const group_type = std.builtin.Type{ .@"struct" = .{
             .layout = .auto,
             .fields = struct_fields[0..non_zero_component_count],
             .decls = &[_]std.builtin.Type.Declaration{},
@@ -770,14 +849,14 @@ pub const CompileReflect = struct {
             struct_fields[non_zero_component_count] = std.builtin.Type.StructField{
                 .name = @typeName(Component),
                 .type = *const DenseSet,
-                .default_value = null,
+                .default_value_ptr = null,
                 .is_comptime = false,
                 .alignment = @alignOf(*DenseSet),
             };
 
             non_zero_component_count += 1;
         }
-        const group_type = std.builtin.Type{ .Struct = .{
+        const group_type = std.builtin.Type{ .@"struct" = .{
             .layout = .auto,
             .fields = struct_fields[0..non_zero_component_count],
             .decls = &[_]std.builtin.Type.Declaration{},
@@ -789,21 +868,21 @@ pub const CompileReflect = struct {
     /// Produce a flat array of component types if the 'components' tuple is valid
     fn verifyComponentTuple(comptime components: anytype) return_type_blk: {
         const components_info = @typeInfo(@TypeOf(components));
-        if (components_info != .Struct) {
+        if (components_info != .@"struct") {
             @compileError("components was not a tuple of types");
         }
 
-        break :return_type_blk [components_info.Struct.fields.len]type;
+        break :return_type_blk [components_info.@"struct".fields.len]type;
     } {
         const components_info = @typeInfo(@TypeOf(components));
-        var field_types: [components_info.Struct.fields.len]type = undefined;
-        for (&field_types, components_info.Struct.fields, 0..) |*field_type, field, component_index| {
-            if (@typeInfo(field.type) != .Type) {
+        var field_types: [components_info.@"struct".fields.len]type = undefined;
+        for (&field_types, components_info.@"struct".fields, 0..) |*field_type, field, component_index| {
+            if (@typeInfo(field.type) != .type) {
                 @compileError("components must be a struct of types, field '" ++ field.name ++ "' was " ++ @typeName(field.type));
             }
 
             const compo_field_info = @typeInfo(components[component_index]);
-            if (compo_field_info != .Struct and compo_field_info != .Pointer) {
+            if (compo_field_info != .@"struct" and compo_field_info != .pointer) {
                 @compileError("component types must be a struct or pointer, field '" ++ field.name ++ "' was '" ++ @typeName(components[component_index]));
             }
 
@@ -821,7 +900,7 @@ pub const CompileReflect = struct {
         const TupleUnwrapped = if (@TypeOf(type_tuple) == type) type_tuple else @TypeOf(type_tuple);
 
         const type_tuple_info = @typeInfo(TupleUnwrapped);
-        field_loop: for (type_tuple_info.Struct.fields) |field| {
+        field_loop: for (type_tuple_info.@"struct".fields) |field| {
             const FieldTypeUnwrapped = if (field.type == type) @field(type_tuple, field.name) else field.type;
             const InnerType = compactComponentRequest(FieldTypeUnwrapped).type;
 
@@ -1197,6 +1276,66 @@ test "getComponent() retrieve component values" {
     try testing.expectEqual(entity_initial_state.b, try storage.getComponent(entity, Testing.Component.B));
 }
 
+test "getComponent() with const ptr retrieve component" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 0 },
+            .b = Testing.Component.B{ .value = 0 },
+        };
+        _ = try storage.createEntity(initial_state);
+    }
+
+    {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 1 },
+            .b = Testing.Component.B{ .value = 1 },
+        };
+        _ = try storage.createEntity(initial_state);
+    }
+
+    {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 2 },
+            .b = Testing.Component.B{ .value = 2 },
+        };
+        _ = try storage.createEntity(initial_state);
+    }
+
+    const entity_initial_state = AbEntityType{
+        .a = Testing.Component.A{ .value = 123 },
+        .b = Testing.Component.B{ .value = 123 },
+    };
+    const entity = try storage.createEntity(entity_initial_state);
+
+    {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 3 },
+            .b = Testing.Component.B{ .value = 3 },
+        };
+        _ = try storage.createEntity(initial_state);
+    }
+
+    {
+        const initial_state = AbEntityType{
+            .a = Testing.Component.A{ .value = 4 },
+            .b = Testing.Component.B{ .value = 4 },
+        };
+        _ = try storage.createEntity(initial_state);
+    }
+
+    try testing.expectEqual(
+        entity_initial_state.a,
+        (try storage.getComponent(entity, *const Testing.Component.A)).*,
+    );
+    try testing.expectEqual(
+        entity_initial_state.b,
+        (try storage.getComponent(entity, *const Testing.Component.B)).*,
+    );
+}
+
 test "getComponent() can mutate component value with ptr" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
@@ -1560,6 +1699,47 @@ test "query with single result component ptr type works" {
                 try std.testing.expectEqual(Testing.Component.A{
                     .value = @as(u32, @intCast(index)),
                 }, item.a);
+
+                index += 1;
+            }
+        }
+    }
+}
+
+test "query with single const ptr result component ptr type works" {
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
+
+    inline for (Queries.WriteA, Queries.ReadAConstPtr) |WriteA, ReadAConstPtr| {
+        storage.clearRetainingCapacity();
+
+        for (0..100) |index| {
+            _ = try storage.createEntity(AbEntityType{
+                .a = .{ .value = @as(u32, @intCast(index)) },
+                .b = .{ .value = @as(u8, @intCast(index)) },
+            });
+        }
+
+        {
+            var index: usize = 0;
+            var a_iter = try WriteA.submit(std.testing.allocator, &storage);
+            defer a_iter.deinit(std.testing.allocator);
+
+            while (a_iter.next()) |item| {
+                item.a.value += 1;
+                index += 1;
+            }
+        }
+
+        {
+            var index: usize = 1;
+            var a_iter = try ReadAConstPtr.submit(std.testing.allocator, &storage);
+            defer a_iter.deinit(std.testing.allocator);
+
+            while (a_iter.next()) |item| {
+                try std.testing.expectEqual(Testing.Component.A{
+                    .value = @as(u32, @intCast(index)),
+                }, item.a.*);
 
                 index += 1;
             }
