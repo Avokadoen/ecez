@@ -99,6 +99,15 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         /// Parameters:
         ///
         ///     - entity_state: the components that the new entity should be assigned
+        ///
+        /// Example:
+        /// ```
+        ///    const new_entity = try storage.createEntity(.{
+        ///         Component.A{ .value = 42 },
+        ///         Component.B{},
+        ///    });
+        /// ```
+        ///
         pub fn createEntity(self: *Storage, entity_state: anytype) error{OutOfMemory}!Entity {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
@@ -170,6 +179,15 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///
         ///     It's undefined behaviour to call setComponents, then read a stale query result (returned from Query.next) item pointer field.
         ///     The same is true for returned getComponent(s) that are pointers. Be sure to call setComponents AFTER any component pointer access.
+        ///
+        /// Example:
+        /// ```
+        ///     try storage.setComponents(my_entity, .{
+        ///         Component.A{ .value = 50 },
+        ///         Component.B{ .value = 50 },
+        ///     });
+        /// ```
+        ///
         pub fn setComponents(self: *Storage, entity: Entity, struct_of_components: anytype) error{OutOfMemory}!void {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
@@ -224,6 +242,17 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///
         ///     - entity:    the entity being mutated
         ///     - components: the components to remove in a tuple/struct
+        ///
+        /// Hazards:
+        ///
+        ///     It's undefined behaviour to call unsetComponents, then read a stale query result (returned from Query.next) item pointer field.
+        ///     The same is true for returned getComponent(s) that are pointers. Be sure to call unsetComponents AFTER any component pointer access.
+        ///
+        /// Example:
+        /// ```
+        ///     storage.unsetComponents(my_entity, .{Component.A, Component.B});
+        /// ```
+        ///
         pub fn unsetComponents(self: *Storage, entity: Entity, comptime struct_of_remove_components: anytype) void {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
@@ -259,6 +288,14 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///
         ///     - entity:     the entity to check for type Components
         ///     - components: a tuple of component types to check after
+        ///
+        /// Example:
+        /// ```
+        ///     if(storage.hasComponents(my_entity, .{Component.A})) {
+        ///         print("my_entity has A", .{});
+        ///     }
+        ///
+        /// ```
         pub fn hasComponents(self: Storage, entity: Entity, comptime components: anytype) bool {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
@@ -292,8 +329,20 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///
         /// Hazards:
         ///
-        ///     it's undefined behaviour to read component pointers after a call setComponents with the same component type(s),
-        ///     even it it's not on the same entity.
+        ///     it's undefined behaviour to read component pointers after a call to setComponents or other state mutating functions with the same component type,
+        ///     even if it's not on the same entity.
+        ///
+        /// Example:
+        /// ```
+        ///     const a_b_c = try storage.getComponents(my_entity, .{
+        ///         a: *Component.A,        // we can mutate a
+        ///         b: Component.B,         // b is read only
+        ///         c: *const Component.C   // c is read only
+        ///     });
+        ///
+        ///     a_b_c.a.value = 51;
+        /// ```
+        ///
         pub fn getComponents(self: *const Storage, entity: Entity, comptime Components: type) error{MissingComponent}!Components {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
@@ -354,8 +403,15 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///
         /// Hazards:
         ///
-        ///     it's undefined behaviour to read component pointers after a call setComponents with the same component type,
-        ///     even it it's not on the same entity.
+        ///     it's undefined behaviour to read component pointers after a call to setComponents or other state mutating functions with the same component type,
+        ///     even if it's not on the same entity.
+        ///
+        /// Example:
+        /// ```
+        ///     const a = try storage.getComponent(my_entity, Component.A);
+        ///     const b = try storage.getComponent(my_entity, *Component.B);
+        ///     const c = try storage.getComponent(my_entity, *const Component.C);
+        /// ```
         pub fn getComponent(self: *const Storage, entity: Entity, comptime Component: type) error{MissingComponent}!Component {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
@@ -399,6 +455,16 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         /// need to be accounted for in a system when present as a system argument.
         ///
         /// Request a component as a pointer for write access. Value for read-only access
+        ///
+        /// Example:
+        /// ```
+        ///     const StorageSubset = Storage.Subset(
+        ///         .{
+        ///             *Component.A, // Request A by pointer access (subset has write and read access for this type)
+        ///             Component.B, // Request B by value only (subset has read only access for this type)
+        ///         },
+        ///     );
+        /// ```
         pub fn Subset(comptime component_subset: anytype) type {
 
             // Check if tuple is valid and get array of types instead if valid
