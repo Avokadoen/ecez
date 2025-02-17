@@ -68,6 +68,7 @@ pub fn buildDependencyList(
                 if (TypeParam.EcezType == QueryType) {}
             }
 
+            // Compute each systems component access and store it in the system node
             const all_access = get_access_blk: {
                 var access_index = 0;
                 var access: [access_count]Access = undefined;
@@ -124,26 +125,28 @@ pub fn buildDependencyList(
         var systems_dependencies: [system_count]Dependency = undefined;
         systems_dependencies[0] = Dependency{ .wait_on_indices = &[_]u32{} };
         for (systems_dependencies[1..], graph[1..], 1..) |*system_dependencies, this_node, node_index| {
-            var access_not_locked: [this_node.access.len]Access = undefined;
-            var access_not_locked_len = access_not_locked.len;
+            var this_node_access_not_locked: [this_node.access.len]Access = undefined;
+            var this_node_access_not_locked_len = this_node_access_not_locked.len;
 
             var access_not_locked_read_to_write = [_]bool{false} ** this_node.access.len;
-
-            @memcpy(&access_not_locked, this_node.access);
+            @memcpy(&this_node_access_not_locked, this_node.access);
 
             const dependencies = calc_deps_blk: {
                 var dependency_len: u32 = 0;
                 var dependency_slots: [node_index]u32 = undefined;
+
+                // Loop all previous nodes
                 for (0..node_index) |prev_node_index| {
 
                     // Reverse index to iterate backwards
                     const other_node_index = (node_index - prev_node_index) - 1;
                     const other_node = graph[other_node_index];
 
+                    // foearch access in previous node
                     for (other_node.access) |other_access| {
                         var access_not_locked_index: u32 = 0;
-                        access_loop: while (access_not_locked_index < access_not_locked_len) {
-                            const this_access = access_not_locked[access_not_locked_index];
+                        access_loop: while (access_not_locked_index < this_node_access_not_locked_len) {
+                            const this_access = this_node_access_not_locked[access_not_locked_index];
 
                             if (this_access.type != other_access.type) {
                                 access_not_locked_index += 1;
@@ -158,9 +161,8 @@ pub fn buildDependencyList(
                             }
 
                             var remove_access_not_locked = is_read_to_write == false;
-
                             if (is_read_to_write or is_any_write) {
-                                // TODO: potentially mark unlikely branch
+                                @branchHint(.unlikely);
 
                                 // Store dependency
                                 set_dependency_slot_blk: {
@@ -171,15 +173,16 @@ pub fn buildDependencyList(
                                         }
                                     }
 
-                                    // If we have registered a read to write, and now are hitting a write to write,
-                                    // then we skip write to write since the read is already blocked on the write
+                                    // If we previously registered a read to write, and now are hitting a write to write, then we must track all current reads
                                     //
                                     // Example scenario:
                                     //
-                                    //       nodes: a(w) -> a(r) -> a(r) -> a(w)
-                                    //               ^       v ^    v ^       v
-                                    //                \     /   \---/-\      /
-                                    //                 ----/-------/   \----/
+                                    //       nodes: a1(w) -> a2(r) -> a3(r) -> a4(w)
+                                    //               ^        v ^     v ^       v
+                                    //                \      /   \----/-\      /
+                                    //                 -----/--------/   \----/
+                                    //
+                                    // Example showing a1 will wait for a2 and a3 and ignore a4 as there is a implicit dependency already.
                                     if (access_not_locked_read_to_write[access_not_locked_index] and this_access.right == .write and other_access.right == .write) {
                                         remove_access_not_locked = true;
                                         break :set_dependency_slot_blk;
@@ -191,9 +194,9 @@ pub fn buildDependencyList(
 
                                 // swap remove access if we hit a write
                                 if (remove_access_not_locked) {
-                                    access_not_locked[access_not_locked_index] = access_not_locked[access_not_locked_len - 1];
-                                    access_not_locked_read_to_write[access_not_locked_index] = access_not_locked_read_to_write[access_not_locked_len - 1];
-                                    access_not_locked_len -= 1;
+                                    this_node_access_not_locked[access_not_locked_index] = this_node_access_not_locked[this_node_access_not_locked_len - 1];
+                                    access_not_locked_read_to_write[access_not_locked_index] = access_not_locked_read_to_write[this_node_access_not_locked_len - 1];
+                                    this_node_access_not_locked_len -= 1;
                                 }
                             }
 
