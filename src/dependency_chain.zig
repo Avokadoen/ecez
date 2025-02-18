@@ -131,7 +131,7 @@ pub fn buildDependencyList(
             var access_not_locked_read_to_write = [_]bool{false} ** this_node.access.len;
             @memcpy(&this_node_access_not_locked, this_node.access);
 
-            const dependencies = calc_deps_blk: {
+            var dependencies, var dependencies_len = calc_deps_blk: {
                 var dependency_len: u32 = 0;
                 var dependency_slots: [node_index]u32 = undefined;
 
@@ -207,14 +207,51 @@ pub fn buildDependencyList(
                         }
                     }
                 }
-                break :calc_deps_blk globalArrayVariableRefWorkaround(dependency_slots, dependency_len)[0..dependency_len];
+                break :calc_deps_blk .{ dependency_slots, dependency_len };
             };
-            system_dependencies.* = Dependency{ .wait_on_indices = dependencies };
+
+            // Transitive dependency removal
+            if (dependencies_len > 1) {
+                for (dependencies[0 .. dependencies_len - 1], 0..) |dependency, dep_index| {
+                    for (dependencies[dep_index + 1 .. dependencies_len], dep_index + 1..) |other_dependency, other_dep_index| {
+                        if (locateDependency(systems_dependencies[0..node_index], dependency, other_dependency)) {
+                            // remove dependency which is already transitively tracked
+                            if (dependencies[other_dep_index..dependencies_len].len > 1) {
+                                std.mem.rotate(u32, dependencies[other_dep_index..dependencies_len], dependencies[other_dep_index..dependencies_len].len - 1);
+                            }
+
+                            dependencies_len -= 1;
+                        }
+                    }
+                }
+            }
+
+            // Reverse dependencies
+            std.mem.reverse(u32, dependencies[0..dependencies_len]);
+
+            system_dependencies.* = Dependency{
+                .wait_on_indices = globalArrayVariableRefWorkaround(dependencies, dependencies_len)[0..dependencies_len],
+            };
         }
         break :calc_dependencies_blk systems_dependencies;
     };
 
     return final_systems_dependencies;
+}
+
+pub fn locateDependency(systems_dependencies: []const Dependency, higher_dependency: u32, lower_dependency: u32) bool {
+    for (systems_dependencies[higher_dependency].wait_on_indices) |high_dep| {
+        // if we have found dependency
+        if (high_dep == lower_dependency) {
+            return true;
+        }
+
+        if (locateDependency(systems_dependencies, high_dep, lower_dependency)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 fn globalArrayVariableRefWorkaround(comptime array: anytype, comptime len: u32) @TypeOf(array) {
@@ -225,7 +262,6 @@ fn globalArrayVariableRefWorkaround(comptime array: anytype, comptime len: u32) 
     switch (arr_info) {
         .array => {
             @memcpy(tmp[0..len], array[0..len]);
-            std.mem.reverse(arr_info.array.child, tmp[0..len]);
         },
         else => @compileError("ecez bug: invalid " ++ @src().fn_name ++ " array type" ++ @typeName(ArrayType)),
     }
@@ -1428,8 +1464,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{1} }, // 5: readAReadB,
                 Dependency{ .wait_on_indices = &[_]u32{1} }, // 6: readAReadB,
                 Dependency{ .wait_on_indices = &[_]u32{ 2, 4, 5, 6 } }, // 7: writeAWriteB,
-                // TODO: issue #205
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 7 } }, // 8: writeAWriteBWriteC,
+                Dependency{ .wait_on_indices = &[_]u32{7} }, // 8: writeAWriteBWriteC,
                 Dependency{ .wait_on_indices = &[_]u32{8} }, // 9: readAReadB,
                 Dependency{ .wait_on_indices = &[_]u32{8} }, // 10: readAReadBReadC,
             };
@@ -1453,7 +1488,7 @@ test buildDependencyList {
             Dependency{ .wait_on_indices = &[_]u32{} },
             Dependency{ .wait_on_indices = &[_]u32{0} },
             Dependency{ .wait_on_indices = &[_]u32{1} },
-            Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
+            Dependency{ .wait_on_indices = &[_]u32{2} },
             Dependency{ .wait_on_indices = &[_]u32{3} },
         };
 
@@ -1473,8 +1508,8 @@ test buildDependencyList {
         const expected_dependencies = [_]Dependency{
             Dependency{ .wait_on_indices = &[_]u32{} },
             Dependency{ .wait_on_indices = &[_]u32{0} },
-            Dependency{ .wait_on_indices = &[_]u32{ 0, 1 } },
-            Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
+            Dependency{ .wait_on_indices = &[_]u32{1} },
+            Dependency{ .wait_on_indices = &[_]u32{2} },
             Dependency{ .wait_on_indices = &[_]u32{2} },
         };
 
@@ -1566,6 +1601,49 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
                 Dependency{ .wait_on_indices = &[_]u32{3} },
+            };
+
+            for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            }
+        }
+    }
+
+    // Implicit dependency removal
+    {
+        // Artibtrary order (1)
+        inline for (SingleQuerySystems) |SingleQuerySystemsT| {
+            const dependencies = comptime buildDependencyList(.{
+                SingleQuerySystemsT.writeAWriteB,
+                SingleQuerySystemsT.readAValue,
+                SingleQuerySystemsT.writeA,
+                SingleQuerySystemsT.readAValue,
+                SingleQuerySystemsT.writeA,
+                SingleQuerySystemsT.readAValue,
+                SingleQuerySystemsT.writeA,
+                SingleQuerySystemsT.readB,
+                SingleQuerySystemsT.writeB,
+                SingleQuerySystemsT.readB,
+                SingleQuerySystemsT.writeB,
+                SingleQuerySystemsT.readB,
+                SingleQuerySystemsT.writeB,
+                SingleQuerySystemsT.writeAWriteB,
+            }, 14);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} }, // 0: writeAWriteB,
+                Dependency{ .wait_on_indices = &[_]u32{0} }, // 1: readA,
+                Dependency{ .wait_on_indices = &[_]u32{1} }, // 2: writeA,
+                Dependency{ .wait_on_indices = &[_]u32{2} }, // 3: readA,
+                Dependency{ .wait_on_indices = &[_]u32{3} }, // 4: writeA,
+                Dependency{ .wait_on_indices = &[_]u32{4} }, // 5: readA,
+                Dependency{ .wait_on_indices = &[_]u32{5} }, // 6: writeA,
+                Dependency{ .wait_on_indices = &[_]u32{0} }, // 7: readBValue,
+                Dependency{ .wait_on_indices = &[_]u32{7} }, // 8: writeB,
+                Dependency{ .wait_on_indices = &[_]u32{8} }, // 9: readBValue,
+                Dependency{ .wait_on_indices = &[_]u32{9} }, // 10: writeB,
+                Dependency{ .wait_on_indices = &[_]u32{10} }, // 11: readBValue,
+                Dependency{ .wait_on_indices = &[_]u32{11} }, // 12: writeB,
+                Dependency{ .wait_on_indices = &[_]u32{ 6, 12 } }, // 13: writeAWriteB,
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
