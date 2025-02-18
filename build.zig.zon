@@ -10,12 +10,9 @@
     .paths = .{
         // Examples are not included when ecez is used as a library
         // "examples",
-
-        "deps",
         "build.zig",
         "build.zig.zon",
         "src",
-        "byte_format.md",
         "README.md",
     },
 }
