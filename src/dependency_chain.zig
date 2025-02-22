@@ -226,9 +226,6 @@ pub fn buildDependencyList(
                 }
             }
 
-            // Reverse dependencies
-            std.mem.reverse(u32, dependencies[0..dependencies_len]);
-
             system_dependencies.* = Dependency{
                 .wait_on_indices = globalArrayVariableRefWorkaround(dependencies, dependencies_len)[0..dependencies_len],
             };
@@ -780,7 +777,7 @@ test buildDependencyList {
             const expected_dependencies = [_]Dependency{
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[2]u32{ 0, 1 } },
+                Dependency{ .wait_on_indices = &[2]u32{ 1, 0 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -798,7 +795,7 @@ test buildDependencyList {
             const expected_dependencies = [_]Dependency{
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[2]u32{ 0, 1 } },
+                Dependency{ .wait_on_indices = &[2]u32{ 1, 0 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -818,7 +815,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -838,7 +835,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -861,7 +858,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
                 Dependency{ .wait_on_indices = &[_]u32{3} },
             };
 
@@ -883,7 +880,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
                 Dependency{ .wait_on_indices = &[_]u32{3} },
             };
 
@@ -905,7 +902,7 @@ test buildDependencyList {
             const expected_dependencies = [_]Dependency{
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 0, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -959,7 +956,7 @@ test buildDependencyList {
             const expected_dependencies = [_]Dependency{
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 0, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -979,7 +976,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1000,7 +997,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
                 Dependency{ .wait_on_indices = &[_]u32{3} },
             };
 
@@ -1022,7 +1019,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
                 Dependency{ .wait_on_indices = &[_]u32{3} },
             };
 
@@ -1050,10 +1047,10 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{0} }, // 2: readA,
                 Dependency{ .wait_on_indices = &[_]u32{2} }, // 3: writeA,
                 Dependency{ .wait_on_indices = &[_]u32{} }, // 4: readB,
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 4 } }, // 5: writeB,
-                Dependency{ .wait_on_indices = &[_]u32{ 3, 5 } }, // 6: readAreadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 3, 5 } }, // 7: readAreadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 6, 7 } }, // 8: writeAwriteB,
+                Dependency{ .wait_on_indices = &[_]u32{ 4, 1 } }, // 5: writeB,
+                Dependency{ .wait_on_indices = &[_]u32{ 5, 3 } }, // 6: readAreadB,
+                Dependency{ .wait_on_indices = &[_]u32{ 5, 3 } }, // 7: readAreadB,
+                Dependency{ .wait_on_indices = &[_]u32{ 7, 6 } }, // 8: writeAwriteB,
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1076,7 +1073,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 0, 1, 2 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1, 0 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1136,7 +1133,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 0, 1, 2 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1, 0 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1167,8 +1164,8 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{1} }, // 4: readB,
                 Dependency{ .wait_on_indices = &[_]u32{1} }, // 5: readAReadB,
                 Dependency{ .wait_on_indices = &[_]u32{1} }, // 6: readAReadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 4, 5, 6 } }, // 7: writeAWriteB,
-                Dependency{ .wait_on_indices = &[_]u32{ 3, 7 } }, // 8: writeAWriteBWriteD,
+                Dependency{ .wait_on_indices = &[_]u32{ 6, 5, 4, 2 } }, // 7: writeAWriteB,
+                Dependency{ .wait_on_indices = &[_]u32{ 7, 3 } }, // 8: writeAWriteBWriteD,
                 Dependency{ .wait_on_indices = &[_]u32{8} }, // 9: readAReadB,
                 Dependency{ .wait_on_indices = &[_]u32{8} }, // 10: readAReadBInclD,
             };
@@ -1193,7 +1190,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1211,7 +1208,7 @@ test buildDependencyList {
             const expected_dependencies = [_]Dependency{
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 0, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1229,7 +1226,7 @@ test buildDependencyList {
             const expected_dependencies = [_]Dependency{
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 0, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1260,8 +1257,8 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{1} }, // 4: readB,
                 Dependency{ .wait_on_indices = &[_]u32{1} }, // 5: readAReadB,
                 Dependency{ .wait_on_indices = &[_]u32{1} }, // 6: readAReadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 4, 5, 6 } }, // 7: writeAWriteB,
-                Dependency{ .wait_on_indices = &[_]u32{ 3, 7 } }, // 8: writeAWriteBWriteC,
+                Dependency{ .wait_on_indices = &[_]u32{ 6, 5, 4, 2 } }, // 7: writeAWriteB,
+                Dependency{ .wait_on_indices = &[_]u32{ 7, 3 } }, // 8: writeAWriteBWriteC,
                 Dependency{ .wait_on_indices = &[_]u32{8} }, // 9: readAReadB,
                 Dependency{ .wait_on_indices = &[_]u32{8} }, // 10: readAReadBInclD,
             };
@@ -1284,7 +1281,7 @@ test buildDependencyList {
             const expected_dependencies = [_]Dependency{
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 0, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1338,7 +1335,7 @@ test buildDependencyList {
             const expected_dependencies = [_]Dependency{
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 0, 1 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1358,7 +1355,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1379,7 +1376,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
                 Dependency{ .wait_on_indices = &[_]u32{3} },
             };
 
@@ -1401,7 +1398,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
                 Dependency{ .wait_on_indices = &[_]u32{3} },
             };
 
@@ -1429,10 +1426,10 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{0} }, // 2: readA,
                 Dependency{ .wait_on_indices = &[_]u32{2} }, // 3: writeA,
                 Dependency{ .wait_on_indices = &[_]u32{} }, // 4: readB,
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 4 } }, // 5: writeB,
-                Dependency{ .wait_on_indices = &[_]u32{ 3, 5 } }, // 6: readAreadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 3, 5 } }, // 7: readAreadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 6, 7 } }, // 8: writeAwriteB,
+                Dependency{ .wait_on_indices = &[_]u32{ 4, 1 } }, // 5: writeB,
+                Dependency{ .wait_on_indices = &[_]u32{ 5, 3 } }, // 6: readAreadB,
+                Dependency{ .wait_on_indices = &[_]u32{ 5, 3 } }, // 7: readAreadB,
+                Dependency{ .wait_on_indices = &[_]u32{ 7, 6 } }, // 8: writeAwriteB,
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1463,7 +1460,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{1} }, // 4: readB,
                 Dependency{ .wait_on_indices = &[_]u32{1} }, // 5: readAReadB,
                 Dependency{ .wait_on_indices = &[_]u32{1} }, // 6: readAReadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 4, 5, 6 } }, // 7: writeAWriteB,
+                Dependency{ .wait_on_indices = &[_]u32{ 6, 5, 4, 2 } }, // 7: writeAWriteB,
                 Dependency{ .wait_on_indices = &[_]u32{7} }, // 8: writeAWriteBWriteC,
                 Dependency{ .wait_on_indices = &[_]u32{8} }, // 9: readAReadB,
                 Dependency{ .wait_on_indices = &[_]u32{8} }, // 10: readAReadBReadC,
@@ -1553,8 +1550,8 @@ test buildDependencyList {
             Dependency{ .wait_on_indices = &[_]u32{0} },
             Dependency{ .wait_on_indices = &[_]u32{0} },
             Dependency{ .wait_on_indices = &[_]u32{0} },
-            Dependency{ .wait_on_indices = &[_]u32{ 1, 2, 3 } },
-            Dependency{ .wait_on_indices = &[_]u32{ 1, 3 } },
+            Dependency{ .wait_on_indices = &[_]u32{ 3, 2, 1 } },
+            Dependency{ .wait_on_indices = &[_]u32{ 3, 1 } },
         };
 
         for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
@@ -1577,7 +1574,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
                 Dependency{ .wait_on_indices = &[_]u32{3} },
             };
 
@@ -1599,7 +1596,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
                 Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
                 Dependency{ .wait_on_indices = &[_]u32{3} },
             };
 
@@ -1643,7 +1640,7 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{9} }, // 10: writeB,
                 Dependency{ .wait_on_indices = &[_]u32{10} }, // 11: readBValue,
                 Dependency{ .wait_on_indices = &[_]u32{11} }, // 12: writeB,
-                Dependency{ .wait_on_indices = &[_]u32{ 6, 12 } }, // 13: writeAWriteB,
+                Dependency{ .wait_on_indices = &[_]u32{ 12, 6 } }, // 13: writeAWriteB,
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
