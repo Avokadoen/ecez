@@ -211,6 +211,12 @@ pub fn buildDependencyList(
             };
 
             // Transitive dependency removal
+            // Example:
+            //      | Job ID | Wait on |                  | Job ID | Wait on |
+            //      | A      |         |   -Reduce To->   | A      |         |
+            //      | B      |    A    |                  | B      |    A    |
+            //      | C      |  B, A   |                  | C      |    B    |
+            //
             if (dependencies_len > 1) {
                 for (dependencies[0 .. dependencies_len - 1], 0..) |dependency, dep_index| {
                     for (dependencies[dep_index + 1 .. dependencies_len], dep_index + 1..) |other_dependency, other_dep_index| {
