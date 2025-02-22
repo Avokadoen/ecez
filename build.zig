@@ -20,29 +20,41 @@ pub fn doc(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builti
 
 /// Builds the project for testing and to run simple examples
 pub fn build(b: *std.Build) void {
+    const options = .{
+        .enable_ztracy = b.option(
+            bool,
+            "enable_ztracy",
+            "Enable Tracy profile markers",
+        ) orelse false,
+        .enable_fibers = b.option(
+            bool,
+            "enable_fibers",
+            "Enable Tracy fiber support",
+        ) orelse false,
+        .on_demand = b.option(
+            bool,
+            "on_demand",
+            "Build tracy with TRACY_ON_DEMAND",
+        ) orelse false,
+    };
+
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // initialize tracy
-    const enable_tracy = b.option(bool, "enable_tracy", "Enable Tracy profiler") orelse false;
-
     const ztracy = b.dependency("ztracy", .{
-        .enable_ztracy = enable_tracy,
-        .enable_fibers = true,
+        .enable_ztracy = options.enable_ztracy,
+        .enable_fibers = options.enable_fibers,
+        .on_demand = options.on_demand,
     });
-
-    const imports = [_]std.Build.Module.Import{
-        .{
-            .name = "ztracy",
-            .module = ztracy.module("root"),
-        },
-    };
 
     const main_path = b.path("src/main.zig");
-    const ecez = b.addModule("ecez", std.Build.Module.CreateOptions{
+    const ecez_module = b.createModule(.{
         .root_source_file = main_path,
-        .imports = &imports,
+        .target = target,
+        .optimize = optimize,
     });
+
+    ecez_module.addImport("ztracy", ztracy.module("root"));
 
     // create a debuggable test executable
     {
@@ -52,8 +64,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
 
-        main_tests.root_module.addImport("ecez", ecez);
+        main_tests.root_module.addImport("ecez", ecez_module);
         main_tests.root_module.addImport("ztracy", ztracy.module("root"));
+        main_tests.linkLibrary(ztracy.artifact("tracy"));
 
         b.installArtifact(main_tests);
     }
@@ -67,8 +80,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    main_tests.root_module.addImport("ecez", ecez);
+    main_tests.root_module.addImport("ecez", ecez_module);
     main_tests.root_module.addImport("ztracy", ztracy.module("root"));
+    main_tests.linkLibrary(ztracy.artifact("tracy"));
 
     const test_step = b.step("test", "Run all tests");
     const main_tests_run = b.addRunArtifact(main_tests);
@@ -90,7 +104,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
 
-        exe.root_module.addImport("ecez", ecez);
+        exe.root_module.addImport("ecez", ecez_module);
         exe.root_module.addImport("ztracy", ztracy.module("root"));
         exe.linkLibrary(ztracy.artifact("tracy"));
 
@@ -107,8 +121,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
 
-        example_tests.root_module.addImport("ecez", ecez);
+        example_tests.root_module.addImport("ecez", ecez_module);
         example_tests.root_module.addImport("ztracy", ztracy.module("root"));
+        example_tests.linkLibrary(ztracy.artifact("tracy"));
 
         const example_test_run = b.addRunArtifact(example_tests);
         test_step.dependOn(&example_test_run.step);
