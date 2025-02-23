@@ -1,5 +1,11 @@
 const std = @import("std");
 
+pub const Options = struct {
+    enable_ztracy: bool,
+    enable_fibers: bool,
+    on_demand: bool,
+};
+
 /// Generate documentation if the user requests it
 pub fn doc(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
     const autodoc_test = b.addObject(.{
@@ -20,7 +26,7 @@ pub fn doc(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builti
 
 /// Builds the project for testing and to run simple examples
 pub fn build(b: *std.Build) void {
-    const options = .{
+    const options = Options{
         .enable_ztracy = b.option(
             bool,
             "enable_ztracy",
