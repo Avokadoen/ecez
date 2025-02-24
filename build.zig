@@ -54,7 +54,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const main_path = b.path("src/main.zig");
-    const ecez_module = b.createModule(.{
+    const ecez_module = b.addModule("ecez", .{
         .root_source_file = main_path,
         .target = target,
         .optimize = optimize,
