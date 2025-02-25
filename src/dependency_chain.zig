@@ -218,8 +218,12 @@ pub fn buildDependencyList(
             //      | C      |  B, A   |                  | C      |    B    |
             //
             if (dependencies_len > 1) {
-                for (dependencies[0 .. dependencies_len - 1], 0..) |dependency, dep_index| {
-                    for (dependencies[dep_index + 1 .. dependencies_len], dep_index + 1..) |other_dependency, other_dep_index| {
+                var dep_index = 0;
+                while (dep_index < dependencies_len - 1) : (dep_index += 1) {
+                    const dependency = dependencies[dep_index];
+                    var other_dep_index = 1;
+                    while (other_dep_index < dependencies_len) : (other_dep_index += 1) {
+                        const other_dependency = dependencies[other_dep_index];
                         if (locateDependency(systems_dependencies[0..node_index], dependency, other_dependency)) {
                             // remove dependency which is already transitively tracked
                             if (dependencies[other_dep_index..dependencies_len].len > 1) {
