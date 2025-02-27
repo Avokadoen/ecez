@@ -47,12 +47,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const ztracy = b.dependency("ztracy", .{
-        .enable_ztracy = options.enable_ztracy,
-        .enable_fibers = options.enable_fibers,
-        .on_demand = options.on_demand,
-    });
-
     const main_path = b.path("src/main.zig");
     const ecez_module = b.addModule("ecez", .{
         .root_source_file = main_path,
@@ -60,7 +54,14 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    ecez_module.addImport("ztracy", ztracy.module("root"));
+    const ztracy_dep = b.dependency("ztracy", .{
+        .enable_ztracy = options.enable_ztracy,
+        .enable_fibers = options.enable_fibers,
+        .on_demand = options.on_demand,
+    });
+    const ztracy_module = ztracy_dep.module("root");
+
+    ecez_module.addImport("ztracy", ztracy_module);
 
     // create a debuggable test executable
     {
@@ -71,8 +72,8 @@ pub fn build(b: *std.Build) void {
         });
 
         main_tests.root_module.addImport("ecez", ecez_module);
-        main_tests.root_module.addImport("ztracy", ztracy.module("root"));
-        main_tests.linkLibrary(ztracy.artifact("tracy"));
+        main_tests.root_module.addImport("ztracy", ztracy_module);
+        main_tests.linkLibrary(ztracy_dep.artifact("tracy"));
 
         b.installArtifact(main_tests);
     }

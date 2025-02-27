@@ -26,6 +26,60 @@ zig build run-game-of-life
 
 You should also checkout [src/main.zig](https://github.com/Avokadoen/ecez/blob/main/src/main.zig) which has the public API. From there you can follow the deifinition to get more details.
 
+### Include ecez and optionally tracy in your project
+
+Add ecez to build.zig.zon, example in terminal:
+```
+zig fetch --save git+https://github.com/Avokadoen/ecez.git/#HEAD
+```
+
+
+build.zig:
+```zig
+const options = .{
+   .enable_ztracy = b.option(
+      bool,
+      "enable_ztracy",
+      "Enable Tracy profile markers",
+   ) orelse false,
+   .enable_fibers = b.option(
+      bool,
+      "enable_fibers",
+      "Enable Tracy fiber support",
+   ) orelse false,
+   .on_demand = b.option(
+      bool,
+      "on_demand",
+      "Build tracy with TRACY_ON_DEMAND",
+   ) orelse false,
+};
+
+// link ecez and ztracy
+{
+   const ecez = b.dependency("ecez", .{
+      .enable_ztracy = options.enable_ztracy,
+      .enable_fibers = options.enable_fibers,
+      .on_demand = options.on_demand,
+   });
+   const ecez_module = ecez.module("ecez");
+
+   exe.root_module.addImport("ecez", ecez_module);
+   exe_unit_tests.root_module.addImport("ecez", ecez_module);
+
+   const ztracy_dep = ecez.builder.dependency("ztracy", .{
+      .enable_ztracy = options.enable_ztracy,
+      .enable_fibers = options.enable_fibers,
+      .on_demand = options.on_demand,
+   });
+   const ztracy_module = ztracy_dep.module("root"); // ecez_module.import_table.get("ztracy").?;
+
+   exe.root_module.addImport("ztracy", ztracy_module);
+   exe_unit_tests.root_module.addImport("ztracy", ztracy_module);
+
+   exe.linkLibrary(ztracy_dep.artifact("tracy"));
+}
+```
+
 ## Zig documentation
 
 You can generate the ecez API documentation using `zig build docs`. This will produce some web resources in `zig-out/doc/ecez`. 
