@@ -789,7 +789,7 @@ pub const CompileReflect = struct {
         var struct_fields: [components.len]std.builtin.Type.StructField = undefined;
         inline for (&struct_fields, components) |*field, Component| {
             const SparseSet = set.Sparse.CompToSparseType(Component);
-            const default_value = SparseSet{};
+            const default_value: SparseSet = .empty;
             field.* = std.builtin.Type.StructField{
                 .name = @typeName(Component),
                 .type = SparseSet,
@@ -817,7 +817,7 @@ pub const CompileReflect = struct {
             }
 
             const DenseSet = set.Dense(Component);
-            const default_value = DenseSet{};
+            const default_value: DenseSet = .empty;
             struct_fields[non_zero_component_count] = std.builtin.Type.StructField{
                 .name = @typeName(Component),
                 .type = DenseSet,
