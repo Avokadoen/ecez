@@ -13,9 +13,14 @@ pub const Sparse = struct {
     pub const Tag = struct {
         pub const Byte = u8;
 
-        sparse_len: u32 = 0,
+        pub const empty = Tag{
+            .sparse_len = 0,
+            .sparse_bits = &.{},
+        };
+
+        sparse_len: u32,
         // Len of the slice is "capacity"
-        sparse_bits: []EntityId = &[0]EntityId{},
+        sparse_bits: []EntityId,
 
         pub fn deinit(self: *Tag, allocator: Allocator) void {
             allocator.free(self.sparse_bits);
@@ -75,9 +80,14 @@ pub const Sparse = struct {
     pub const Full = struct {
         const SparseSet = @This();
 
-        sparse_len: u32 = 0,
+        pub const empty = Full{
+            .sparse_len = 0,
+            .sparse = &.{},
+        };
+
+        sparse_len: u32,
         // Len of the slice is "capacity"
-        sparse: []EntityId = &[0]EntityId{},
+        sparse: []EntityId,
 
         pub fn deinit(self: *SparseSet, allocator: Allocator) void {
             allocator.free(self.sparse);
@@ -126,11 +136,16 @@ pub fn Dense(comptime DenseT: type) type {
 
         const Set = @This();
 
-        dense_len: u32 = 0,
-        // Len of slice is "capacity"
-        dense: []DenseT = &[0]DenseT{},
+        pub const empty = Set{
+            .dense_len = 0,
+            .dense = &.{},
+            .sparse_index = &.{},
+        };
 
-        sparse_index: []u32 = &[0]u32{},
+        dense_len: u32,
+        // Len of slice is "capacity"
+        dense: []DenseT,
+        sparse_index: []u32,
 
         pub fn deinit(self: *Set, allocator: Allocator) void {
             if (@sizeOf(DenseT) > 0) {
@@ -255,10 +270,10 @@ fn GetDenseStorage(comptime DensePtr: type) type {
 const TestDenseSet = Dense(u32);
 
 test "SparseSet growSparse grows set" {
-    var sparse_set = Sparse.Full{};
+    var sparse_set: Sparse.Full = .empty;
     defer sparse_set.deinit(std.testing.allocator);
 
-    var dense_set = TestDenseSet{};
+    var dense_set: TestDenseSet = .empty;
     defer dense_set.deinit(std.testing.allocator);
 
     try sparse_set.grow(std.testing.allocator, 16);
@@ -277,10 +292,10 @@ test "SparseSet growSparse grows set" {
 }
 
 test "SparseSet set populates dense" {
-    var sparse_set = Sparse.Full{};
+    var sparse_set: Sparse.Full = .empty;
     defer sparse_set.deinit(std.testing.allocator);
 
-    var dense_set = TestDenseSet{};
+    var dense_set: TestDenseSet = .empty;
     defer dense_set.deinit(std.testing.allocator);
 
     try sparse_set.grow(std.testing.allocator, 16);
@@ -316,10 +331,10 @@ test "SparseSet set populates dense" {
 }
 
 test "SparseSet unset removes elements" {
-    var sparse_set = Sparse.Full{};
+    var sparse_set: Sparse.Full = .empty;
     defer sparse_set.deinit(std.testing.allocator);
 
-    var dense_set = TestDenseSet{};
+    var dense_set: TestDenseSet = .empty;
     defer dense_set.deinit(std.testing.allocator);
 
     try sparse_set.grow(std.testing.allocator, 16);
@@ -347,10 +362,10 @@ test "SparseSet unset removes elements" {
 }
 
 test "SparseSet get retrieves element" {
-    var sparse_set = Sparse.Full{};
+    var sparse_set: Sparse.Full = .empty;
     defer sparse_set.deinit(std.testing.allocator);
 
-    var dense_set = TestDenseSet{};
+    var dense_set: TestDenseSet = .empty;
     defer dense_set.deinit(std.testing.allocator);
 
     try sparse_set.grow(std.testing.allocator, 16);
@@ -383,10 +398,10 @@ test "SparseSet get retrieves element" {
 }
 
 test "SparseSet isSet identifies set and unset elements" {
-    var sparse_set = Sparse.Full{};
+    var sparse_set: Sparse.Full = .empty;
     defer sparse_set.deinit(std.testing.allocator);
 
-    var dense_set = TestDenseSet{};
+    var dense_set: TestDenseSet = .empty;
     defer dense_set.deinit(std.testing.allocator);
 
     try sparse_set.grow(std.testing.allocator, 16);
@@ -411,10 +426,10 @@ test "SparseSet isSet identifies set and unset elements" {
 }
 
 test "SparseSet clearRetainingCapacity clears" {
-    var sparse_set = Sparse.Full{};
+    var sparse_set: Sparse.Full = .empty;
     defer sparse_set.deinit(std.testing.allocator);
 
-    var dense_set = TestDenseSet{};
+    var dense_set: TestDenseSet = .empty;
     defer dense_set.deinit(std.testing.allocator);
 
     try sparse_set.grow(std.testing.allocator, 16);
