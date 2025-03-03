@@ -217,7 +217,7 @@ pub fn Create(
                 pub const ThisQuery = @This();
 
                 sparse_cursors: EntityId,
-                storage_entity_count_ptr: *const std.atomic.Value(EntityId),
+                entity_count: EntityId,
 
                 pub fn submit(allocator: Allocator, storage: *Storage) error{OutOfMemory}!ThisQuery {
                     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
@@ -227,7 +227,7 @@ pub fn Create(
 
                     return ThisQuery{
                         .sparse_cursors = 0,
-                        .storage_entity_count_ptr = &storage.number_of_entities,
+                        .entity_count = storage.number_of_entities.load(.monotonic),
                     };
                 }
 
@@ -240,8 +240,7 @@ pub fn Create(
                     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
                     defer zone.End();
 
-                    const entity_count = self.storage_entity_count_ptr.load(.monotonic);
-                    if (self.sparse_cursors >= entity_count) {
+                    if (self.sparse_cursors >= self.entity_count) {
                         return null;
                     }
                     defer self.sparse_cursors += 1;
