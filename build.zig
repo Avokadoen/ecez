@@ -69,6 +69,7 @@ pub fn build(b: *std.Build) void {
         const main_tests = b.addTest(.{
             .name = "main_tests",
             .root_source_file = main_path,
+            .target = target,
             .optimize = optimize,
         });
 
@@ -126,6 +127,7 @@ pub fn build(b: *std.Build) void {
         // add any tests that are define inside each example
         const example_tests = b.addTest(.{
             .root_source_file = path,
+            .target = target,
             .optimize = optimize,
         });
 
