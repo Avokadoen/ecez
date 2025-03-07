@@ -2227,7 +2227,7 @@ test "query with result entity, components and exclude only works" {
     }
 }
 
-test "query wuth include field works" {
+test "query with include field works" {
     var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
@@ -2274,6 +2274,126 @@ test "query wuth include field works" {
             );
             index += 1;
         }
+    }
+}
+
+test "query entity only split works" {
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
+
+    var entities: [200]Entity = undefined;
+    for (entities[0..100], 0..) |*entity, index| {
+        entity.* = try storage.createEntity(.{
+            Testing.Component.A{ .value = @as(u32, @intCast(index)) },
+        });
+    }
+    for (entities[100..200], 100..) |*entity, index| {
+        entity.* = try storage.createEntity(AbEntityType{
+            .a = .{ .value = @as(u32, @intCast(index)) },
+            .b = .{ .value = @as(u8, @intCast(index)) },
+        });
+    }
+
+    const EntityQuery = StorageStub.Query(
+        struct {
+            entity: Entity,
+        },
+        .{},
+        .{},
+    );
+
+    var iter = try EntityQuery.submit(std.testing.allocator, &storage);
+    var other_iters: [10]EntityQuery = undefined;
+    iter.split(&other_iters);
+
+    var index: usize = 0;
+    while (iter.next()) |item| {
+        try std.testing.expectEqual(
+            entities[index],
+            item.entity,
+        );
+        index += 1;
+    }
+    for (&other_iters) |*other_iter| {
+        while (other_iter.next()) |item| {
+            try std.testing.expectEqual(
+                entities[index],
+                item.entity,
+            );
+            index += 1;
+        }
+    }
+
+    try std.testing.expectEqual(entities.len, index);
+}
+
+test "query split works" {
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
+
+    var entities: [200]Entity = undefined;
+    for (entities[0..100], 0..) |*entity, index| {
+        entity.* = try storage.createEntity(.{
+            Testing.Component.A{ .value = @as(u32, @intCast(index)) },
+        });
+    }
+    for (entities[100..200], 100..) |*entity, index| {
+        entity.* = try storage.createEntity(AbEntityType{
+            .a = .{ .value = @as(u32, @intCast(index)) },
+            .b = .{ .value = @as(u8, @intCast(index)) },
+        });
+    }
+
+    const TQueries = Testing.QueryAndQueryAny(
+        StorageStub,
+        struct {
+            entity: Entity,
+            a: Testing.Component.A,
+        },
+        .{},
+        .{},
+    );
+
+    inline for (TQueries, 0..) |Query, query_t_index| {
+        var iter = try Query.submit(std.testing.allocator, &storage);
+        defer iter.deinit(std.testing.allocator);
+
+        var other_iters: [10]Query = undefined;
+        if (query_t_index == 0) {
+            iter.split(&other_iters);
+        } else {
+            iter.split();
+        }
+
+        var index: usize = 0;
+        while (iter.next()) |item| {
+            try std.testing.expectEqual(
+                entities[index],
+                item.entity,
+            );
+
+            try std.testing.expectEqual(
+                Testing.Component.A{
+                    .value = @as(u32, @intCast(index)),
+                },
+                item.a,
+            );
+            index += 1;
+        }
+
+        if (query_t_index == 0) {
+            for (&other_iters) |*other_iter| {
+                while (other_iter.next()) |item| {
+                    try std.testing.expectEqual(
+                        entities[index],
+                        item.entity,
+                    );
+                    index += 1;
+                }
+            }
+        }
+
+        try std.testing.expectEqual(entities.len, index);
     }
 }
 
