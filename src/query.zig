@@ -217,6 +217,7 @@ pub fn Create(
                 pub const ThisQuery = @This();
 
                 sparse_cursors: EntityId,
+                start_cursor: EntityId,
                 entity_count: EntityId,
 
                 pub fn submit(allocator: Allocator, storage: *Storage) error{OutOfMemory}!ThisQuery {
@@ -227,6 +228,7 @@ pub fn Create(
 
                     return ThisQuery{
                         .sparse_cursors = 0,
+                        .start_cursor = 0,
                         .entity_count = storage.number_of_entities.load(.monotonic),
                     };
                 }
@@ -240,7 +242,7 @@ pub fn Create(
                     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
                     defer zone.End();
 
-                    if (self.sparse_cursors >= self.entity_count) {
+                    if (self.sparse_cursors >= self.entity_count + self.start_cursor) {
                         return null;
                     }
                     defer self.sparse_cursors += 1;
@@ -261,7 +263,34 @@ pub fn Create(
                     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
                     defer zone.End();
 
+                    self.sparse_cursors = self.start_cursor;
+                }
+
+                pub fn split(self: *ThisQuery, other_queries: []ThisQuery) void {
+                    std.debug.assert(other_queries.len > 0);
+
+                    const self_count: EntityId = 1;
+                    const split_count: EntityId = @as(EntityId, @intCast(other_queries.len)) + self_count;
+                    const total_entity_count = self.entity_count;
+                    const split_entity_count = std.math.divFloor(EntityId, total_entity_count, split_count) catch unreachable;
+
+                    // Update the other queries
+                    {
+                        // For all other queries
+                        for (other_queries, 1..) |*other_query, query_number| {
+                            other_query.entity_count = split_entity_count;
+                            other_query.sparse_cursors = other_query.entity_count * @as(EntityId, @intCast(query_number));
+                            other_query.start_cursor = other_query.sparse_cursors;
+                        }
+
+                        // For last query add remaining
+                        other_queries[other_queries.len - 1].entity_count += std.math.rem(EntityId, total_entity_count, split_count) catch unreachable;
+                    }
+
+                    // Update this query
+                    self.entity_count = split_entity_count;
                     self.sparse_cursors = 0;
+                    self.start_cursor = 0;
                 }
             };
         }
@@ -279,6 +308,7 @@ pub fn Create(
             pub const ThisQuery = @This();
 
             sparse_cursors: EntityId,
+            start_cursor: EntityId,
 
             full_sparse_sets: [full_sparse_set_count]*const set.Sparse.Full,
             dense_sets: CompileReflect.GroupDenseSetsConstPtr(&query_components),
@@ -486,6 +516,7 @@ pub fn Create(
 
                 return ThisQuery{
                     .sparse_cursors = 0,
+                    .start_cursor = 0,
                     .full_sparse_sets = full_sparse_sets,
                     .dense_sets = dense_sets,
                     .result_entities_bit_count = biggest_set_len,
@@ -518,7 +549,7 @@ pub fn Create(
                     const next_bitmap_distance = @bitSizeOf(EntityId) - @as(EntityId, @intCast(bitmap_bit_offset));
                     self.sparse_cursors += @min(next_bitmap_distance, next_set_bit_distance);
                 }
-                if (self.sparse_cursors >= self.result_entities_bit_count) {
+                if (self.sparse_cursors >= self.result_entities_bit_count + self.start_cursor) {
                     return null;
                 }
                 defer self.sparse_cursors += 1;
@@ -573,7 +604,38 @@ pub fn Create(
             }
 
             pub fn reset(self: *ThisQuery) void {
+                self.sparse_cursors = self.start_cursor;
+            }
+
+            pub fn split(self: *ThisQuery, other_queries: []ThisQuery) void {
+                std.debug.assert(other_queries.len > 0);
+
+                const self_count: EntityId = 1;
+                const split_count: EntityId = @intCast(other_queries.len + self_count);
+                const total_result_entities_bit_count = self.result_entities_bit_count;
+                const split_result_entities_bit_count = std.math.divFloor(EntityId, total_result_entities_bit_count, split_count) catch unreachable;
+
+                // Update the other queries
+                {
+                    // For all other queries
+                    for (other_queries, 1..) |*other_query, query_number| {
+                        other_query.result_entities_bit_count = split_result_entities_bit_count;
+                        other_query.sparse_cursors = other_query.result_entities_bit_count * @as(EntityId, @intCast(query_number));
+                        other_query.start_cursor = other_query.sparse_cursors;
+
+                        other_query.full_sparse_sets = self.full_sparse_sets;
+                        other_query.dense_sets = self.dense_sets;
+                        other_query.result_entities_bitmap = self.result_entities_bitmap;
+                    }
+
+                    // For last query add remaining
+                    other_queries[other_queries.len - 1].result_entities_bit_count += std.math.rem(EntityId, total_result_entities_bit_count, split_count) catch unreachable;
+                }
+
+                // Update this query
+                self.result_entities_bit_count = split_result_entities_bit_count;
                 self.sparse_cursors = 0;
+                self.start_cursor = 0;
             }
         };
         //
@@ -606,6 +668,8 @@ pub fn Create(
             tag_sparse_sets: [tag_sparse_set_count]*const set.Sparse.Tag,
 
             dense_sets: CompileReflect.GroupDenseSetsConstPtr(&query_components),
+
+            mutex: ?std.Thread.Mutex,
 
             pub fn prepare(storage: *Storage) ThisQuery {
                 const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
@@ -700,6 +764,7 @@ pub fn Create(
                     .tag_sparse_sets_bits = 0,
                     .tag_sparse_sets = tag_sparse_sets,
                     .dense_sets = dense_sets,
+                    .mutex = null,
                 };
             }
 
@@ -709,6 +774,9 @@ pub fn Create(
             pub fn getAny(self: *ThisQuery) ?ResultItem {
                 const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
                 defer zone.End();
+
+                if (self.mutex) |*mutex| mutex.lock();
+                defer if (self.mutex) |*mutex| mutex.unlock();
 
                 // Find next entity
                 const entity_count = self.storage_entity_count_ptr.load(.monotonic);
@@ -740,6 +808,9 @@ pub fn Create(
             pub fn skip(self: *ThisQuery, skip_count: u32) void {
                 const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
                 defer zone.End();
+
+                if (self.mutex) |*mutex| mutex.lock();
+                defer if (self.mutex) |*mutex| mutex.unlock();
 
                 const entity_count = self.storage_entity_count_ptr.load(.monotonic);
                 // TODO: this is horrible for cache, we should find the next N entities instead
@@ -818,6 +889,10 @@ pub fn Create(
             pub fn deinit(self: ThisQuery, allocator: Allocator) void {
                 _ = self;
                 _ = allocator;
+            }
+
+            pub fn split(self: *ThisQuery) void {
+                self.mutex = std.Thread.Mutex{};
             }
         };
     }
