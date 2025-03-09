@@ -10,7 +10,7 @@ pub const Options = struct {
 pub fn doc(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
     const autodoc_test = b.addObject(.{
         .name = "ecez",
-        .root_source_file = b.path("src/main.zig"),
+        .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -47,7 +47,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const main_path = b.path("src/main.zig");
+    const main_path = b.path("src/root.zig");
     const ecez_module = b.addModule("ecez", .{
         .root_source_file = main_path,
         .target = target,

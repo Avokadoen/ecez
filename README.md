@@ -24,7 +24,7 @@ zig build run-game-of-life
 
 ```
 
-You should also checkout [src/main.zig](https://github.com/Avokadoen/ecez/blob/main/src/main.zig) which has the public API. From there you can follow the deifinition to get more details.
+You should also checkout [src/root.zig](https://github.com/Avokadoen/ecez/blob/main/src/root.zig) which has the public API. From there you can follow the deifinition to get more details.
 
 ### Include ecez and optionally tracy in your project
 
