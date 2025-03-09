@@ -112,33 +112,31 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
-            comptime CompileReflect.verifyInnerTypesIsInSlice(
-                " is not part of storage components",
-                &component_type_array,
-                @TypeOf(entity_state),
-            );
+            try self.ensureUnusedCapacity(@TypeOf(entity_state), 1);
 
-            const field_info = @typeInfo(@TypeOf(entity_state));
+            return self.createEntityAssumeCapacity(entity_state);
+        }
 
-            // This will "leak" a handle if grow fails, but if it fails, then the app has more issues anyways.
+        /// Create entity and assume storage has sufficient capacity
+        ///
+        /// Parameters:
+        ///
+        ///     - entity_state: the components that the new entity should be assigned
+        ///
+        /// Example:
+        /// ```
+        ///     try storage.ensureUnusedCapacity(.{Component.A, Component.B}, 200);
+        ///     for (abs[0..200]) |ab| {
+        ///         const entity = storage.createEntityAssumeCapacity(ab);
+        ///         _ = entity;
+        ///     }
+        /// ```
+        ///
+        pub fn createEntityAssumeCapacity(self: *Storage, entity_state: anytype) Entity {
             const this_id = self.number_of_entities.fetchAdd(1, .acq_rel);
 
-            // Ensure capacity first to avoid errdefer
-            inline for (field_info.@"struct".fields) |field| {
-                const Component = field.type;
-
-                // Grow sparse set
-                {
-                    var sparse_set = self.getSparseSetPtr(Component);
-                    try sparse_set.grow(self.allocator, this_id + 1);
-                }
-
-                // Grow dense set if present
-                if (@sizeOf(Component) > 0) {
-                    var dense_set = self.getDenseSetPtr(Component);
-                    try dense_set.grow(self.allocator, dense_set.dense_len + 1);
-                }
-            }
+            const EntityState = @TypeOf(entity_state);
+            const field_info = @typeInfo(EntityState);
 
             // For each component in the new entity
             inline for (field_info.@"struct".fields) |field| {
@@ -166,6 +164,43 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             return Entity{
                 .id = this_id,
             };
+        }
+
+        /// Ensure any sparse and dense sets related to the components in EntityState have sufficient space for additional_count
+        pub fn ensureUnusedCapacity(self: *Storage, comptime EntityState: type, additional_count: entity_type.EntityId) error{OutOfMemory}!void {
+            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
+            defer zone.End();
+
+            comptime CompileReflect.verifyInnerTypesIsInSlice(
+                " is not part of storage components",
+                &component_type_array,
+                EntityState,
+            );
+
+            if (additional_count == 0) {
+                return;
+            }
+
+            // This will "leak" a handle if grow fails, but if it fails, then the app has more issues anyways.
+            const this_id = self.number_of_entities.load(.monotonic);
+
+            // Ensure capacity first to avoid errdefer
+            const field_info = @typeInfo(EntityState);
+            inline for (field_info.@"struct".fields) |field| {
+                const Component = field.type;
+
+                // Grow sparse set
+                {
+                    var sparse_set = self.getSparseSetPtr(Component);
+                    try sparse_set.grow(self.allocator, this_id + additional_count);
+                }
+
+                // Grow dense set if present
+                if (@sizeOf(Component) > 0) {
+                    var dense_set = self.getDenseSetPtr(Component);
+                    try dense_set.grow(self.allocator, dense_set.dense_len + additional_count);
+                }
+            }
         }
 
         /// Reassign a component value owned by entity
@@ -1033,22 +1068,30 @@ test "setComponents() can reassign multiple components" {
     try testing.expectEqual(new_b, stored.b);
 }
 
-test "setComponents() can add new components to entity" {
+test "ensureUnusedCapacity + createEntityAssumeCapacity works" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const entity = try storage.createEntity(.{});
+    const create_count = 129;
+    var entities: [create_count]Entity = undefined;
 
-    const new_a = Testing.Component.A{ .value = 1 };
-    const new_b = Testing.Component.B{ .value = 2 };
-    try storage.setComponents(entity, Testing.Structure.AB{
-        .a = new_a,
-        .b = new_b,
-    });
+    try storage.ensureUnusedCapacity(Testing.Structure.ABC, create_count);
+    for (&entities, 0..) |*entity, create_index| {
+        entity.* = storage.createEntityAssumeCapacity(Testing.Structure.ABC{
+            .a = Testing.Component.A{ .value = @intCast(create_index) },
+            .b = Testing.Component.B{ .value = @intCast(create_index) },
+            .c = .{},
+        });
+    }
 
-    const stored = try storage.getComponents(entity, AbEntityType);
-    try testing.expectEqual(new_a, stored.a);
-    try testing.expectEqual(new_b, stored.b);
+    for (&entities, 0..) |entity, create_index| {
+        const expected_a = Testing.Component.A{ .value = @intCast(create_index) };
+        const expected_b = Testing.Component.B{ .value = @intCast(create_index) };
+
+        const stored = try storage.getComponents(entity, AbEntityType);
+        try testing.expectEqual(expected_a, stored.a);
+        try testing.expectEqual(expected_b, stored.b);
+    }
 }
 
 test "unsetComponents() removes the component as expected" {
@@ -1124,6 +1167,24 @@ test "hasComponents() identify missing and present components" {
     try testing.expectEqual(false, storage.hasComponents(entity, .{ Testing.Component.A, Testing.Component.B }));
     try testing.expectEqual(false, storage.hasComponents(entity, .{ Testing.Component.A, Testing.Component.B, Testing.Component.C }));
     try testing.expectEqual(true, storage.hasComponents(entity, .{ Testing.Component.A, Testing.Component.C }));
+}
+
+test "setComponents() can add new components to entity" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    const entity = try storage.createEntity(.{});
+
+    const new_a = Testing.Component.A{ .value = 1 };
+    const new_b = Testing.Component.B{ .value = 2 };
+    try storage.setComponents(entity, Testing.Structure.AB{
+        .a = new_a,
+        .b = new_b,
+    });
+
+    const stored = try storage.getComponents(entity, AbEntityType);
+    try testing.expectEqual(new_a, stored.a);
+    try testing.expectEqual(new_b, stored.b);
 }
 
 test "storage with 0 size component is valid" {
