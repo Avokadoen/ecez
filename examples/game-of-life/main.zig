@@ -111,15 +111,21 @@ pub fn main() anyerror!void {
         const cell_create_zone = ztracy.ZoneNC(@src(), "Create Cells", Color.purple);
         defer cell_create_zone.End();
 
+        const Cell = struct {
+            pos: Components.GridPos,
+            health: Components.Health,
+        };
+
         var cells: [grid_config.cell_count]ecez.Entity = undefined;
+        try storage.ensureUnusedCapacity(Cell, cells.len);
         for (&cells, 0..) |*cell, cell_index| {
             const alive = rng.random().float(f32) < spawn_threshold;
-            cell.* = try storage.createEntity(.{
-                Components.GridPos{
+            cell.* = storage.createEntityAssumeCapacity(Cell{
+                .pos = Components.GridPos{
                     .x = @intCast(cell_index % grid_config.dimension_x),
                     .y = @intCast(cell_index / grid_config.dimension_x),
                 },
-                Components.Health{
+                .health = Components.Health{
                     .alive = [_]bool{ alive, alive },
                     .active_cell_index = 0,
                 },
@@ -134,8 +140,13 @@ pub fn main() anyerror!void {
         const line_create_zone = ztracy.ZoneNC(@src(), "Create New Lines", Color.green);
         defer line_create_zone.End();
 
+        const Line = struct {
+            pos: Components.LinePos,
+        };
+
+        try storage.ensureUnusedCapacity(Line, dimension_y + 1);
         for (1..dimension_y + 1) |i| {
-            _ = try storage.createEntity(.{
+            _ = storage.createEntityAssumeCapacity(.{
                 .pos = Components.LinePos{ .nth = @intCast(i) },
             });
         }
