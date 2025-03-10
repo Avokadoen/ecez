@@ -71,7 +71,7 @@ const options = .{
       .enable_fibers = options.enable_fibers,
       .on_demand = options.on_demand,
    });
-   const ztracy_module = ztracy_dep.module("root"); // ecez_module.import_table.get("ztracy").?;
+   const ztracy_module = ztracy_dep.module("root");
 
    exe.root_module.addImport("ztracy", ztracy_module);
    exe_unit_tests.root_module.addImport("ztracy", ztracy_module);
