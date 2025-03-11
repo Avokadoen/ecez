@@ -47,9 +47,9 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const main_path = b.path("src/root.zig");
+    const root_path = b.path("src/root.zig");
     const ecez_module = b.addModule("ecez", .{
-        .root_source_file = main_path,
+        .root_source_file = root_path,
         .target = target,
         .optimize = optimize,
     });
@@ -66,36 +66,36 @@ pub fn build(b: *std.Build) void {
 
     // create a debuggable test executable
     {
-        const main_tests = b.addTest(.{
-            .name = "main_tests",
-            .root_source_file = main_path,
+        const root_tests = b.addTest(.{
+            .name = "root_tests",
+            .root_source_file = root_path,
             .target = target,
             .optimize = optimize,
         });
 
-        main_tests.root_module.addImport("ecez", ecez_module);
-        main_tests.root_module.addImport("ztracy", ztracy_module);
-        main_tests.linkLibrary(ztracy_artifact);
+        root_tests.root_module.addImport("ecez", ecez_module);
+        root_tests.root_module.addImport("ztracy", ztracy_module);
+        root_tests.linkLibrary(ztracy_artifact);
 
-        b.installArtifact(main_tests);
+        b.installArtifact(root_tests);
     }
 
     // generate documentation on demand
     doc(b, target, optimize);
 
-    // add library tests to the main tests
-    const main_tests = b.addTest(.{
-        .root_source_file = main_path,
+    // add library tests to the root tests
+    const root_tests = b.addTest(.{
+        .root_source_file = root_path,
         .optimize = optimize,
     });
 
-    main_tests.root_module.addImport("ecez", ecez_module);
-    main_tests.root_module.addImport("ztracy", ztracy_module);
-    main_tests.linkLibrary(ztracy_artifact);
+    root_tests.root_module.addImport("ecez", ecez_module);
+    root_tests.root_module.addImport("ztracy", ztracy_module);
+    root_tests.linkLibrary(ztracy_artifact);
 
     const test_step = b.step("test", "Run all tests");
-    const main_tests_run = b.addRunArtifact(main_tests);
-    test_step.dependOn(&main_tests_run.step);
+    const root_tests_run = b.addRunArtifact(root_tests);
+    test_step.dependOn(&root_tests_run.step);
 
     const Example = struct {
         name: []const u8,
