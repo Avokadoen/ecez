@@ -40,7 +40,7 @@ pub fn main() anyerror!void {
 
     // We can then define queries on the storage. These can be used to iterate entities with certain components-
     const Queries = struct {
-        pub const Living = Storage.Query(
+        pub const Living = ecez.Query(
             // Any result item will be of this type
             struct {
                 health: *Component.Health, // health can be mutated because it's a pointer
