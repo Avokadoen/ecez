@@ -4,13 +4,14 @@ const Allocator = std.mem.Allocator;
 const ztracy = @import("ztracy");
 const Color = @import("../misc.zig").Color;
 
-const Config = @import("CreateConfig.zig");
+const CreateConfig = @import("CreateConfig.zig");
+const SubmitConfig = @import("SubmitConfig.zig");
 
 const entity_type = @import("../entity_type.zig");
 const Entity = entity_type.Entity;
 const EntityId = entity_type.EntityId;
 
-pub fn Create(comptime config: Config) type {
+pub fn Create(comptime config: CreateConfig) type {
     return struct {
         // Read by dependency_chain
         pub const _result_fields = &[0]std.builtin.Type.StructField{};
@@ -19,7 +20,7 @@ pub fn Create(comptime config: Config) type {
         // Read by dependency_chain
         pub const _exclude_types = &[0]type{};
 
-        pub const EcezType = Config.QueryType;
+        pub const EcezType = CreateConfig.QueryType;
 
         pub const ThisQuery = @This();
 
@@ -27,9 +28,12 @@ pub fn Create(comptime config: Config) type {
         start_cursor: EntityId,
         entity_count: EntityId,
 
-        pub fn submit(allocator: Allocator, storage: *config.Storage) error{OutOfMemory}!ThisQuery {
+        pub fn submit(allocator: Allocator, storage: anytype) error{OutOfMemory}!ThisQuery {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
+
+            // verify that storage is a ecez.Storage type
+            comptime SubmitConfig.verifyStorageType(@TypeOf(storage));
 
             _ = allocator;
 

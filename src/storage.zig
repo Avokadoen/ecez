@@ -692,63 +692,6 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             };
         }
 
-        /// Query components which can be iterated upon.
-        ///
-        /// Parameters:
-        ///
-        ///     - ResultItem:    All the components you would like to iterate over in a single struct.
-        ///                      Each component in the struct will belong to the same entity.
-        ///                      A field does not have to be a component if it is of type Entity and it's the first
-        ///                      field.
-        ///
-        ///     - include_types: All the components that should be included from the query result
-        ///
-        ///     - exclude_types: All the components that should be excluded from the query result
-        ///
-        /// Example:
-        /// ```
-        /// var living_iter = Storage.Query(struct{ entity: Entity, a: Health }, .{LivingTag} .{DeadTag}).submit(std.testing.allocator, &storage);
-        /// while (living_iter.next()) |item| {
-        ///    std.debug.print("{d}", .{item.entity});
-        ///    std.debug.print("{any}", .{item.a});
-        /// }
-        /// ```
-        pub fn Query(comptime ResultItem: type, comptime include_types: anytype, comptime exclude_types: anytype) type {
-            const any_result_query = false;
-
-            return @import("query.zig").Create(Storage, ResultItem, include_types, exclude_types, any_result_query);
-        }
-
-        /// Query for any entity with components.
-        ///
-        /// This should not be used to iterate. Use normal Query instead for this use case.
-        /// This query type should be used when a single or few items are desired.
-        ///
-        /// Parameters:
-        ///
-        ///     - ResultItem:    All the components you would like to iterate over in a single struct.
-        ///                      Each component in the struct will belong to the same entity.
-        ///                      A field does not have to be a component if it is of type Entity and it's the first
-        ///                      field.
-        ///
-        ///     - include_types: All the components that should be included from the query result
-        ///
-        ///     - exclude_types: All the components that should be excluded from the query result
-        ///
-        /// Example:
-        /// ```
-        /// var any_living = Storage.QueryAnyItem(struct{ entity: Entity, a: Health }, .{LivingTag} .{DeadTag}).submit(std.testing.allocator, &storage);
-        ///
-        /// const living = any_living.getAny();
-        /// std.debug.print("{d}", .{item.entity});
-        /// std.debug.print("{any}", .{item.a});
-        /// ```
-        pub fn QueryAny(comptime ResultItem: type, comptime include_types: anytype, comptime exclude_types: anytype) type {
-            const any_result_query = true;
-
-            return @import("query.zig").Create(Storage, ResultItem, include_types, exclude_types, any_result_query);
-        }
-
         /// Retrieve the dense set for a component type.
         /// Mostly meant for internal usage. Be careful not to write to the set as this can
         /// lead to inconsistent storage state.
@@ -961,6 +904,7 @@ const AbcEntityType = Testing.Structure.ABC;
 
 const StorageStub = Testing.StorageStub;
 const Queries = Testing.Queries;
+const query = @import("query.zig");
 
 test "init() + deinit() is idempotent" {
     var storage = try StorageStub.init(testing.allocator);
@@ -1617,9 +1561,9 @@ test "query with single result component type works" {
         });
     }
 
-    inline for (0..Testing.query_type_count) |query_type_index| {
+    inline for (Queries.ReadA) |QueryReadA| {
         var index: usize = 0;
-        var a_iter = try Queries.ReadA[query_type_index].submit(std.testing.allocator, &storage);
+        var a_iter = try QueryReadA.submit(std.testing.allocator, &storage);
         defer a_iter.deinit(std.testing.allocator);
 
         while (a_iter.next()) |item| {
@@ -1957,7 +1901,6 @@ test "query with single result component and single exclude works" {
     }
 
     const TQueries = Testing.QueryAndQueryAny(
-        StorageStub,
         struct { a: Testing.Component.A },
         .{},
         .{Testing.Component.B},
@@ -2005,7 +1948,6 @@ test "query with result of single component type and multiple exclude works" {
     }
 
     const TQueries = Testing.QueryAndQueryAny(
-        StorageStub,
         struct { a: Testing.Component.A },
         .{},
         .{ Testing.Component.B, Testing.Component.C },
@@ -2053,7 +1995,6 @@ test "query with result of single component, one zero sized exclude and one size
     }
 
     const TQueries = Testing.QueryAndQueryAny(
-        StorageStub,
         struct { a: Testing.Component.A },
         .{},
         .{ Testing.Component.C, Testing.Component.B },
@@ -2096,7 +2037,6 @@ test "query with single result component, single include and single (tag compone
     }
 
     const TQueries = Testing.QueryAndQueryAny(
-        StorageStub,
         struct { a: Testing.Component.A },
         .{Testing.Component.B},
         .{Testing.Component.C},
@@ -2135,7 +2075,6 @@ test "query with entity only works" {
     }
 
     const TQueries = Testing.QueryAndQueryAny(
-        StorageStub,
         struct {
             entity: Entity,
             a: Testing.Component.A,
@@ -2176,7 +2115,6 @@ test "query with result entity, components and exclude only works" {
 
     {
         const TQueries = Testing.QueryAndQueryAny(
-            StorageStub,
             struct {
                 entity: Entity,
                 a: Testing.Component.A,
@@ -2211,7 +2149,6 @@ test "query with result entity, components and exclude only works" {
 
     {
         const TQueries = Testing.QueryAndQueryAny(
-            StorageStub,
             struct {
                 a: Testing.Component.A,
                 entity: Entity,
@@ -2246,7 +2183,6 @@ test "query with result entity, components and exclude only works" {
 
     {
         const TQueries = Testing.QueryAndQueryAny(
-            StorageStub,
             struct {
                 a: Testing.Component.A,
                 entity: Entity,
@@ -2306,7 +2242,6 @@ test "query with include field works" {
     }
 
     const TQueries = Testing.QueryAndQueryAny(
-        StorageStub,
         struct {
             entity: Entity,
             a: Testing.Component.A,
@@ -2355,7 +2290,7 @@ test "query entity only split works" {
         });
     }
 
-    const EntityQuery = StorageStub.Query(
+    const EntityQuery = query.Query(
         struct {
             entity: Entity,
         },
@@ -2406,7 +2341,6 @@ test "query split works" {
     }
 
     const TQueries = Testing.QueryAndQueryAny(
-        StorageStub,
         struct {
             entity: Entity,
             a: Testing.Component.A,
@@ -2717,7 +2651,6 @@ test "reproducer: MineSweeper index out of bound caused by incorrect mapping of 
     _ = try storage.createEntity(Node{});
 
     const TQueries = Testing.QueryAndQueryAny(
-        RepStorage,
         struct {
             position: transform.Position,
             rotation: transform.Rotation,

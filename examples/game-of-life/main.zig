@@ -170,7 +170,7 @@ pub fn main() anyerror!void {
 const RenderTargetWriteView = Storage.Subset(
     .{*Components.RenderTarget},
 );
-const RenderCellQuery = Storage.Query(
+const RenderCellQuery = ecez.Query(
     struct {
         pos: Components.GridPos,
         health: Components.Health,
@@ -209,7 +209,7 @@ pub fn renderCellSystem(
     }
 }
 
-const LinePosQuery = Storage.Query(
+const LinePosQuery = ecez.Query(
     struct {
         pos: Components.LinePos,
     },
@@ -233,7 +233,7 @@ pub fn renderLineSystem(
     }
 }
 
-const GridPosQuery = Storage.Query(
+const GridPosQuery = ecez.Query(
     struct { pos: Components.GridPos },
     .{},
     .{},
@@ -265,7 +265,7 @@ pub fn flushBufferSystem(
     std.log.info("\n{s}\n\n", .{render.output_buffer});
 }
 
-const PosHealthQuery = Storage.Query(
+const PosHealthQuery = ecez.Query(
     struct {
         pos: Components.GridPos,
         health: *Components.Health,

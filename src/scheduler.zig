@@ -512,7 +512,6 @@ const Queries = Testing.Queries;
 
 test "system query can mutate components" {
     const QueryTypes = Testing.QueryAndQueryAny(
-        StorageStub,
         struct {
             a: *Testing.Component.A,
             b: Testing.Component.B,
@@ -557,6 +556,56 @@ test "system query can mutate components" {
             Testing.Component.A{ .value = 3 },
             try storage.getComponent(entity, Testing.Component.A),
         );
+    }
+}
+
+test "scheduler can be used for multiple storage types" {
+    const QueryTypes = Testing.QueryAndQueryAny(
+        struct {
+            a: *Testing.Component.A,
+            b: Testing.Component.B,
+        },
+        .{},
+        .{},
+    );
+
+    const StorageAC = CreateStorage(.{ Testing.Component.A, Testing.Component.B });
+    inline for (QueryTypes) |Query| {
+        const SystemStruct = struct {
+            pub fn mutateStuff(ab: *Query) void {
+                while (ab.next()) |ent_ab| {
+                    ent_ab.a.value += ent_ab.b.value;
+                }
+            }
+        };
+
+        const OnFooEvent = Event("onFoo", .{SystemStruct.mutateStuff});
+        var scheduler = try CreateScheduler(.{OnFooEvent}).init(.{
+            .pool_allocator = std.testing.allocator,
+            .query_submit_allocator = std.testing.allocator,
+        });
+        defer scheduler.deinit();
+
+        inline for (0..2) |storage_type_index| {
+            const Storage = if (storage_type_index == 0) StorageStub else StorageAC;
+
+            var storage = try Storage.init(testing.allocator);
+            defer storage.deinit();
+
+            const initial_state = AbEntityType{
+                .a = Testing.Component.A{ .value = 1 },
+                .b = Testing.Component.B{ .value = 2 },
+            };
+            const entity = try storage.createEntity(initial_state);
+
+            scheduler.dispatchEvent(&storage, .onFoo, .{});
+            scheduler.waitEvent(.onFoo);
+
+            try testing.expectEqual(
+                Testing.Component.A{ .value = 3 },
+                try storage.getComponent(entity, Testing.Component.A),
+            );
+        }
     }
 }
 

@@ -287,13 +287,14 @@ const StorageStub = storage.CreateStorage(.{
     D,
 });
 
+const query = @import("query.zig");
+
 test buildDependencyList {
     const Queries = struct {
         // Use entity for some queries to ensure it does not affect dependency tracking
         const Entity = @import("entity_type.zig").Entity;
 
         pub const ReadAValue = Testing.QueryAndQueryAny(
-            StorageStub,
             struct {
                 entitiy: Entity,
                 a: Testing.Component.A,
@@ -303,7 +304,6 @@ test buildDependencyList {
         );
 
         pub const ReadAConstPtr = Testing.QueryAndQueryAny(
-            StorageStub,
             struct {
                 entitiy: Entity,
                 a: *const Testing.Component.A,
@@ -313,7 +313,6 @@ test buildDependencyList {
         );
 
         pub const WriteA = Testing.QueryAndQueryAny(
-            StorageStub,
             struct {
                 entitiy: Entity,
                 a: *Testing.Component.A,
@@ -323,7 +322,6 @@ test buildDependencyList {
         );
 
         pub const ReadB = Testing.QueryAndQueryAny(
-            StorageStub,
             struct {
                 entitiy: Entity,
                 b: Testing.Component.B,
@@ -333,7 +331,6 @@ test buildDependencyList {
         );
 
         pub const WriteB = Testing.QueryAndQueryAny(
-            StorageStub,
             struct {
                 entitiy: Entity,
                 b: *Testing.Component.B,
@@ -343,7 +340,6 @@ test buildDependencyList {
         );
 
         pub const ReadD = Testing.QueryAndQueryAny(
-            StorageStub,
             struct {
                 d: D,
             },
@@ -352,7 +348,6 @@ test buildDependencyList {
         );
 
         pub const WriteD = Testing.QueryAndQueryAny(
-            StorageStub,
             struct {
                 d: *D,
             },
@@ -361,7 +356,6 @@ test buildDependencyList {
         );
 
         pub const ReadAReadB = Testing.QueryAndQueryAny(
-            StorageStub,
             struct {
                 a: Testing.Component.A,
                 b: Testing.Component.B,
@@ -371,7 +365,6 @@ test buildDependencyList {
         );
 
         pub const InclAInclB = Testing.QueryAndQueryAny(
-            StorageStub,
             struct {
                 a: Testing.Component.A,
                 b: Testing.Component.B,
@@ -381,7 +374,6 @@ test buildDependencyList {
         );
 
         pub const WriteAWriteB = Testing.QueryAndQueryAny(
-            StorageStub,
             struct {
                 a: *Testing.Component.A,
                 b: *Testing.Component.B,
@@ -391,7 +383,6 @@ test buildDependencyList {
         );
 
         pub const ReadAReadBInclD = Testing.QueryAndQueryAny(
-            StorageStub,
             struct {
                 a: Testing.Component.A,
                 b: Testing.Component.B,
@@ -401,7 +392,6 @@ test buildDependencyList {
         );
 
         pub const WriteAWriteBWriteD = Testing.QueryAndQueryAny(
-            StorageStub,
             struct {
                 a: *Testing.Component.A,
                 b: *Testing.Component.B,
@@ -412,7 +402,7 @@ test buildDependencyList {
         );
 
         // cant request entity only for QueryAny
-        pub const EntityOnly = StorageStub.Query(
+        pub const EntityOnly = query.Query(
             struct {
                 entity: @import("entity_type.zig").Entity,
             },
@@ -421,7 +411,6 @@ test buildDependencyList {
         );
 
         pub const EntityExclA = Testing.QueryAndQueryAny(
-            StorageStub,
             struct {
                 entity: @import("entity_type.zig").Entity,
             },
@@ -432,7 +421,6 @@ test buildDependencyList {
         );
 
         pub const EntityExclAB = Testing.QueryAndQueryAny(
-            StorageStub,
             struct {
                 entity: @import("entity_type.zig").Entity,
             },
@@ -444,7 +432,6 @@ test buildDependencyList {
         );
 
         pub const EntityInclAB = Testing.QueryAndQueryAny(
-            StorageStub,
             struct {
                 entity: @import("entity_type.zig").Entity,
             },

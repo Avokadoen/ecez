@@ -18,7 +18,6 @@ pub const WhichQuery = enum {
 const CreateConfig = @This();
 
 which_query: WhichQuery,
-Storage: type,
 ResultItem: type,
 result_fields: []const Type.StructField,
 include_fields: []const Type.StructField,
@@ -33,7 +32,6 @@ tag_sparse_set_count: comptime_int,
 tag_exclude_start: comptime_int,
 
 pub fn init(
-    comptime Storage: type,
     comptime ResultItem: type,
     comptime include_types: anytype,
     comptime exclude_types: anytype,
@@ -224,7 +222,6 @@ pub fn init(
 
     return CreateConfig{
         .which_query = which_query,
-        .Storage = Storage,
         .ResultItem = ResultItem,
         .result_fields = &result_fields,
         .include_fields = include_fields,

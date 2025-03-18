@@ -4,7 +4,8 @@ const Allocator = std.mem.Allocator;
 const ztracy = @import("ztracy");
 const Color = @import("../misc.zig").Color;
 
-const Config = @import("CreateConfig.zig");
+const CreateConfig = @import("CreateConfig.zig");
+const SubmitConfig = @import("SubmitConfig.zig");
 
 const set = @import("../sparse_set.zig");
 const entity_type = @import("../entity_type.zig");
@@ -12,7 +13,7 @@ const Entity = entity_type.Entity;
 const EntityId = entity_type.EntityId;
 const CompileReflect = @import("../storage.zig").CompileReflect;
 
-pub fn Create(comptime config: Config) type {
+pub fn Create(comptime config: CreateConfig) type {
     if (config.query_components.len == 0) {
         @compileError("Requesting an 'any result query' without components is illegal");
     }
@@ -27,7 +28,7 @@ pub fn Create(comptime config: Config) type {
         // Read by dependency_chain
         pub const _exclude_types = config.query_components[config.exclude_type_start..];
 
-        pub const EcezType = Config.QueryAnyType;
+        pub const EcezType = CreateConfig.QueryAnyType;
 
         pub const ThisQuery = @This();
 
@@ -44,9 +45,12 @@ pub fn Create(comptime config: Config) type {
 
         mutex: ?std.Thread.Mutex,
 
-        pub fn prepare(storage: *config.Storage) ThisQuery {
+        pub fn prepare(storage: anytype) ThisQuery {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
+
+            // verify that storage is a ecez.Storage type
+            comptime SubmitConfig.verifyStorageType(@TypeOf(storage));
 
             var dense_sets: CompileReflect.GroupDenseSetsConstPtr(config.query_components) = undefined;
 
@@ -253,7 +257,7 @@ pub fn Create(comptime config: Config) type {
         }
 
         /// Alternative way of calling prepare. This simply exist to provide interchangeability with a normal query
-        pub fn submit(allocator: Allocator, storage: *config.Storage) error{OutOfMemory}!ThisQuery {
+        pub fn submit(allocator: Allocator, storage: anytype) error{OutOfMemory}!ThisQuery {
             _ = allocator;
             return ThisQuery.prepare(storage);
         }
