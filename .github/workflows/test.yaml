@@ -33,9 +33,13 @@ jobs:
       - name: Install zig
         run: tar -xf zig-linux-x86_64-0.14.0.tar.xz && mv zig-linux-x86_64-0.14.0/* ./
 
-      # build examples to test for compile issues
+      # build examples without ztracy to check for compile issues
       - name: Build examples 
-        run: ./zig build
+        run: ./zig build -Denable_ztracy=false
+
+      # build examples with ztracy to check for compile issues
+      - name: Build examples with ztracy
+        run: ./zig build -Denable_ztracy=true
 
       # build documentation
       - name: Build documentation
@@ -44,5 +48,6 @@ jobs:
       # test library
       - name: Run tests
         run: ./zig build test
+
 
 
