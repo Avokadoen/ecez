@@ -33,7 +33,18 @@ Add ecez to build.zig.zon, example in terminal:
 zig fetch --save git+https://github.com/Avokadoen/ecez.git/#HEAD
 ```
 
+#### Basic ecez build
 
+build.zig
+```zig
+const ecez = b.dependency("ecez", .{});
+const ecez_module = ecez.module("ecez");
+exe.addImport("ecez", ecez_module);
+```
+
+**Note** that you can also use ztracy without ecez markers by including ztracy as a normal dependency of your program
+
+#### Sharing ztracy between ecez and program:
 build.zig:
 ```zig
 const options = .{
@@ -127,7 +138,7 @@ https://github.com/Avokadoen/ecez/blob/7210c43d2dbe6202806acf3e5ac361cbbaed11af/
 ### Tracy integration using [ztracy](https://github.com/michal-z/zig-gamedev/tree/main/libs/ztracy)
 ![ztracy](media/ztracy.png)
 
-The codebase has integration with tracy to allow both the library itself, but also applications to profile using a [tracy client](https://github.com/wolfpld/tracy). There is also a wrapper allocator called [TracyAllocator](https://github.com/Avokadoen/ecez/blob/main/src/tracy_alloc.zig) which allows tracy to report on memory usage if the application opts in to it. The extra work done by tracy is of course NOPs in builds without tracy!
+The codebase has integration with tracy to allow both the library itself, but also applications to profile using a [tracy client](https://github.com/wolfpld/tracy). The extra work done by tracy is of course NOPs in builds without tracy!
 
 
 ### Demo/Examples
