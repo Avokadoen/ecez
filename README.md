@@ -42,9 +42,7 @@ const ecez_module = ecez.module("ecez");
 exe.addImport("ecez", ecez_module);
 ```
 
-**Note** that you can also use ztracy without ecez markers by including ztracy as a normal dependency of your program
-
-#### Sharing ztracy between ecez and program:
+#### Using ztracy with ecez:
 build.zig:
 ```zig
 const options = .{
