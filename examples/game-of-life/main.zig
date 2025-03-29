@@ -92,8 +92,8 @@ pub fn main() anyerror!void {
     defer storage.deinit();
 
     var scheduler = try Scheduler.init(.{
-        .pool_allocator = allocator,
-        .query_submit_allocator = allocator,
+        .pool_allocator = gpa.allocator(),
+        .query_submit_allocator = gpa.allocator(),
     });
     defer scheduler.deinit();
 
