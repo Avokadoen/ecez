@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 
 const set = @import("sparse_set.zig");
 
-const ztracy = @import("ztracy");
+const ztracy = @import("ecez_ztracy.zig");
 
 const Color = @import("misc.zig").Color;
 

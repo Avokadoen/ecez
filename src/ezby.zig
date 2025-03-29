@@ -2,7 +2,7 @@ const std = @import("std");
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-const ztracy = @import("ztracy");
+const ztracy = @import("ecez_ztracy.zig");
 
 const Color = @import("misc.zig").Color;
 
