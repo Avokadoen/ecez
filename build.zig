@@ -26,9 +26,9 @@ pub fn build(b: *std.Build) void {
             "enable_ztracy",
             "Enable Tracy profile markers",
         ) orelse false,
-        .enable_ecez_ztracy_markers = b.option(
+        .enable_ecez_dev_markers = b.option(
             bool,
-            "enable_ecez_ztracy_markers",
+            "enable_ecez_dev_markers",
             "Enable Tracy profile markers added by ecez internally, should be false for most projects",
         ) orelse false,
         .enable_fibers = b.option(
@@ -48,7 +48,7 @@ pub fn build(b: *std.Build) void {
 
     const options_module = make_options_mod_blk: {
         const options_step = b.addOptions();
-        options_step.addOption(bool, "enable_ecez_ztracy_markers", options.enable_ecez_ztracy_markers);
+        options_step.addOption(bool, "enable_ecez_dev_markers", options.enable_ecez_dev_markers);
         break :make_options_mod_blk options_step.createModule();
     };
 

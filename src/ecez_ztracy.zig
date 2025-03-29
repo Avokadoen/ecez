@@ -4,21 +4,21 @@ const Src = std.builtin.SourceLocation;
 
 const ztracy = @import("ztracy");
 
-pub const ecez_markers_enabled = blk: {
-    var markers_enabled: ?bool = null;
+pub const ecez_dev_markers_enabled = blk: {
+    var dev_markers_enabled: ?bool = null;
 
     if (!builtin.is_test) {
         const options = @import("ecez_options");
-        if (@hasDecl(options, "enable_ecez_ztracy_markers")) {
-            markers_enabled = options.enable_ecez_ztracy_markers;
+        if (@hasDecl(options, "enable_ecez_dev_markers")) {
+            dev_markers_enabled = options.enable_ecez_dev_markers;
         }
     }
 
-    break :blk markers_enabled orelse false;
+    break :blk dev_markers_enabled orelse false;
 };
 
 pub const ZoneCtx = create_ctx_type_blk: {
-    if (ecez_markers_enabled) {
+    if (ecez_dev_markers_enabled) {
         break :create_ctx_type_blk struct {
             ztracy_zonectx: ztracy.ZoneCtx,
 
@@ -36,7 +36,7 @@ pub const ZoneCtx = create_ctx_type_blk: {
 };
 
 pub inline fn ZoneNC(comptime src: Src, name: [*:0]const u8, color: u32) ZoneCtx {
-    if (ecez_markers_enabled) {
+    if (ecez_dev_markers_enabled) {
         return ZoneCtx{
             .ztracy_zonectx = ztracy.ZoneNC(src, name, color),
         };
