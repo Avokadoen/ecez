@@ -9,7 +9,19 @@ pub const ecez_dev_markers_enabled = blk: {
 
     if (!builtin.is_test) {
         const options = @import("ecez_options");
+
+        const tracy_enabled = check_if_enabled_blk: {
+            if (@hasDecl(options, "enable_ztracy")) {
+                break :check_if_enabled_blk options.enable_ztracy;
+            }
+            break :check_if_enabled_blk false;
+        };
+
         if (@hasDecl(options, "enable_ecez_dev_markers")) {
+            if (options.enable_ecez_dev_markers and tracy_enabled == false) {
+                @compileError("enable_ecez_dev_markers cannot be true if tracy_enabled is false");
+            }
+
             dev_markers_enabled = options.enable_ecez_dev_markers;
         }
     }

@@ -48,6 +48,7 @@ pub fn build(b: *std.Build) void {
 
     const options_module = make_options_mod_blk: {
         const options_step = b.addOptions();
+        options_step.addOption(bool, "enable_ztracy", options.enable_ztracy);
         options_step.addOption(bool, "enable_ecez_dev_markers", options.enable_ecez_dev_markers);
         break :make_options_mod_blk options_step.createModule();
     };
