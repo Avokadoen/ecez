@@ -1,9 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const ztracy = @import("ztracy");
-const Color = @import("misc.zig").Color;
-
 const set = @import("sparse_set.zig");
 const entity_type = @import("entity_type.zig");
 const Entity = entity_type.Entity;

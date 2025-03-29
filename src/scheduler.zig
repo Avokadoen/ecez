@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const ztracy = @import("ztracy");
+const ztracy = @import("ecez_ztracy.zig");
 
 const thread_pool_impl = @import("thread_pool.zig");
 const ResetEvent = std.Thread.ResetEvent;

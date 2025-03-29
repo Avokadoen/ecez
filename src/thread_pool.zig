@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const ResetEvent = std.Thread.ResetEvent;
 
-const ztracy = @import("ztracy");
+const ztracy = @import("ecez_ztracy.zig");
 const Color = @import("misc.zig").Color;
 
 // Based on zig std.Thread.Pool
