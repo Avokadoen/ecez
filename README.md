@@ -39,7 +39,7 @@ build.zig
 ```zig
 const ecez = b.dependency("ecez", .{});
 const ecez_module = ecez.module("ecez");
-exe.addImport("ecez", ecez_module);
+exe.root_module.addImport("ecez", ecez_module);
 ```
 
 #### Using ztracy with ecez:
