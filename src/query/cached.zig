@@ -42,6 +42,9 @@ pub fn Create(config: CreateConfig) type {
             // verify that storage is a ecez.Storage type
             comptime SubmitConfig.verifyStorageType(@TypeOf(storage));
 
+            // Atomically load the current number of entities
+            const number_of_entities = storage.number_of_entities.load(.monotonic);
+
             const biggest_set_len, const tag_sparse_sets, const full_sparse_sets, const dense_sets = retrieve_component_sets_blk: {
                 var _biggest_set_len: EntityId = 0;
                 var _tag_sparse_sets: [config.tag_sparse_set_count]*const set.Sparse.Tag = undefined;
@@ -72,15 +75,12 @@ pub fn Create(config: CreateConfig) type {
                 std.debug.assert(tag_sparse_sets_index == config.tag_sparse_set_count);
 
                 break :retrieve_component_sets_blk .{
-                    _biggest_set_len,
+                    @min(_biggest_set_len, number_of_entities),
                     _tag_sparse_sets,
                     _full_sparse_sets,
                     _dense_sets,
                 };
             };
-
-            // Atomically load the current number of entities
-            const number_of_entities = storage.number_of_entities.load(.monotonic);
 
             // Calculate the full set's search order.
             // As an example if query ask for Component "A" and "B", There are 10 entities of A, and
