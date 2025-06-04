@@ -8,14 +8,14 @@ pub fn doc(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builti
         .target = target,
         .optimize = optimize,
     });
-    const install_docs = b.addInstallDirectory(.{
+    const install_doc = b.addInstallDirectory(.{
         .source_dir = autodoc_test.getEmittedDocs(),
         .install_dir = .prefix,
-        .install_subdir = "doc/ecez",
+        .install_subdir = "doc",
     });
 
-    const docs_step = b.step("docs", "Build and install documentation");
-    docs_step.dependOn(&install_docs.step);
+    const doc_step = b.step("doc", "Build and install documentation");
+    doc_step.dependOn(&install_doc.step);
 }
 
 /// Builds the project for testing and to run simple examples

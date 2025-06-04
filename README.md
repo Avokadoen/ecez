@@ -91,7 +91,12 @@ const options = .{
 
 ## Zig documentation
 
-You can generate the ecez API documentation using `zig build docs`. This will produce some web resources in `zig-out/doc/ecez`. 
+### Prebuilt
+
+You can access prebuilt main documentation at URL HERE
+
+### Build yourself
+You can generate the ecez API documentation using `zig build doc`. This will produce some web resources in `zig-out/doc`.
 You will need a local server to serve the documentation since browsers will block resources loaded by the index.html. 
 
 The simplest solution to this is just using a basic python server:

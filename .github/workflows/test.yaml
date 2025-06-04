@@ -43,7 +43,7 @@ jobs:
 
       # build documentation
       - name: Build documentation
-        run: ./zig build docs
+        run: ./zig build doc
 
       # test library
       - name: Run tests
