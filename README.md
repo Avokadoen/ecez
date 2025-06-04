@@ -93,7 +93,7 @@ const options = .{
 
 ### Prebuilt
 
-You can access prebuilt main documentation at URL HERE
+You can access prebuilt documentation built from recent main at https://avokadoen.github.io/ecez
 
 ### Build yourself
 You can generate the ecez API documentation using `zig build doc`. This will produce some web resources in `zig-out/doc`.
