@@ -575,9 +575,50 @@ test "query with result of single component, one zero sized exclude and one size
     }
 }
 
-test "query with single result component, single include and single (tag component) exclude works" {
-    // Issue found in Wizard Rampage project https://github.com/Avokadoen/wizard_rampage while prototyping in it
+test "query no result component, single include and no exclude works" {
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
 
+    for (0..100) |index| {
+        _ = try storage.createEntity(AbcEntityType{
+            .a = .{ .value = @as(u32, @intCast(index)) },
+            .b = .{ .value = @as(u8, @intCast(index)) },
+            .c = .{},
+        });
+    }
+
+    for (100..200) |index| {
+        _ = try storage.createEntity(.{
+            Testing.Component.A{ .value = @as(u32, @intCast(index)) },
+        });
+    }
+
+    for (0..100) |_| {
+        _ = try storage.createEntity(AbcEntityType{
+            .c = .{},
+        });
+    }
+
+    const CQueries = Testing.QueryAndQueryAny(
+        struct {},
+        .{Testing.Component.C},
+        .{},
+    );
+
+    inline for (CQueries) |TQuery| {
+        var iter = try TQuery.submit(std.testing.allocator, &storage);
+        defer iter.deinit(std.testing.allocator);
+
+        var index: usize = 0;
+        while (iter.next()) |_| {
+            index += 1;
+        }
+
+        try std.testing.expectEqual(200, index);
+    }
+}
+
+test "query with single result component, single include and single (tag component) exclude works" {
     var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
