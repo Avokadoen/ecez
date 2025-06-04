@@ -599,6 +599,24 @@ test "query no result component, single include and no exclude works" {
         });
     }
 
+    const BQueries = Testing.QueryAndQueryAny(
+        struct {},
+        .{Testing.Component.B},
+        .{},
+    );
+
+    inline for (BQueries) |TQuery| {
+        var iter = try TQuery.submit(std.testing.allocator, &storage);
+        defer iter.deinit(std.testing.allocator);
+
+        var index: usize = 0;
+        while (iter.next()) |_| {
+            index += 1;
+        }
+
+        try std.testing.expectEqual(200, index);
+    }
+
     const CQueries = Testing.QueryAndQueryAny(
         struct {},
         .{Testing.Component.C},
@@ -640,6 +658,24 @@ test "query no result component, no include and single exclude works" {
         _ = try storage.createEntity(AbcEntityType{
             .c = .{},
         });
+    }
+
+    const BQueries = Testing.QueryAndQueryAny(
+        struct {},
+        .{},
+        .{Testing.Component.B},
+    );
+
+    inline for (BQueries) |TQuery| {
+        var iter = try TQuery.submit(std.testing.allocator, &storage);
+        defer iter.deinit(std.testing.allocator);
+
+        var index: usize = 0;
+        while (iter.next()) |_| {
+            index += 1;
+        }
+
+        try std.testing.expectEqual(100, index);
     }
 
     const CQueries = Testing.QueryAndQueryAny(
