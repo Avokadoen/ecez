@@ -151,6 +151,7 @@ pub fn main() anyerror!void {
             Systems.spawnLivingTrail,
             Systems.handleMouseEvent,
         },
+        .{},
     );
 
     // Scheduler can have multiple events ...
@@ -161,6 +162,7 @@ pub fn main() anyerror!void {
             Systems.spawnLivingTrail,
             Systems.handleMouseEvent,
         },
+        .{},
     );
 
     // Create a scheduler type with our events

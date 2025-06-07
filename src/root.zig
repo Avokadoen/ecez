@@ -20,6 +20,8 @@ pub const QueryAny = query.QueryAny;
 /// Use this function to create a system scheduler type
 pub const CreateScheduler = scheduler.CreateScheduler;
 
+pub const EventConfig = scheduler.EventConfig;
+
 /// Events are a set of systems that should execute when triggered.
 /// Mark an event by name and systems to execute
 pub const Event = scheduler.Event;

@@ -145,6 +145,7 @@ pub fn Create() type {
         pub fn spawnRe(
             pool: *Pool,
             comptime event_dependency_indices: []const u32,
+            comptime force_single_threaded: bool,
             event_collection: []ResetEvent,
             spawned_event_index: u32,
             args: anytype,
@@ -157,7 +158,7 @@ pub fn Create() type {
             const Args = @TypeOf(args);
             const dispatch_exec_func = Args.exec;
 
-            if (builtin.single_threaded or pool.threads.len == 0) {
+            if (builtin.single_threaded or pool.threads.len == 0 or force_single_threaded) {
                 @call(.auto, dispatch_exec_func, .{args});
                 event_collection[spawned_event_index].set();
                 return;

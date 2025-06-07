@@ -188,6 +188,7 @@ pub fn CreateScheduler(comptime events: anytype) type {
 
                 self.thread_pool.spawnRe(
                     system_dependencies.wait_on_indices,
+                    triggered_event._run_on_main_thread,
                     event_in_flight,
                     system_index,
                     system_job,
@@ -311,7 +312,11 @@ pub fn CreateScheduler(comptime events: anytype) type {
 
 pub const EventType = struct {};
 
-pub fn Event(comptime name: []const u8, comptime systems: anytype) type {
+pub const EventConfig = struct {
+    run_on_main_thread: bool = false,
+};
+
+pub fn Event(comptime name: []const u8, comptime systems: anytype, comptime config: EventConfig) type {
     const systems_fields: std.builtin.Type = @typeInfo(@TypeOf(systems));
     if (systems_fields != .@"struct") {
         @compileError("Event expect systems to be a tuple of systems");
@@ -334,6 +339,7 @@ pub fn Event(comptime name: []const u8, comptime systems: anytype) type {
         pub const EcezType = EventType;
         pub const _name = name;
         pub const _systems = systems;
+        pub const _run_on_main_thread = config.run_on_main_thread;
 
         // TODO: validate given a storage
         pub fn getSystemCount() u32 {
@@ -394,9 +400,9 @@ pub const CompileReflect = struct {
         return events_info.fields.len;
     }
     test "countAndVerifyEvents return correct event count" {
-        const event1 = Event("a", .{countAndVerifyEvents});
-        const event2 = Event("b", .{std.debug.assert});
-        const event3 = Event("c", .{std.debug.assert});
+        const event1 = Event("a", .{countAndVerifyEvents}, .{});
+        const event2 = Event("b", .{std.debug.assert}, .{});
+        const event3 = Event("c", .{std.debug.assert}, .{});
         const event_count = countAndVerifyEvents(.{ event1, event2, event3 });
         try std.testing.expectEqual(3, event_count);
     }
@@ -442,9 +448,9 @@ pub const CompileReflect = struct {
         return system_count;
     }
     test "countAndVerifySystems return correct system count" {
-        const event1 = Event("a", .{std.debug.assert});
-        const event2 = Event("b", .{ std.debug.assert, std.debug.assert });
-        const event3 = Event("c", .{ std.debug.assert, std.debug.assert, std.debug.assert });
+        const event1 = Event("a", .{std.debug.assert}, .{});
+        const event2 = Event("b", .{ std.debug.assert, std.debug.assert }, .{});
+        const event3 = Event("c", .{ std.debug.assert, std.debug.assert, std.debug.assert }, .{});
 
         try std.testing.expectEqual(1, comptime countAndVerifySystems(event1));
         try std.testing.expectEqual(2, comptime countAndVerifySystems(event2));
@@ -532,7 +538,11 @@ test "system query can mutate components" {
         var storage = try StorageStub.init(testing.allocator);
         defer storage.deinit();
 
-        const OnFooEvent = Event("onFoo", .{SystemStruct.mutateStuff});
+        const OnFooEvent = Event(
+            "onFoo",
+            .{SystemStruct.mutateStuff},
+            .{},
+        );
 
         var scheduler = try CreateScheduler(.{OnFooEvent}).init(.{
             .pool_allocator = std.testing.allocator,
@@ -579,7 +589,11 @@ test "scheduler can be used for multiple storage types" {
             }
         };
 
-        const OnFooEvent = Event("onFoo", .{SystemStruct.mutateStuff});
+        const OnFooEvent = Event(
+            "onFoo",
+            .{SystemStruct.mutateStuff},
+            .{},
+        );
         var scheduler = try CreateScheduler(.{OnFooEvent}).init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
@@ -681,6 +695,7 @@ test "system SubStorage can spawn new entites (and no race hazards)" {
                 SystemStruct.incrA,
                 SystemStruct.decrA,
             },
+            .{},
         )}).init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
@@ -769,6 +784,7 @@ test "Thread count 0 works" {
                 SystemStruct.incrA,
                 SystemStruct.decrA,
             },
+            .{},
         )}).init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
@@ -807,7 +823,11 @@ test "system sub storage can mutate components" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = try CreateScheduler(.{Event("onFoo", .{SystemStruct.mutateStuff})}).init(.{
+    var scheduler = try CreateScheduler(.{Event(
+        "onFoo",
+        .{SystemStruct.mutateStuff},
+        .{},
+    )}).init(.{
         .pool_allocator = std.testing.allocator,
         .query_submit_allocator = std.testing.allocator,
     });
@@ -904,17 +924,21 @@ test "Dispatch is determenistic (no race conditions)" {
             defer storage.clearRetainingCapacity();
 
             var scheduler = try CreateScheduler(.{
-                Event("onFoo", .{
-                    SystemStruct.storageZeroAZeroB,
-                    SystemStruct.incrA,
-                    SystemStruct.doubleA,
-                    SystemStruct.incrA,
-                    SystemStruct.incrB,
-                    SystemStruct.doubleB,
-                    SystemStruct.incrB,
-                    SystemStruct.storageDoubleADoubleB,
-                    SystemStruct.storageIncrAIncrB,
-                }),
+                Event(
+                    "onFoo",
+                    .{
+                        SystemStruct.storageZeroAZeroB,
+                        SystemStruct.incrA,
+                        SystemStruct.doubleA,
+                        SystemStruct.incrA,
+                        SystemStruct.incrB,
+                        SystemStruct.doubleB,
+                        SystemStruct.incrB,
+                        SystemStruct.storageDoubleADoubleB,
+                        SystemStruct.storageIncrAIncrB,
+                    },
+                    .{},
+                ),
             }).init(.{
                 .pool_allocator = std.testing.allocator,
                 .query_submit_allocator = std.testing.allocator,
@@ -999,16 +1023,24 @@ test "Dispatch with multiple events works" {
         defer storage.deinit();
 
         var scheduler = try CreateScheduler(.{
-            Event("onA", .{
-                SystemStruct.incrA,
-                SystemStruct.doubleA,
-                SystemStruct.incrA,
-            }),
-            Event("onB", .{
-                SystemStruct.incrB,
-                SystemStruct.doubleB,
-                SystemStruct.incrB,
-            }),
+            Event(
+                "onA",
+                .{
+                    SystemStruct.incrA,
+                    SystemStruct.doubleA,
+                    SystemStruct.incrA,
+                },
+                .{},
+            ),
+            Event(
+                "onB",
+                .{
+                    SystemStruct.incrB,
+                    SystemStruct.doubleB,
+                    SystemStruct.incrB,
+                },
+                .{},
+            ),
         }).init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
@@ -1091,17 +1123,25 @@ test "dumpDependencyChain" {
         defer storage.deinit();
 
         const Scheduler = CreateScheduler(.{
-            Event("onA", .{
-                SystemStruct.incrA,
-                SystemStruct.doubleA,
-                SystemStruct.incrA,
-            }),
-            Event("onB", .{
-                SystemStruct.incrB,
-                SystemStruct.incrA,
-                SystemStruct.doubleB,
-                SystemStruct.incrB,
-            }),
+            Event(
+                "onA",
+                .{
+                    SystemStruct.incrA,
+                    SystemStruct.doubleA,
+                    SystemStruct.incrA,
+                },
+                .{},
+            ),
+            Event(
+                "onB",
+                .{
+                    SystemStruct.incrB,
+                    SystemStruct.incrA,
+                    SystemStruct.doubleB,
+                    SystemStruct.incrB,
+                },
+                .{},
+            ),
         });
 
         {
@@ -1157,7 +1197,11 @@ test "systems can accepts event related data" {
         defer storage.deinit();
 
         var scheduler = try CreateScheduler(.{
-            Event("onFoo", .{System.addToA}),
+            Event(
+                "onFoo",
+                .{System.addToA},
+                .{},
+            ),
         }).init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
@@ -1196,7 +1240,11 @@ test "systems can mutate event argument" {
         defer storage.deinit();
 
         var scheduler = try CreateScheduler(.{
-            Event("onFoo", .{System.addToA}),
+            Event(
+                "onFoo",
+                .{System.addToA},
+                .{},
+            ),
         }).init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
@@ -1237,9 +1285,13 @@ test "system can contain two queries" {
         var storage = try StorageStub.init(testing.allocator);
         defer storage.deinit();
 
-        var scheduler = try CreateScheduler(.{Event("onFoo", .{
-            SystemStruct.eventSystem,
-        })}).init(.{
+        var scheduler = try CreateScheduler(.{Event(
+            "onFoo",
+            .{
+                SystemStruct.eventSystem,
+            },
+            .{},
+        )}).init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
         });
@@ -1279,8 +1331,8 @@ test "event caching works" {
         defer storage.deinit();
 
         var scheduler = try CreateScheduler(.{
-            Event("onIncA", .{Systems.incA}),
-            Event("onIncB", .{Systems.incB}),
+            Event("onIncA", .{Systems.incA}, .{}),
+            Event("onIncB", .{Systems.incB}, .{}),
         }).init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
@@ -1356,9 +1408,13 @@ test "Event with no archetypes does not crash" {
         var storage = try StorageStub.init(testing.allocator);
         defer storage.deinit();
 
-        var scheduler = try CreateScheduler(.{Event("onFoo", .{
-            Systems.incA,
-        })}).init(.{
+        var scheduler = try CreateScheduler(.{Event(
+            "onFoo",
+            .{
+                Systems.incA,
+            },
+            .{},
+        )}).init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
         });
@@ -1387,7 +1443,11 @@ test "reproducer: Scheduler does not include new components to systems previousl
         };
 
         const RepStorage = CreateStorage(Testing.AllComponentsTuple);
-        const Scheduler = CreateScheduler(.{Event("onFoo", .{Systems.addToTracker})});
+        const Scheduler = CreateScheduler(.{Event(
+            "onFoo",
+            .{Systems.addToTracker},
+            .{},
+        )});
 
         var storage = try RepStorage.init(testing.allocator);
         defer storage.deinit();

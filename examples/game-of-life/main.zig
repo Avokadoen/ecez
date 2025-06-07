@@ -52,15 +52,19 @@ const Storage = ecez.CreateStorage(.{
     Components.RenderTarget,
 });
 
-const Scheduler = ecez.CreateScheduler(.{ecez.Event("loop", .{
-    renderCellSystem,
-    renderLineSystem,
-    busyWorkSystem,
-    busyWorkSystem,
-    busyWorkSystem,
-    flushBufferSystem,
-    updateCellSystem,
-})});
+const Scheduler = ecez.CreateScheduler(.{ecez.Event(
+    "loop",
+    .{
+        renderCellSystem,
+        renderLineSystem,
+        busyWorkSystem,
+        busyWorkSystem,
+        busyWorkSystem,
+        flushBufferSystem,
+        updateCellSystem,
+    },
+    .{},
+)});
 
 const EventArgument = struct {
     grid_config: GridConfig,
