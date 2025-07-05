@@ -1094,6 +1094,31 @@ test "unsetComponents() removes multiple components" {
     try testing.expectEqual(false, storage.hasComponents(entity, .{Testing.Component.C}));
 }
 
+test "unsetComponents() can remove components in incrementally" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    const entity_0 = try storage.createEntity(.{Testing.Component.A{}});
+    const entity_1 = try storage.createEntity(.{Testing.Component.A{}});
+    const entity_2 = try storage.createEntity(.{Testing.Component.B{}});
+    const entity_3 = try storage.createEntity(.{Testing.Component.B{}});
+
+    storage.unsetComponents(entity_2, .{Testing.Component.B});
+    storage.unsetComponents(entity_3, .{Testing.Component.B});
+
+    try testing.expectEqual(true, storage.hasComponents(entity_0, .{Testing.Component.A}));
+    try testing.expectEqual(false, storage.hasComponents(entity_0, .{Testing.Component.B}));
+
+    try testing.expectEqual(true, storage.hasComponents(entity_1, .{Testing.Component.A}));
+    try testing.expectEqual(false, storage.hasComponents(entity_1, .{Testing.Component.B}));
+
+    try testing.expectEqual(false, storage.hasComponents(entity_2, .{Testing.Component.A}));
+    try testing.expectEqual(false, storage.hasComponents(entity_2, .{Testing.Component.B}));
+
+    try testing.expectEqual(false, storage.hasComponents(entity_3, .{Testing.Component.A}));
+    try testing.expectEqual(false, storage.hasComponents(entity_3, .{Testing.Component.B}));
+}
+
 test "hasComponents() identify missing and present components" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
