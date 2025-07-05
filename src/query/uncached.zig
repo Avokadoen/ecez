@@ -237,7 +237,7 @@ pub fn Create(comptime config: CreateConfig) type {
 
                 for (self.full_set_search_order) |this_search| {
                     const entry_is_set = self.full_sparse_sets[this_search].isSet(self.sparse_cursors);
-                    const should_be_set = this_search < config.result_component_count + config.include_fields.len;
+                    const should_be_set = this_search < config.tag_include_start;
 
                     // Check if we should skip entry:
                     // Skip if is set is false and it's a result entry, otherwise if it's an exclude, then it should be set to skip.

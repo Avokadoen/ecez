@@ -29,6 +29,7 @@ result_component_count: comptime_int,
 exclude_type_start: comptime_int,
 full_sparse_set_count: comptime_int,
 tag_sparse_set_count: comptime_int,
+tag_include_start: comptime_int,
 tag_exclude_start: comptime_int,
 
 pub fn init(
@@ -182,12 +183,17 @@ pub fn init(
     };
 
     const exclude_type_start = result_component_count + include_fields.len;
-    const full_sparse_set_count, const tag_sparse_set_count, const tag_exclude_start = count_sparse_sets_blk: {
+    const full_sparse_set_count, const tag_sparse_set_count, const tag_include_start, const tag_exclude_start = count_sparse_sets_blk: {
         var full_sparse_count = 0;
         var tag_sparse_count = 0;
+        var tag_include_start: ?comptime_int = null;
         var tag_exclude_start: ?comptime_int = null;
         for (query_components, 0..) |Component, comp_index| {
             if (@sizeOf(Component) > 0) {
+                if (tag_include_start == null and comp_index >= exclude_type_start) {
+                    tag_include_start = full_sparse_count;
+                }
+
                 full_sparse_count += 1;
             } else {
                 if (tag_exclude_start == null and comp_index >= exclude_type_start) {
@@ -200,6 +206,7 @@ pub fn init(
         break :count_sparse_sets_blk .{
             full_sparse_count,
             tag_sparse_count,
+            tag_include_start orelse full_sparse_count,
             tag_exclude_start orelse tag_sparse_count,
         };
     };
@@ -233,6 +240,7 @@ pub fn init(
         .exclude_type_start = exclude_type_start,
         .full_sparse_set_count = full_sparse_set_count,
         .tag_sparse_set_count = tag_sparse_set_count,
+        .tag_include_start = tag_include_start,
         .tag_exclude_start = tag_exclude_start,
     };
 }
