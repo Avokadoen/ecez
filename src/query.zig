@@ -1002,6 +1002,37 @@ test "query entity only split works" {
     try std.testing.expectEqual(entities.len, index);
 }
 
+test "query entity id with tag include and exclude sized type" {
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
+
+    var entities: [200]Entity = undefined;
+    for (entities[0..100], 0..) |*entity, index| {
+        entity.* = try storage.createEntity(.{
+            Testing.Component.A{ .value = @as(u32, @intCast(index)) },
+            Testing.Component.C{},
+        });
+    }
+
+    const TQueries = Testing.QueryAndQueryAny(
+        struct {
+            entity: Entity,
+        },
+        .{Testing.Component.C},
+        .{Testing.Component.A},
+    );
+
+    inline for (TQueries) |TQuery| {
+        var iter = try TQuery.submit(std.testing.allocator, &storage);
+        defer iter.deinit(std.testing.allocator);
+
+        while (iter.next()) |item| {
+            _ = item;
+            return error.MatchingInvalidEntity;
+        }
+    }
+}
+
 test "query split works" {
     var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
