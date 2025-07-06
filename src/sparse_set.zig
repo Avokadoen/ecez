@@ -228,7 +228,7 @@ pub fn unset(
     sparse.sparse[swapped_sparse_entry] = entry;
 
     dense.dense[entry] = dense.dense[dense.dense_len - 1];
-    dense.sparse_index[entry] = sparse_slot;
+    dense.sparse_index[entry] = swapped_sparse_entry;
 
     sparse.sparse[sparse_slot] = Sparse.not_set;
     dense.dense_len -= 1;
