@@ -1094,7 +1094,7 @@ test "unsetComponents() removes multiple components" {
     try testing.expectEqual(false, storage.hasComponents(entity, .{Testing.Component.C}));
 }
 
-test "unsetComponents() can remove components in incrementally" {
+test "unsetComponents() removes component 0 in dense storage with no neighbour corruption" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
