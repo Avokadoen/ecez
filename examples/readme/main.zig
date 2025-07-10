@@ -189,6 +189,10 @@ pub fn main() anyerror!void {
 
     // Like the first event we can also dispatch our second event
     scheduler.dispatchEvent(&storage, .mySecondEvent, mouse_event);
+
+    // we can also check if the event is currently being executed
+    _ = scheduler.isEventInFlight(.mySecondEvent);
+
     scheduler.waitEvent(.mySecondEvent);
 
     // serialize the storage into a slice of bytes

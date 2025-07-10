@@ -210,6 +210,23 @@ pub fn CreateScheduler(comptime events: anytype) type {
             }
         }
 
+        /// Check if an event is currently being executed
+        /// should only be called from the dispatchEvent thread
+        pub fn isEventInFlight(self: *Scheduler, comptime event: EventsEnum) bool {
+            const tracy_zone_name = comptime std.fmt.comptimePrint("{s}: event {s}", .{ @src().fn_name, @tagName(event) });
+            const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.scheduler);
+            defer zone.End();
+
+            const event_field_name = comptime CompileReflect.getEventsInFlightFieldName(@intFromEnum(event));
+            const event_in_flight = &@field(self.events_in_flight, event_field_name);
+            for (event_in_flight) |*system_event| {
+                if (!system_event.isSet()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         /// Force the storage to flush all current in flight jobs before continuing
         pub fn waitIdle(self: *Scheduler) void {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.scheduler);
@@ -1425,6 +1442,61 @@ test "Event with no archetypes does not crash" {
             scheduler.waitEvent(.onFoo);
         }
     }
+}
+
+test "event in flight" {
+    const Resets = struct {
+        start: [3]std.Thread.ResetEvent = .{std.Thread.ResetEvent{}} ** 3,
+        stop: [3]std.Thread.ResetEvent = .{std.Thread.ResetEvent{}} ** 3,
+    };
+
+    const Systems = struct {
+        pub fn first(resets: *Resets) void {
+            resets.start[0].wait();
+            resets.stop[0].set();
+        }
+        pub fn second(resets: *Resets) void {
+            resets.start[1].wait();
+            resets.stop[1].set();
+        }
+        pub fn third(resets: *Resets) void {
+            resets.start[2].wait();
+            resets.stop[2].set();
+        }
+    };
+
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    var scheduler = try CreateScheduler(.{
+        Event("onFoo", .{
+            Systems.first,
+            Systems.second,
+            Systems.third,
+        }, .{}),
+    }).init(.{
+        .pool_allocator = std.testing.allocator,
+        .query_submit_allocator = std.testing.allocator,
+    });
+    defer scheduler.deinit();
+
+    var resets = Resets{};
+
+    scheduler.dispatchEvent(&storage, .onFoo, &resets);
+
+    try std.testing.expect(scheduler.isEventInFlight(.onFoo));
+    resets.start[0].set();
+    resets.stop[0].wait();
+
+    try std.testing.expect(scheduler.isEventInFlight(.onFoo));
+    resets.start[1].set();
+    resets.stop[1].wait();
+
+    try std.testing.expect(scheduler.isEventInFlight(.onFoo));
+    resets.start[2].set();
+    resets.stop[2].wait();
+
+    try std.testing.expect(!scheduler.isEventInFlight(.onFoo));
 }
 
 // this reproducer never had an issue filed, so no issue number
