@@ -581,7 +581,7 @@ test "system query can mutate components" {
 
         try testing.expectEqual(
             Testing.Component.A{ .value = 3 },
-            try storage.getComponent(entity, Testing.Component.A),
+            storage.getComponent(entity, Testing.Component.A).?,
         );
     }
 }
@@ -634,7 +634,7 @@ test "scheduler can be used for multiple storage types" {
 
             try testing.expectEqual(
                 Testing.Component.A{ .value = 3 },
-                try storage.getComponent(entity, Testing.Component.A),
+                storage.getComponent(entity, Testing.Component.A).?,
             );
         }
     }
@@ -737,14 +737,14 @@ test "system SubStorage can spawn new entites (and no race hazards)" {
             for (&initial_entites, 0..) |entity, iter| {
                 try testing.expectEqual(
                     Testing.Component.B{ .value = @intCast(iter) },
-                    try storage.getComponent(entity, Testing.Component.B),
+                    storage.getComponent(entity, Testing.Component.B).?,
                 );
             }
 
             for (spawned_entites.a, 0..) |entity, iter| {
                 try testing.expectEqual(
                     Testing.Component.A{ .value = @intCast(iter) },
-                    try storage.getComponent(entity, Testing.Component.A),
+                    storage.getComponent(entity, Testing.Component.A).?,
                 );
             }
 
@@ -755,7 +755,7 @@ test "system SubStorage can spawn new entites (and no race hazards)" {
                 const reverse = initial_entity_count - iter - 1;
                 try testing.expectEqual(
                     Testing.Component.B{ .value = @intCast(reverse) },
-                    try storage.getComponent(entity, Testing.Component.B),
+                    storage.getComponent(entity, Testing.Component.B).?,
                 );
             }
         }
@@ -828,7 +828,7 @@ test "system sub storage can mutate components" {
     const SystemStruct = struct {
         pub fn mutateStuff(entities: *Queries.Entities, ab: *SubStorage) void {
             while (entities.next()) |item| {
-                const a = ab.getComponent(item.entity, Testing.Component.A) catch @panic("oof");
+                const a = ab.getComponent(item.entity, Testing.Component.A).?;
 
                 ab.setComponents(item.entity, .{
                     Testing.Component.B{ .value = @intCast(a.value) },
@@ -863,7 +863,7 @@ test "system sub storage can mutate components" {
 
     try testing.expectEqual(
         Testing.Component.B{ .value = 42 },
-        try storage.getComponent(entity, Testing.Component.B),
+        storage.getComponent(entity, Testing.Component.B).?,
     );
 }
 
@@ -907,7 +907,7 @@ test "Dispatch is determenistic (no race conditions)" {
                     const ab = sub.getComponents(item.entity, struct {
                         a: *Testing.Component.A,
                         b: *Testing.Component.B,
-                    }) catch @panic("oof");
+                    }).?;
 
                     ab.a.value += 1;
                     ab.b.value += 1;
@@ -919,7 +919,7 @@ test "Dispatch is determenistic (no race conditions)" {
                     const ab = sub.getComponents(item.entity, struct {
                         a: *Testing.Component.A,
                         b: *Testing.Component.B,
-                    }) catch @panic("oof");
+                    }).?;
 
                     ab.a.value *= 2;
                     ab.b.value *= 2;
@@ -978,7 +978,7 @@ test "Dispatch is determenistic (no race conditions)" {
             scheduler.waitEvent(.onFoo);
 
             for (entities) |entity| {
-                const ab = try storage.getComponents(entity, Testing.Structure.AB);
+                const ab = storage.getComponents(entity, Testing.Structure.AB).?;
                 try testing.expectEqual(
                     Testing.Component.A{ .value = expected_value },
                     ab.a,
@@ -994,7 +994,7 @@ test "Dispatch is determenistic (no race conditions)" {
             scheduler.waitEvent(.onFoo);
 
             for (entities) |entity| {
-                const ab = try storage.getComponents(entity, Testing.Structure.AB);
+                const ab = storage.getComponents(entity, Testing.Structure.AB).?;
                 try testing.expectEqual(
                     Testing.Component.A{ .value = expected_value },
                     ab.a,
@@ -1095,7 +1095,7 @@ test "Dispatch with multiple events works" {
 
         const expected_value = 45;
         for (entities) |entity| {
-            const ab = try storage.getComponents(entity, Testing.Structure.AB);
+            const ab = storage.getComponents(entity, Testing.Structure.AB).?;
             try testing.expectEqual(
                 Testing.Component.A{ .value = expected_value },
                 ab.a,
@@ -1233,7 +1233,7 @@ test "systems can accepts event related data" {
 
         try testing.expectEqual(
             Testing.Component.A{ .value = value },
-            try storage.getComponent(entity, Testing.Component.A),
+            storage.getComponent(entity, Testing.Component.A).?,
         );
     }
 }
@@ -1321,7 +1321,7 @@ test "system can contain two queries" {
 
         try testing.expectEqual(
             Testing.Component.A{ .value = pass_value },
-            try storage.getComponent(entity, Testing.Component.A),
+            storage.getComponent(entity, Testing.Component.A).?,
         );
     }
 }
@@ -1363,7 +1363,7 @@ test "event caching works" {
 
         try testing.expectEqual(
             Testing.Component.A{ .value = 1 },
-            try storage.getComponent(entity1, Testing.Component.A),
+            storage.getComponent(entity1, Testing.Component.A).?,
         );
 
         // move entity to archetype A, B
@@ -1374,7 +1374,7 @@ test "event caching works" {
 
         try testing.expectEqual(
             Testing.Component.A{ .value = 2 },
-            try storage.getComponent(entity1, Testing.Component.A),
+            storage.getComponent(entity1, Testing.Component.A).?,
         );
 
         scheduler.dispatchEvent(&storage, .onIncB, .{});
@@ -1382,7 +1382,7 @@ test "event caching works" {
 
         try testing.expectEqual(
             Testing.Component.B{ .value = 1 },
-            try storage.getComponent(entity1, Testing.Component.B),
+            storage.getComponent(entity1, Testing.Component.B).?,
         );
 
         const entity2 = blk: {
@@ -1399,7 +1399,7 @@ test "event caching works" {
 
         try testing.expectEqual(
             Testing.Component.A{ .value = 1 },
-            try storage.getComponent(entity2, Testing.Component.A),
+            storage.getComponent(entity2, Testing.Component.A).?,
         );
 
         scheduler.dispatchEvent(&storage, .onIncB, .{});
@@ -1407,7 +1407,7 @@ test "event caching works" {
 
         try testing.expectEqual(
             Testing.Component.B{ .value = 1 },
-            try storage.getComponent(entity2, Testing.Component.B),
+            storage.getComponent(entity2, Testing.Component.B).?,
         );
     }
 }

@@ -66,6 +66,22 @@ pub fn main() anyerror!void {
         Component.HeartOrgan{},
     });
 
+    // you can retrieve components
+    const current_health_value = storage.getComponent(my_living_entity, Component.Health).?;
+    _ = storage.getComponent(my_living_entity, *const Component.Health).?;
+    _ = storage.getComponent(my_living_entity, *Component.Health).?;
+    std.debug.assert(current_health_value.value == 42);
+
+    // you can retrieve multiple components
+    const living_state = storage.getComponents(my_living_entity, struct {
+        health: *const Component.Health,
+        position: *Component.Position,
+        health_organ: Component.HeartOrgan,
+    }).?;
+    _ = living_state;
+
+    std.debug.assert(storage.hasComponents(my_living_entity, .{Component.Health}) == false);
+
     // You can unset components (remove)
     storage.unsetComponents(my_living_entity, .{Component.Health});
 

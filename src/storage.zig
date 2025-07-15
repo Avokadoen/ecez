@@ -378,7 +378,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///     a_b_c.a.value = 51;
         /// ```
         ///
-        pub fn getComponents(self: *const Storage, entity: Entity, comptime Components: type) error{MissingComponent}!Components {
+        pub fn getComponents(self: *const Storage, entity: Entity, comptime Components: type) ?Components {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
@@ -405,7 +405,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                         sparse_set,
                         dense_set,
                         entity.id,
-                    ) orelse return error.MissingComponent;
+                    ) orelse return null;
                     switch (component_to_get.attr) {
                         .ptr, .const_ptr => @field(result, field.name) = get_ptr,
                         .value => @field(result, field.name) = get_ptr.*,
@@ -422,7 +422,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     }
 
                     if (sparse_set.isSet(entity.id) == false) {
-                        return error.MissingComponent;
+                        return null;
                     }
 
                     @field(result, field.name) = component_to_get.type{};
@@ -446,11 +446,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///
         /// Example:
         /// ```
-        ///     const a = try storage.getComponent(my_entity, Component.A);
-        ///     const b = try storage.getComponent(my_entity, *Component.B);
-        ///     const c = try storage.getComponent(my_entity, *const Component.C);
+        ///     const a = storage.getComponent(my_entity, Component.A).?;
+        ///     const b = storage.getComponent(my_entity, *Component.B).?;
+        ///     const c = storage.getComponent(my_entity, *const Component.C).?;
         /// ```
-        pub fn getComponent(self: *const Storage, entity: Entity, comptime Component: type) error{MissingComponent}!Component {
+        pub fn getComponent(self: *const Storage, entity: Entity, comptime Component: type) ?Component {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
@@ -474,7 +474,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 sparse_set,
                 dense_set,
                 entity.id,
-            ) orelse return error.MissingComponent;
+            ) orelse return null;
             switch (component_to_get.attr) {
                 .ptr, .const_ptr => return get_ptr,
                 .value => return get_ptr.*,
@@ -628,7 +628,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     return self.storage.hasComponents(entity, components);
                 }
 
-                pub fn getComponents(self: *const ThisSubset, entity: Entity, comptime Components: type) error{MissingComponent}!Components {
+                pub fn getComponents(self: *const ThisSubset, entity: Entity, comptime Components: type) ?Components {
                     // Validate that the correct access was requested in subset type
                     comptime {
                         const get_info = @typeInfo(Components);
@@ -660,7 +660,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     return self.storage.getComponents(entity, Components);
                 }
 
-                pub fn getComponent(self: *const ThisSubset, entity: Entity, comptime Component: type) error{MissingComponent}!Component {
+                pub fn getComponent(self: *const ThisSubset, entity: Entity, comptime Component: type) ?Component {
                     // Validate that the correct access was requested in subset type
                     comptime get_validation_blk: {
                         const component_to_get = CompileReflect.compactComponentRequest(Component);
@@ -932,13 +932,13 @@ test "createEntity() can create empty entities" {
     const a = Testing.Component.A{ .value = 123 };
     {
         try storage.setComponents(entity, .{a});
-        try testing.expectEqual(a, try storage.getComponent(entity, Testing.Component.A));
+        try testing.expectEqual(a, storage.getComponent(entity, Testing.Component.A).?);
     }
 
     const b = Testing.Component.B{ .value = 8 };
     {
         try storage.setComponents(entity, .{b});
-        const comps = try storage.getComponents(entity, AbEntityType);
+        const comps = storage.getComponents(entity, AbEntityType).?;
         try testing.expectEqual(a, comps.a);
         try testing.expectEqual(b, comps.b);
     }
@@ -956,7 +956,7 @@ test "setComponents() works " {
     const b = Testing.Component.B{ .value = 42 };
     try storage.setComponents(entity1, .{ a, b });
 
-    const comps = try storage.getComponents(entity1, AbEntityType);
+    const comps = storage.getComponents(entity1, AbEntityType).?;
     try testing.expectEqual(a, comps.a);
     try testing.expectEqual(b, comps.b);
 }
@@ -974,7 +974,7 @@ test "setComponents() update entities component state" {
     const a = Testing.Component.A{ .value = 123 };
     try storage.setComponents(entity, .{a});
 
-    const stored_a = try storage.getComponent(entity, Testing.Component.A);
+    const stored_a = storage.getComponent(entity, Testing.Component.A).?;
     try testing.expectEqual(a, stored_a);
 }
 
@@ -1010,7 +1010,7 @@ test "setComponents() can reassign multiple components" {
         .b = new_b,
     });
 
-    const stored = try storage.getComponents(entity, AbEntityType);
+    const stored = storage.getComponents(entity, AbEntityType).?;
     try testing.expectEqual(new_a, stored.a);
     try testing.expectEqual(new_b, stored.b);
 }
@@ -1035,7 +1035,7 @@ test "ensureUnusedCapacity + createEntityAssumeCapacity works" {
         const expected_a = Testing.Component.A{ .value = @intCast(create_index) };
         const expected_b = Testing.Component.B{ .value = @intCast(create_index) };
 
-        const stored = try storage.getComponents(entity, AbEntityType);
+        const stored = storage.getComponents(entity, AbEntityType).?;
         try testing.expectEqual(expected_a, stored.a);
         try testing.expectEqual(expected_b, stored.b);
     }
@@ -1154,7 +1154,7 @@ test "setComponents() can add new components to entity" {
         .b = new_b,
     });
 
-    const stored = try storage.getComponents(entity, AbEntityType);
+    const stored = storage.getComponents(entity, AbEntityType).?;
     try testing.expectEqual(new_a, stored.a);
     try testing.expectEqual(new_b, stored.b);
 }
@@ -1170,7 +1170,7 @@ test "storage with 0 size component is valid" {
     try storage.setComponents(entity, .{ZeroComp{}});
     try testing.expectEqual(true, storage.hasComponents(entity, .{ZeroComp}));
 
-    _ = try storage.getComponents(entity, struct { z: ZeroComp });
+    _ = storage.getComponents(entity, struct { z: ZeroComp }).?;
     storage.unsetComponents(entity, .{ZeroComp});
     try testing.expectEqual(false, storage.hasComponents(entity, .{ZeroComp}));
 }
@@ -1225,7 +1225,10 @@ test "getComponents() retrieve component values" {
         _ = try storage.createEntity(initial_state);
     }
 
-    try testing.expectEqual(entity_initial_state, try storage.getComponents(entity, AbEntityType));
+    try testing.expectEqual(
+        entity_initial_state,
+        storage.getComponents(entity, AbEntityType).?,
+    );
 }
 
 test "getComponents() can mutate component value with ptr" {
@@ -1239,7 +1242,7 @@ test "getComponents() can mutate component value with ptr" {
     const entity = try storage.createEntity(initial_state);
 
     const MutableAB = struct { a: *Testing.Component.A, b: *Testing.Component.B };
-    const ab_ptr = try storage.getComponents(entity, MutableAB);
+    const ab_ptr = storage.getComponents(entity, MutableAB).?;
     try testing.expectEqual(initial_state.a, ab_ptr.a.*);
     try testing.expectEqual(initial_state.b, ab_ptr.b.*);
 
@@ -1250,7 +1253,7 @@ test "getComponents() can mutate component value with ptr" {
     ab_ptr.a.* = new_a_value;
     ab_ptr.b.* = new_b_value;
 
-    const stored_components = try storage.getComponents(entity, AbEntityType);
+    const stored_components = storage.getComponents(entity, AbEntityType).?;
     try testing.expectEqual(new_a_value, stored_components.a);
     try testing.expectEqual(new_b_value, stored_components.b);
 }
@@ -1305,8 +1308,14 @@ test "getComponent() retrieve component values" {
         _ = try storage.createEntity(initial_state);
     }
 
-    try testing.expectEqual(entity_initial_state.a, try storage.getComponent(entity, Testing.Component.A));
-    try testing.expectEqual(entity_initial_state.b, try storage.getComponent(entity, Testing.Component.B));
+    try testing.expectEqual(
+        entity_initial_state.a,
+        storage.getComponent(entity, Testing.Component.A).?,
+    );
+    try testing.expectEqual(
+        entity_initial_state.b,
+        storage.getComponent(entity, Testing.Component.B).?,
+    );
 }
 
 test "getComponent() with const ptr retrieve component" {
@@ -1361,11 +1370,11 @@ test "getComponent() with const ptr retrieve component" {
 
     try testing.expectEqual(
         entity_initial_state.a,
-        (try storage.getComponent(entity, *const Testing.Component.A)).*,
+        storage.getComponent(entity, *const Testing.Component.A).?.*,
     );
     try testing.expectEqual(
         entity_initial_state.b,
-        (try storage.getComponent(entity, *const Testing.Component.B)).*,
+        storage.getComponent(entity, *const Testing.Component.B).?.*,
     );
 }
 
@@ -1380,7 +1389,7 @@ test "getComponent() can mutate component value with ptr" {
     const entity = try storage.createEntity(initial_state);
 
     const MutableAB = struct { a: *Testing.Component.A, b: *Testing.Component.B };
-    const ab_ptr = try storage.getComponents(entity, MutableAB);
+    const ab_ptr = storage.getComponents(entity, MutableAB).?;
     try testing.expectEqual(initial_state.a, ab_ptr.a.*);
     try testing.expectEqual(initial_state.b, ab_ptr.b.*);
 
@@ -1391,8 +1400,8 @@ test "getComponent() can mutate component value with ptr" {
     ab_ptr.a.* = new_a_value;
     ab_ptr.b.* = new_b_value;
 
-    try testing.expectEqual(new_a_value, try storage.getComponent(entity, Testing.Component.A));
-    try testing.expectEqual(new_b_value, try storage.getComponent(entity, Testing.Component.B));
+    try testing.expectEqual(new_a_value, storage.getComponent(entity, Testing.Component.A).?);
+    try testing.expectEqual(new_b_value, storage.getComponent(entity, Testing.Component.B).?);
 }
 
 test "clearRetainingCapacity() allow storage reuse" {
@@ -1422,7 +1431,7 @@ test "clearRetainingCapacity() allow storage reuse" {
     }
 
     try testing.expectEqual(first_entity, entity);
-    const comp_a = try storage.getComponent(entity, Testing.Component.A);
+    const comp_a = storage.getComponent(entity, Testing.Component.A).?;
     try testing.expectEqual(Testing.Component.A{ .value = initial_value }, comp_a);
 }
 
@@ -1444,7 +1453,7 @@ test "Subset createEntity" {
     };
     const entity = try storage_subset.createEntity(initial_state);
 
-    const stored = try storage_subset.getComponents(entity, AbEntityType);
+    const stored = storage_subset.getComponents(entity, AbEntityType).?;
     try testing.expectEqual(initial_state.a, stored.a);
     try testing.expectEqual(initial_state.b, stored.b);
 }
@@ -1474,7 +1483,7 @@ test "Subset setComponents() can reassign multiple components" {
         .b = new_b,
     });
 
-    const stored = try storage_subset.getComponents(entity, AbEntityType);
+    const stored = storage_subset.getComponents(entity, AbEntityType).?;
     try testing.expectEqual(new_a, stored.a);
     try testing.expectEqual(new_b, stored.b);
 }
@@ -1500,7 +1509,7 @@ test "Subset setComponents() can add new components to entity" {
         .b = new_b,
     });
 
-    const stored = try storage.getComponents(entity, AbEntityType);
+    const stored = storage.getComponents(entity, AbEntityType).?;
     try testing.expectEqual(new_a, stored.a);
     try testing.expectEqual(new_b, stored.b);
 }
@@ -1556,7 +1565,7 @@ test "Subset read only getComponent(s)" {
     }
 
     for (entities, 0..) |entity, iter| {
-        const b = try storage_subset.getComponent(entity, Testing.Component.B);
+        const b = storage_subset.getComponent(entity, Testing.Component.B).?;
 
         try testing.expectEqual(
             Testing.Component.B{ .value = @intCast(iter) },
@@ -1565,7 +1574,7 @@ test "Subset read only getComponent(s)" {
     }
 
     for (entities, 0..) |entity, iter| {
-        const ab = try storage_subset.getComponents(entity, Testing.Structure.AB);
+        const ab = storage_subset.getComponents(entity, Testing.Structure.AB).?;
 
         try testing.expectEqual(
             Testing.Component.A{ .value = @intCast(iter) },
@@ -1608,7 +1617,7 @@ test "reproducer: component data is mangled by adding additional components to e
     const Obj = struct { o: RenderContext.ObjectMetadata };
     try testing.expectEqual(
         obj,
-        (try storage.getComponents(entity, Obj)).o,
+        storage.getComponents(entity, Obj).?.o,
     );
 
     const instance = Editor.InstanceHandle{ .a = 1, .b = 2, .c = 3 };
@@ -1616,12 +1625,12 @@ test "reproducer: component data is mangled by adding additional components to e
 
     try testing.expectEqual(
         obj,
-        (try storage.getComponents(entity, Obj)).o,
+        storage.getComponents(entity, Obj).?.o,
     );
     const Inst = struct { i: Editor.InstanceHandle };
     try testing.expectEqual(
         instance,
-        (try storage.getComponents(entity, Inst)).i,
+        storage.getComponents(entity, Inst).?.i,
     );
 }
 
@@ -1656,7 +1665,7 @@ test "reproducer: component data is mangled by having more than one entity" {
 
         try storage.setComponents(entity, .{ obj, instance });
 
-        const comps = try storage.getComponents(entity, struct { o: RenderContext.ObjectMetadata, i: Editor.InstanceHandle });
+        const comps = storage.getComponents(entity, struct { o: RenderContext.ObjectMetadata, i: Editor.InstanceHandle }).?;
         try testing.expectEqual(
             obj.a,
             comps.o.a,
@@ -1676,7 +1685,7 @@ test "reproducer: component data is mangled by having more than one entity" {
         const instance = Editor.InstanceHandle{ .a = 1, .b = 1, .c = 1 };
         try storage.setComponents(entity, .{ obj, instance });
 
-        const comps = try storage.getComponents(entity, struct { o: RenderContext.ObjectMetadata, i: Editor.InstanceHandle });
+        const comps = storage.getComponents(entity, struct { o: RenderContext.ObjectMetadata, i: Editor.InstanceHandle }).?;
         try testing.expectEqual(
             obj.a,
             comps.o.a,
@@ -1763,7 +1772,7 @@ test "reproducer: Removing component cause storage to become in invalid state" {
     _ = try storage.createEntity(entity_state);
 
     {
-        const actual_state = try storage.getComponents(entity, SceneObject);
+        const actual_state = storage.getComponents(entity, SceneObject).?;
         try testing.expectEqual(transform, actual_state.transform);
         try testing.expectEqual(position, actual_state.position);
         try testing.expectEqual(rotation, actual_state.rotation);
@@ -1781,7 +1790,7 @@ test "reproducer: Removing component cause storage to become in invalid state" {
             scale: Scale,
             instance_handle: InstanceHandle,
         };
-        const actual_state = try storage.getComponents(entity, SceneObjectNoPos);
+        const actual_state = storage.getComponents(entity, SceneObjectNoPos).?;
         try testing.expectEqual(transform, actual_state.transform);
         try testing.expectEqual(rotation, actual_state.rotation);
         try testing.expectEqual(scale, actual_state.scale);

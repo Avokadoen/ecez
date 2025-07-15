@@ -190,7 +190,7 @@ pub fn renderCellSystem(
     const zone = ztracy.ZoneNC(@src(), "Render Cell", Color.red);
     defer zone.End();
 
-    const render = render_view.getComponent(event_arg.render_entity, *Components.RenderTarget) catch unreachable;
+    const render = render_view.getComponent(event_arg.render_entity, *Components.RenderTarget).?;
     while (query.next()) |cell| {
         const cell_x: usize = @intCast(cell.pos.x);
         const cell_y: usize = @intCast(cell.pos.y);
@@ -228,7 +228,7 @@ pub fn renderLineSystem(
     const zone = ztracy.ZoneNC(@src(), "Render newline", Color.turquoise);
     defer zone.End();
 
-    const render = render_view.getComponent(event_arg.render_entity, *Components.RenderTarget) catch unreachable;
+    const render = render_view.getComponent(event_arg.render_entity, *Components.RenderTarget).?;
     while (query.next()) |line| {
         const nth: usize = @intCast(line.pos.nth);
 
@@ -265,7 +265,7 @@ pub fn flushBufferSystem(
     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.turquoise);
     defer zone.End();
 
-    const render = render_view.getComponent(event_arg.render_entity, Components.RenderTarget) catch unreachable;
+    const render = render_view.getComponent(event_arg.render_entity, Components.RenderTarget).?;
     std.log.info("\n{s}\n\n", .{render.output_buffer});
 }
 
@@ -312,7 +312,7 @@ pub fn updateCellSystem(
                 cursor += offset;
                 if (cursor >= 0 and cursor < event_arg.grid_config.cell_count) {
                     const neighbour_entity = event_arg.entity_grid[@intCast(cursor)];
-                    const neighbour_health = health_view.getComponent(neighbour_entity, Components.Health) catch unreachable;
+                    const neighbour_health = health_view.getComponent(neighbour_entity, Components.Health).?;
                     const alive = neighbour_health.alive[neighbour_index];
                     if (alive) {
                         neighbour_sum += 1;
@@ -328,7 +328,7 @@ pub fn updateCellSystem(
                 cursor += offset;
                 if (cursor >= 0 and cursor < event_arg.grid_config.cell_count) {
                     const neighbour_entity = event_arg.entity_grid[@intCast(cursor)];
-                    const neighbour_health = health_view.getComponent(neighbour_entity, Components.Health) catch unreachable;
+                    const neighbour_health = health_view.getComponent(neighbour_entity, Components.Health).?;
                     const alive = neighbour_health.alive[neighbour_index];
                     if (alive) {
                         neighbour_sum += 1;
@@ -341,7 +341,7 @@ pub fn updateCellSystem(
         for ([_]i32{ current_index + up, current_index + down }) |cursor| {
             if (cursor >= 0 and cursor < event_arg.grid_config.cell_count) {
                 const neighbour_entity = event_arg.entity_grid[@intCast(cursor)];
-                const neighbour_health = health_view.getComponent(neighbour_entity, Components.Health) catch unreachable;
+                const neighbour_health = health_view.getComponent(neighbour_entity, Components.Health).?;
                 const alive = neighbour_health.alive[neighbour_index];
                 if (alive) {
                     neighbour_sum += 1;
@@ -416,7 +416,7 @@ test "systems produce expected 3x3 grid state" {
             true,  true,  false,
             false, false, false,
         }, &cell_entities) |alive, entity| {
-            const cell = try storage.getComponents(entity, struct { h: Components.Health });
+            const cell = storage.getComponents(entity, struct { h: Components.Health }).?;
             try std.testing.expectEqual(alive, cell.h.alive[0]);
         }
     }
@@ -450,7 +450,7 @@ test "systems produce expected 3x3 grid state" {
         scheduler.waitEvent(.loop);
 
         for (&cell_entities, state_2) |entity, alive| {
-            const cell = try storage.getComponents(entity, struct { h: Components.Health });
+            const cell = storage.getComponents(entity, struct { h: Components.Health }).?;
             try std.testing.expectEqual(alive, cell.h.alive[0]);
         }
 
@@ -458,7 +458,7 @@ test "systems produce expected 3x3 grid state" {
         scheduler.waitEvent(.loop);
 
         for (&cell_entities, state_1) |entity, alive| {
-            const cell = try storage.getComponents(entity, struct { h: Components.Health });
+            const cell = storage.getComponents(entity, struct { h: Components.Health }).?;
             try std.testing.expectEqual(alive, cell.h.alive[1]);
         }
     }
@@ -492,7 +492,7 @@ test "systems produce expected 3x3 grid state" {
         scheduler.waitEvent(.loop);
 
         for (&cell_entities, state_2) |entity, alive| {
-            const cell = try storage.getComponents(entity, struct { h: Components.Health });
+            const cell = storage.getComponents(entity, struct { h: Components.Health }).?;
             try std.testing.expectEqual(alive, cell.h.alive[0]);
         }
     }
@@ -526,7 +526,7 @@ test "systems produce expected 3x3 grid state" {
         scheduler.waitEvent(.loop);
 
         for (&cell_entities, state_2) |entity, alive| {
-            const cell = try storage.getComponents(entity, struct { h: Components.Health });
+            const cell = storage.getComponents(entity, struct { h: Components.Health }).?;
             try std.testing.expectEqual(alive, cell.h.alive[0]);
         }
     }
