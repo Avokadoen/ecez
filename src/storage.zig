@@ -412,9 +412,12 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     }
                 } else {
                     comptime {
-                        if (component_to_get.attr == .ptr) {
-                            const error_message = std.fmt.comptimePrint("field '{s}' is a pointer to zero sized component which is illegal", .{field.name});
-                            @compileError(error_message);
+                        switch (component_to_get.attr) {
+                            .ptr, .const_ptr => {
+                                const error_message = std.fmt.comptimePrint("field '{s}' is a pointer to zero sized component which is illegal", .{field.name});
+                                @compileError(error_message);
+                            },
+                            .value => {},
                         }
                     }
 
@@ -634,9 +637,10 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                             for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
                                 if (component_to_get.type == InnerSubsetComp) {
-                                    // If we found get component in subset, and it is access by value, then validation is OK
-                                    if (component_to_get.attr == .value) {
-                                        continue :get_validation_loop;
+                                    // If we found get component in subset, and it is access read-only, then validation is OK
+                                    switch (component_to_get.attr) {
+                                        .value, .const_ptr => continue :get_validation_loop,
+                                        .ptr => {},
                                     }
 
                                     // Get by ptr, subset is registered to have ptr access, validation is OK
@@ -663,9 +667,10 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                         for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
                             if (component_to_get.type == InnerSubsetComp) {
-                                // If we found get component in subset, and it is access by value, then validation is OK
-                                if (component_to_get.attr == .value) {
-                                    break :get_validation_blk;
+                                // If we found get component in subset, and it is access read-only, then validation is OK
+                                switch (component_to_get.attr) {
+                                    .value, .const_ptr => break :get_validation_blk,
+                                    .ptr => {},
                                 }
 
                                 // Get by ptr, subset is registered to have ptr access, validation is OK
