@@ -73,12 +73,11 @@ pub fn main() anyerror!void {
     std.debug.assert(current_health_value.value == 42);
 
     // you can retrieve multiple components
-    const living_state = storage.getComponents(my_living_entity, struct {
+    _ = storage.getComponents(my_living_entity, struct {
         health: *const Component.Health,
         position: *Component.Position,
         health_organ: Component.HeartOrgan,
     }).?;
-    _ = living_state;
 
     std.debug.assert(storage.hasComponents(my_living_entity, .{Component.Health}) == false);
 
