@@ -14,14 +14,14 @@ pub fn main() anyerror!void {
             value: f32,
         };
         pub const DeadTag = struct {};
-        pub const Weapon = struct {};
+        pub const Weapon = enum { sword, mace };
         pub const Position = struct {
             x: f32 = 0,
             y: f32 = 0,
             z: f32 = 0,
         };
         pub const Velocity = struct {};
-        pub const HeartOrgan = struct {};
+        pub const HeartOrgan = union(enum) { health: u8, decay: f32, rotten: void };
     };
 
     // Given a set of components, we can store them in a storage defined by the component set.
@@ -63,7 +63,7 @@ pub fn main() anyerror!void {
     const my_living_entity = try storage.createEntity(.{
         Component.Health{ .value = 42 },
         Component.Position{},
-        Component.HeartOrgan{},
+        Component.HeartOrgan{ .health = 255 },
     });
 
     // you can retrieve components
