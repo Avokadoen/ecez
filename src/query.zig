@@ -748,8 +748,8 @@ test "query with entity only works" {
     }
     for (entities[100..200], 100..) |*entity, index| {
         entity.* = try storage.createEntity(AbEntityType{
-            .a = .{ .value = @as(u32, @intCast(index)) },
-            .b = .{ .value = @as(u8, @intCast(index)) },
+            .a = .{ .value = @intCast(index) },
+            .b = .{ .value = @intCast(index) },
         });
     }
 
@@ -770,6 +770,94 @@ test "query with entity only works" {
         var index: usize = 0;
         while (iter.next()) |item| {
             try std.testing.expectEqual(entities[index], item.entity);
+            index += 1;
+        }
+    }
+}
+
+test "query with enum type works" {
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
+
+    var entities: [200]Entity = undefined;
+    for (entities[0..100]) |*entity| {
+        entity.* = try storage.createEntity(.{
+            Testing.Component.D.one,
+        });
+    }
+    for (entities[100..200], 100..) |*entity, index| {
+        entity.* = try storage.createEntity(.{
+            Testing.Component.A{ .value = @intCast(index) },
+            Testing.Component.B{ .value = @intCast(index) },
+            Testing.Component.D.two,
+        });
+    }
+
+    const TQueries = Testing.QueryAndQueryAny(
+        struct {
+            entity: Entity,
+            d: Testing.Component.D,
+        },
+        .{},
+        .{},
+    );
+
+    inline for (TQueries) |TQuery| {
+        var iter = try TQuery.submit(std.testing.allocator, &storage);
+
+        defer iter.deinit(std.testing.allocator);
+
+        var index: usize = 0;
+        while (iter.next()) |item| {
+            try std.testing.expectEqual(entities[index], item.entity);
+            const expected_d: Testing.Component.D = if (index < 100) .one else .two;
+            try std.testing.expectEqual(expected_d, item.d);
+            index += 1;
+        }
+    }
+}
+
+test "query with union type works" {
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
+
+    var entities: [200]Entity = undefined;
+    for (entities[0..100], 0..) |*entity, index| {
+        entity.* = try storage.createEntity(.{
+            Testing.Component.E{ .one = @intCast(index) },
+        });
+    }
+    for (entities[100..200], 100..) |*entity, index| {
+        entity.* = try storage.createEntity(.{
+            Testing.Component.A{ .value = @intCast(index) },
+            Testing.Component.B{ .value = @intCast(index) },
+            Testing.Component.E{ .two = @intCast(index) },
+        });
+    }
+
+    const TQueries = Testing.QueryAndQueryAny(
+        struct {
+            entity: Entity,
+            e: Testing.Component.E,
+        },
+        .{},
+        .{},
+    );
+
+    inline for (TQueries) |TQuery| {
+        var iter = try TQuery.submit(std.testing.allocator, &storage);
+
+        defer iter.deinit(std.testing.allocator);
+
+        var index: usize = 0;
+        while (iter.next()) |item| {
+            try std.testing.expectEqual(entities[index], item.entity);
+
+            const expected_e: Testing.Component.E = if (index < 100)
+                .{ .one = @intCast(index) }
+            else
+                .{ .two = @intCast(index) };
+            try std.testing.expectEqual(expected_e, item.e);
             index += 1;
         }
     }

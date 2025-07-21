@@ -756,7 +756,7 @@ pub const CompileReflect = struct {
         const type_info = @typeInfo(ComponentPtrOrValueType);
 
         return switch (type_info) {
-            .@"struct" => .{
+            .@"struct", .@"union", .@"enum" => .{
                 .type = ComponentPtrOrValueType,
                 .attr = .value,
             },
@@ -865,8 +865,11 @@ pub const CompileReflect = struct {
             }
 
             const compo_field_info = @typeInfo(components[component_index]);
-            if (compo_field_info != .@"struct" and compo_field_info != .pointer) {
-                @compileError("component types must be a struct or pointer, field '" ++ field.name ++ "' was '" ++ @typeName(components[component_index]));
+            switch (compo_field_info) {
+                .@"struct", .pointer, .@"union", .@"enum" => {},
+                else => {
+                    @compileError("component types must be a struct or pointer, field '" ++ field.name ++ "' was '" ++ @typeName(components[component_index]));
+                },
             }
 
             field_type.* = components[component_index];

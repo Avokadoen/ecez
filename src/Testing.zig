@@ -16,6 +16,16 @@ pub const Component = struct {
     pub const A = struct { value: u32 = 2 };
     pub const B = struct { value: u8 = 4 };
     pub const C = struct {};
+    pub const D = enum {
+        zero,
+        one,
+        two,
+    };
+    pub const E = union(D) {
+        zero: u0,
+        one: u8,
+        two: u32,
+    };
 };
 
 pub const Structure = struct {
@@ -42,12 +52,16 @@ pub const AllComponentsArr = [_]type{
     Component.A,
     Component.B,
     Component.C,
+    Component.D,
+    Component.E,
 };
 
 pub const AllComponentsTuple = .{
     Component.A,
     Component.B,
     Component.C,
+    Component.D,
+    Component.E,
 };
 
 pub const StorageStub = CreateStorage(AllComponentsTuple);

@@ -418,6 +418,8 @@ test "Chunk.parseComp" {
             Testing.Component.A{},
             Testing.Component.B{},
             Testing.Component.C{},
+            Testing.Component.D.one,
+            Testing.Component.E{ .one = 1 },
         });
     }
 
