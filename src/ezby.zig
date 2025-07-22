@@ -63,7 +63,7 @@ pub fn serialize(
     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.serializer);
     defer zone.End();
 
-    const number_of_entities = storage.number_of_entities.load(.unordered);
+    const number_of_entities = storage.created_entity_count.load(.unordered);
     const total_byte_size = count_byte_size_blk: {
         var total_size: usize = @sizeOf(Chunk.Ezby);
         std.debug.assert(total_size == std.mem.alignForward(usize, total_size, alignment));
@@ -254,7 +254,7 @@ pub fn deserialize(
         return error.VersionMismatch;
     }
 
-    storage.number_of_entities.store(@intCast(ezby.number_of_entities), .seq_cst);
+    storage.created_entity_count.store(@intCast(ezby.number_of_entities), .seq_cst);
     while (cursor.len > @sizeOf(Chunk.Comp) and mem.eql(u8, cursor[0..4], "COMP")) {
         var comp: *const Chunk.Comp = undefined;
         var component_bytes: Chunk.Comp.ComponentBytes = undefined;

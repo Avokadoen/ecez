@@ -40,7 +40,7 @@ pub fn Create(comptime config: CreateConfig) type {
             return ThisQuery{
                 .sparse_cursors = 0,
                 .start_cursor = 0,
-                .entity_count = storage.number_of_entities.load(.monotonic),
+                .entity_count = storage.created_entity_count.load(.monotonic),
             };
         }
 

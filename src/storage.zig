@@ -30,7 +30,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         sparse_sets: GroupSparseSets,
         dense_sets: GroupDenseSets,
 
-        number_of_entities: std.atomic.Value(entity_type.EntityId) = .{ .raw = 0 },
+        created_entity_count: std.atomic.Value(entity_type.EntityId) = .{ .raw = 0 },
+
+        inactive_entity_count: std.atomic.Value(entity_type.EntityId) = .{ .raw = 0 },
+        inactive_entity_lock: std.Thread.Mutex = .{},
+        inactive_entities: std.ArrayListUnmanaged(entity_type.EntityId) = .empty,
 
         /// intialize the storage structure
         ///
@@ -68,6 +72,8 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 const sparse_set = self.getSparseSetPtr(Component);
                 sparse_set.deinit(self.allocator);
             }
+
+            self.inactive_entities.deinit(self.allocator);
         }
 
         /// Clear storage memory for reuse. **All entities will become invalid**.
@@ -75,8 +81,10 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
-            // Clear number of entities
-            self.number_of_entities.store(0, .seq_cst);
+            // Clear entity counters
+            self.created_entity_count.store(0, .seq_cst);
+            self.inactive_entity_count.store(0, .seq_cst);
+            self.inactive_entities.clearRetainingCapacity();
 
             // clear all dense sets
             inline for (component_type_array) |Component| {
@@ -133,7 +141,22 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         /// ```
         ///
         pub fn createEntityAssumeCapacity(self: *Storage, entity_state: anytype) Entity {
-            const this_id = self.number_of_entities.fetchAdd(1, .acq_rel);
+            const this_id = get_id_blk: {
+                if (self.inactive_entity_count.load(.monotonic) > 0) {
+                    @branchHint(.unlikely);
+                    _ = self.inactive_entity_count.fetchSub(1, .acq_rel);
+
+                    self.inactive_entity_lock.lock();
+                    defer self.inactive_entity_lock.unlock();
+
+                    if (self.inactive_entities.pop()) |inactive| {
+                        @branchHint(.likely);
+                        break :get_id_blk inactive;
+                    }
+                }
+
+                break :get_id_blk self.created_entity_count.fetchAdd(1, .acq_rel);
+            };
 
             const EntityState = @TypeOf(entity_state);
             const field_info = @typeInfo(EntityState);
@@ -166,6 +189,21 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             };
         }
 
+        /// Destroy a given entity and its components
+        ///
+        /// The function can fail as the entity will be cached for reuse (which may OOM)
+        pub fn destroyEntity(self: *Storage, entity: Entity) error{OutOfMemory}!void {
+            {
+                self.inactive_entity_lock.lock();
+                defer self.inactive_entity_lock.unlock();
+
+                try self.inactive_entities.append(self.allocator, entity.id);
+            }
+            _ = self.inactive_entity_count.fetchAdd(1, .monotonic);
+
+            self.unsetComponents(entity, all_components);
+        }
+
         /// Ensure any sparse and dense sets related to the components in EntityState have sufficient space for additional_count
         pub fn ensureUnusedCapacity(self: *Storage, comptime EntityState: type, additional_count: entity_type.EntityId) error{OutOfMemory}!void {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
@@ -182,7 +220,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             }
 
             // This will "leak" a handle if grow fails, but if it fails, then the app has more issues anyways.
-            const this_id = self.number_of_entities.load(.monotonic);
+            const this_id = self.created_entity_count.load(.monotonic);
 
             // Ensure capacity first to avoid errdefer
             const field_info = @typeInfo(EntityState);
@@ -562,6 +600,13 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     }
 
                     return self.storage.createEntity(entity_state);
+                }
+
+                /// Unimplemented
+                pub fn destroyEntity(self: *Storage, entity: Entity) error{OutOfMemory}!void {
+                    _ = self;
+                    _ = entity;
+                    @compileError("destroyEntity is not supported in storage subset");
                 }
 
                 pub fn setComponents(self: *const ThisSubset, entity: Entity, struct_of_components: anytype) error{OutOfMemory}!void {
@@ -1436,6 +1481,56 @@ test "clearRetainingCapacity() allow storage reuse" {
     try testing.expectEqual(first_entity, entity);
     const comp_a = storage.getComponent(entity, Testing.Component.A).?;
     try testing.expectEqual(Testing.Component.A{ .value = initial_value }, comp_a);
+}
+
+test "destroyEntity() destroys entity, and create reuse destroyed" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    var entities: [100]Entity = undefined;
+    for (&entities, 0..) |*entity, index| {
+        entity.* = try storage.createEntity(.{
+            Testing.Component.A{ .value = @intCast(index) },
+            Testing.Component.B{ .value = @intCast(index) },
+            Testing.Component.D.two,
+            Testing.Component.E{ .two = @intCast(index) },
+        });
+    }
+
+    for (entities[90..]) |entity| {
+        try storage.destroyEntity(entity);
+    }
+
+    const reuse_value = 255;
+    for (entities[90..]) |*entity| {
+        entity.* = try storage.createEntity(.{
+            Testing.Component.A{ .value = @intCast(reuse_value) },
+            Testing.Component.B{ .value = @intCast(reuse_value) },
+            Testing.Component.D.two,
+            Testing.Component.E{ .two = @intCast(reuse_value) },
+        });
+    }
+
+    for (&entities, 0..) |entity, index| {
+        const expect_value = if (index < 90) index else reuse_value;
+        try testing.expect(entity.id < 100);
+        try testing.expectEqual(
+            Testing.Component.A{ .value = @intCast(expect_value) },
+            storage.getComponent(entity, Testing.Component.A).?,
+        );
+        try testing.expectEqual(
+            Testing.Component.B{ .value = @intCast(expect_value) },
+            storage.getComponent(entity, Testing.Component.B).?,
+        );
+        try testing.expectEqual(
+            Testing.Component.D.two,
+            storage.getComponent(entity, Testing.Component.D).?,
+        );
+        try testing.expectEqual(
+            Testing.Component.E{ .two = @intCast(expect_value) },
+            storage.getComponent(entity, Testing.Component.E).?,
+        );
+    }
 }
 
 test "Subset createEntity" {

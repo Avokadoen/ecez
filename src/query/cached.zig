@@ -43,7 +43,7 @@ pub fn Create(config: CreateConfig) type {
             comptime SubmitConfig.verifyStorageType(@TypeOf(storage));
 
             // Atomically load the current number of entities
-            const number_of_entities = storage.number_of_entities.load(.monotonic);
+            const number_of_entities = storage.created_entity_count.load(.monotonic);
 
             const biggest_set_len, const tag_sparse_sets, const full_sparse_sets, const dense_sets = retrieve_component_sets_blk: {
                 var _biggest_set_len: EntityId = 0;

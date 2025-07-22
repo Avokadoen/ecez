@@ -78,7 +78,7 @@ pub fn Create(comptime config: CreateConfig) type {
                 std.debug.assert(tag_sparse_sets_index == config.tag_sparse_set_count);
             }
 
-            const number_of_entities = storage.number_of_entities.load(.monotonic);
+            const number_of_entities = storage.created_entity_count.load(.monotonic);
 
             var current_index: usize = undefined;
             var current_min_value: usize = undefined;
@@ -135,7 +135,7 @@ pub fn Create(comptime config: CreateConfig) type {
 
             return ThisQuery{
                 .sparse_cursors = 0,
-                .storage_entity_count_ptr = &storage.number_of_entities,
+                .storage_entity_count_ptr = &storage.created_entity_count,
                 .full_set_search_order = full_set_search_order,
                 .full_sparse_sets = full_sparse_sets,
                 .tag_sparse_sets_bits = 0,
