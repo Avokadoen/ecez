@@ -32,7 +32,6 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
         created_entity_count: std.atomic.Value(entity_type.EntityId) = .{ .raw = 0 },
 
-        inactive_entity_count: std.atomic.Value(entity_type.EntityId) = .{ .raw = 0 },
         inactive_entity_lock: std.Thread.Mutex = .{},
         inactive_entities: std.ArrayListUnmanaged(entity_type.EntityId) = .empty,
 
@@ -83,7 +82,6 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
             // Clear entity counters
             self.created_entity_count.store(0, .seq_cst);
-            self.inactive_entity_count.store(0, .seq_cst);
             self.inactive_entities.clearRetainingCapacity();
 
             // clear all dense sets
@@ -142,9 +140,8 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///
         pub fn createEntityAssumeCapacity(self: *Storage, entity_state: anytype) Entity {
             const this_id = get_id_blk: {
-                if (self.inactive_entity_count.load(.monotonic) > 0) {
+                if (self.inactive_entities.items.len > 0) {
                     @branchHint(.unlikely);
-                    _ = self.inactive_entity_count.fetchSub(1, .acq_rel);
 
                     self.inactive_entity_lock.lock();
                     defer self.inactive_entity_lock.unlock();
@@ -199,7 +196,6 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                 try self.inactive_entities.append(self.allocator, entity.id);
             }
-            _ = self.inactive_entity_count.fetchAdd(1, .monotonic);
 
             self.unsetComponents(entity, all_components);
         }
