@@ -385,7 +385,8 @@ pub const Chunk = struct {
 const Testing = @import("Testing.zig");
 const testing = std.testing;
 
-const StorageStub = @import("storage.zig").CreateStorage(Testing.AllComponentsTuple);
+const CreateStorage = @import("storage.zig").CreateStorage;
+const StorageStub = CreateStorage(Testing.AllComponentsTuple);
 
 test "serializing then using Chunk.parseEzby produce expected EZBY chunk" {
     var storage = try StorageStub.init(std.testing.allocator);
@@ -895,5 +896,115 @@ test "serialize with culled_component_types config can be deserialized by other 
             try testing.expectEqual(abc_b, b_storage.getComponent(abc_entity, Testing.Component.B).?);
             try testing.expectEqual(false, b_storage.hasComponents(abc_entity, .{Testing.Component.C}));
         }
+    }
+}
+
+test "serialize Storage A into Storage AB works" {
+    const StorageB = CreateStorage(.{
+        Testing.Component.A,
+    });
+    var from_storage = try StorageB.init(std.testing.allocator);
+    defer from_storage.deinit();
+
+    var a_entities_0: [100]Entity = undefined;
+    for (&a_entities_0, 0..) |*entity, index| {
+        entity.* = try from_storage.createEntity(.{
+            Testing.Component.A{ .value = @intCast(index) },
+        });
+    }
+
+    var empty_entities: [50]Entity = undefined;
+    for (&empty_entities) |*entity| {
+        entity.* = try from_storage.createEntity(.{});
+    }
+
+    var a_entities_1: [100]Entity = undefined;
+    for (&a_entities_1, (a_entities_0.len + empty_entities.len)..) |*entity, index| {
+        entity.* = try from_storage.createEntity(.{
+            Testing.Component.A{ .value = @intCast(index) },
+        });
+    }
+
+    const bytes = try serialize(std.testing.allocator, StorageB, from_storage, .{});
+    defer std.testing.allocator.free(bytes);
+
+    const StorageAB = CreateStorage(.{
+        Testing.Component.A,
+        Testing.Component.B,
+    });
+    var to_storage = try StorageAB.init(std.testing.allocator);
+    defer to_storage.deinit();
+
+    try deserialize(StorageAB, &to_storage, bytes);
+
+    for (&a_entities_0, 0..) |entity, entity_id| {
+        try testing.expectEqual(entity_id, entity.id);
+
+        const b = to_storage.getComponent(entity, Testing.Component.A).?;
+        try testing.expectEqual(Testing.Component.A{ .value = @intCast(entity_id) }, b);
+    }
+    for (&empty_entities, a_entities_0.len..) |entity, entity_id| {
+        try testing.expectEqual(entity_id, entity.id);
+    }
+    for (&a_entities_1, (a_entities_0.len + empty_entities.len)..) |entity, entity_id| {
+        try testing.expectEqual(entity_id, entity.id);
+
+        const b = to_storage.getComponent(entity, Testing.Component.A).?;
+        try testing.expectEqual(Testing.Component.A{ .value = @intCast(entity_id) }, b);
+    }
+}
+
+test "serialize Storage B into Storage AB works" {
+    const StorageB = CreateStorage(.{
+        Testing.Component.B,
+    });
+    var from_storage = try StorageB.init(std.testing.allocator);
+    defer from_storage.deinit();
+
+    var b_entities_0: [100]Entity = undefined;
+    for (&b_entities_0, 0..) |*entity, index| {
+        entity.* = try from_storage.createEntity(.{
+            Testing.Component.B{ .value = @intCast(index) },
+        });
+    }
+
+    var empty_entities: [50]Entity = undefined;
+    for (&empty_entities) |*entity| {
+        entity.* = try from_storage.createEntity(.{});
+    }
+
+    var b_entities_1: [100]Entity = undefined;
+    for (&b_entities_1, (b_entities_0.len + empty_entities.len)..) |*entity, index| {
+        entity.* = try from_storage.createEntity(.{
+            Testing.Component.B{ .value = @intCast(index) },
+        });
+    }
+
+    const bytes = try serialize(std.testing.allocator, StorageB, from_storage, .{});
+    defer std.testing.allocator.free(bytes);
+
+    const StorageAB = CreateStorage(.{
+        Testing.Component.A,
+        Testing.Component.B,
+    });
+    var to_storage = try StorageAB.init(std.testing.allocator);
+    defer to_storage.deinit();
+
+    try deserialize(StorageAB, &to_storage, bytes);
+
+    for (&b_entities_0, 0..) |entity, entity_id| {
+        try testing.expectEqual(entity_id, entity.id);
+
+        const b = to_storage.getComponent(entity, Testing.Component.B).?;
+        try testing.expectEqual(Testing.Component.B{ .value = @intCast(entity_id) }, b);
+    }
+    for (&empty_entities, b_entities_0.len..) |entity, entity_id| {
+        try testing.expectEqual(entity_id, entity.id);
+    }
+    for (&b_entities_1, (b_entities_0.len + empty_entities.len)..) |entity, entity_id| {
+        try testing.expectEqual(entity_id, entity.id);
+
+        const b = to_storage.getComponent(entity, Testing.Component.B).?;
+        try testing.expectEqual(Testing.Component.B{ .value = @intCast(entity_id) }, b);
     }
 }
