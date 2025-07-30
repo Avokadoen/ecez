@@ -459,6 +459,8 @@ test buildDependencyList {
         const ReadABC = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B, Testing.Component.C });
 
         const ReadAWriteBReadC = StorageStub.Subset(.{ Testing.Component.A, *Testing.Component.B, Testing.Component.C });
+
+        const All = StorageStub.Subset(StorageStub.AllComponentWriteAccess);
     };
 
     const SingleQuerySystems = [2]type{
@@ -626,6 +628,9 @@ test buildDependencyList {
         }
         pub fn readAWriteBReadC(abc: *SubStorages.ReadAWriteBReadC) void {
             _ = abc;
+        }
+        pub fn all(_all: *SubStorages.All) void {
+            _ = _all;
         }
     };
 
@@ -1638,6 +1643,33 @@ test buildDependencyList {
                 Dependency{ .wait_on_indices = &[_]u32{10} }, // 11: readBValue,
                 Dependency{ .wait_on_indices = &[_]u32{11} }, // 12: writeB,
                 Dependency{ .wait_on_indices = &[_]u32{ 12, 6 } }, // 13: writeAWriteB,
+            };
+
+            for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            }
+        }
+    }
+
+    // All
+    {
+        // query
+        inline for (SingleQuerySystems) |SingleQuerySystemsT| {
+            const dependencies = comptime buildDependencyList(.{
+                SingleQuerySystemsT.readAValue,
+                SingleSubStorageSystems.all,
+                SingleQuerySystemsT.readB,
+                SingleSubStorageSystems.all,
+                SingleQuerySystemsT.readD,
+                SingleSubStorageSystems.all,
+            }, 6);
+            const expected_dependencies = [_]Dependency{
+                Dependency{ .wait_on_indices = &[_]u32{} }, // 0: readAValue,
+                Dependency{ .wait_on_indices = &[_]u32{0} }, // 1: all,
+                Dependency{ .wait_on_indices = &[_]u32{1} }, // 2: readB,
+                Dependency{ .wait_on_indices = &[_]u32{2} }, // 3: all,
+                Dependency{ .wait_on_indices = &[_]u32{3} }, // 4: readD,
+                Dependency{ .wait_on_indices = &[_]u32{4} }, // 5: all,
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {

@@ -20,6 +20,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         // a flat array of the type of each field in the components tuple
         pub const component_type_array = CompileReflect.verifyComponentTuple(all_components);
 
+        pub const AllComponentWriteAccess = CompileReflect.AllWriteAccessType(&component_type_array){};
         pub const GroupDenseSets = CompileReflect.GroupDenseSets(&component_type_array);
         pub const GroupSparseSets = CompileReflect.GroupSparseSets(&component_type_array);
 
@@ -598,11 +599,14 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     return self.storage.createEntity(entity_state);
                 }
 
-                /// Unimplemented
-                pub fn destroyEntity(self: *Storage, entity: Entity) error{OutOfMemory}!void {
-                    _ = self;
-                    _ = entity;
-                    @compileError("destroyEntity is not supported in storage subset");
+                /// Destroy entity and all components
+                /// destroyEntity require subset of `Storage.Subset(Storage.AllComponentWriteAccess)`
+                pub fn destroyEntity(self: *ThisSubset, entity: Entity) error{OutOfMemory}!void {
+                    if (@TypeOf(component_subset) != @TypeOf(AllComponentWriteAccess)) {
+                        @compileError("destroyEntity require subset of `Storage.Subset(Storage.AllComponentWriteAccess)`");
+                    }
+
+                    return self.storage.destroyEntity(entity);
                 }
 
                 pub fn setComponents(self: *const ThisSubset, entity: Entity, struct_of_components: anytype) error{OutOfMemory}!void {
@@ -885,6 +889,28 @@ pub const CompileReflect = struct {
             .fields = struct_fields[0..non_zero_component_count],
             .decls = &[_]std.builtin.Type.Declaration{},
             .is_tuple = false,
+        } };
+        return @Type(group_type);
+    }
+
+    /// Generate a tuple containing all component types as pointers
+    pub fn AllWriteAccessType(comptime components: []const type) type {
+        var struct_fields: [components.len]std.builtin.Type.StructField = undefined;
+        inline for (&struct_fields, components, 0..) |*struct_field, Component, index| {
+            const TypeValue = *compactComponentRequest(Component).type;
+            struct_field.* = std.builtin.Type.StructField{
+                .name = std.fmt.comptimePrint("{d}", .{index}),
+                .type = type,
+                .default_value_ptr = @ptrCast(&TypeValue),
+                .is_comptime = true,
+                .alignment = @alignOf(type),
+            };
+        }
+        const group_type = std.builtin.Type{ .@"struct" = .{
+            .layout = .auto,
+            .fields = &struct_fields,
+            .decls = &[_]std.builtin.Type.Declaration{},
+            .is_tuple = true,
         } };
         return @Type(group_type);
     }

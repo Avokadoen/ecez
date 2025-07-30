@@ -93,9 +93,18 @@ pub const Queries = struct {
 
     pub const ReadB = QueryAndQueryAny(
         struct {
+            entity: Entity,
             b: Component.B,
         },
         .{},
+        .{},
+    );
+
+    pub const ReadC = QueryAndQueryAny(
+        struct {
+            entity: Entity,
+        },
+        .{Component.C},
         .{},
     );
 
@@ -156,6 +165,16 @@ pub const Queries = struct {
             b: Component.B,
         },
         .{},
+        .{},
+    );
+
+    pub const WriteAReadBIncC = QueryAndQueryAny(
+        struct {
+            entity: Entity,
+            a: *Component.A,
+            b: Component.B,
+        },
+        .{Component.C},
         .{},
     );
 };

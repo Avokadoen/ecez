@@ -1108,6 +1108,131 @@ test "Dispatch with multiple events works" {
     }
 }
 
+test "Dispatch with destroyEntity is determenistic" {
+    const ASubset = StorageStub.Subset(.{*Testing.Component.A});
+    const AllSubset = StorageStub.Subset(StorageStub.AllComponentWriteAccess);
+    inline for (Queries.WriteA, Queries.ReadC, Queries.ReadB) |WriteA, ReadC, ReadB| {
+        const SystemStruct = struct {
+            pub fn incrA(q: *WriteA) void {
+                while (q.next()) |item| {
+                    item.a.value += 1;
+                }
+            }
+
+            pub fn destroyEntityWithC(q: *ReadC, all_storage: *AllSubset) void {
+                while (q.next()) |item| {
+                    all_storage.destroyEntity(item.entity) catch unreachable;
+                }
+            }
+
+            pub fn createEntityA(a_storage: *ASubset) void {
+                for (0..100) |_| {
+                    _ = a_storage.createEntity(.{Testing.Component.A{ .value = 0 }}) catch unreachable;
+                }
+            }
+
+            // incrA
+
+            pub fn destroyEntityWithB(q: *ReadB, all_storage: *AllSubset) void {
+                while (q.next()) |item| {
+                    all_storage.destroyEntity(item.entity) catch unreachable;
+                }
+            }
+
+            // incrA
+        };
+
+        var storage = try StorageStub.init(testing.allocator);
+        defer storage.deinit();
+
+        var scheduler = try CreateScheduler(.{
+            Event(
+                "incrDestroy",
+                .{
+                    SystemStruct.incrA,
+                    SystemStruct.destroyEntityWithC,
+                    SystemStruct.createEntityA,
+                    SystemStruct.incrA,
+                    SystemStruct.destroyEntityWithB,
+                    SystemStruct.createEntityA,
+                    SystemStruct.incrA,
+                },
+                .{},
+            ),
+        }).init(.{
+            .pool_allocator = std.testing.allocator,
+            .query_submit_allocator = std.testing.allocator,
+        });
+        defer scheduler.deinit();
+
+        var entity_a0: [100]Entity = undefined;
+        for (&entity_a0, 0..) |*entity, index| {
+            entity.* = try storage.createEntity(.{Testing.Component.A{
+                .value = @intCast(index),
+            }});
+        }
+
+        var entity_ac: [100]Entity = undefined;
+        for (&entity_ac, 0..) |*entity, index| {
+            entity.* = try storage.createEntity(Testing.Structure.AC{
+                .a = .{ .value = @intCast(index) },
+                .c = .{},
+            });
+        }
+
+        var entity_ab: [100]Entity = undefined;
+        for (&entity_ab, 0..) |*entity, index| {
+            entity.* = try storage.createEntity(Testing.Structure.AB{
+                .a = .{ .value = @intCast(index) },
+                .b = .{ .value = @intCast(index) },
+            });
+        }
+
+        var entity_a1: [100]Entity = undefined;
+        for (&entity_a1, 0..) |*entity, index| {
+            entity.* = try storage.createEntity(.{Testing.Component.A{
+                .value = @intCast(index),
+            }});
+        }
+
+        scheduler.dispatchEvent(&storage, .incrDestroy, .{});
+        scheduler.waitIdle();
+
+        for (&entity_a0, 0..) |entity, index| {
+            const a = storage.getComponent(entity, Testing.Component.A).?;
+            try testing.expectEqual(
+                Testing.Component.A{ .value = @intCast(index + 3) },
+                a,
+            );
+        }
+        for (&entity_ac) |entity| {
+            const a = storage.getComponent(entity, Testing.Component.A).?;
+            try testing.expectEqual(
+                Testing.Component.A{ .value = 2 },
+                a,
+            );
+            try testing.expect(!storage.hasComponents(entity, .{Testing.Component.B}));
+            try testing.expect(!storage.hasComponents(entity, .{Testing.Component.C}));
+        }
+        for (&entity_ab) |entity| {
+            const a = storage.getComponent(entity, Testing.Component.A).?;
+            try testing.expectEqual(
+                Testing.Component.A{ .value = 1 },
+                a,
+            );
+            try testing.expect(!storage.hasComponents(entity, .{Testing.Component.B}));
+            try testing.expect(!storage.hasComponents(entity, .{Testing.Component.C}));
+        }
+        for (&entity_a1, 0..) |entity, index| {
+            const a = storage.getComponent(entity, Testing.Component.A).?;
+            try testing.expectEqual(
+                Testing.Component.A{ .value = @intCast(index + 3) },
+                a,
+            );
+        }
+    }
+}
+
 test "dumpDependencyChain" {
     inline for (Queries.WriteA, Queries.WriteB) |WriteA, WriteB| {
         const SystemStruct = struct {
