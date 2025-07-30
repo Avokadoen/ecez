@@ -68,6 +68,11 @@ pub fn serialize(
         var total_size: usize = @sizeOf(Chunk.Ezby);
         std.debug.assert(total_size == std.mem.alignForward(usize, total_size, alignment));
 
+        if (storage.inactive_entities.items.len > 0) {
+            total_size += @sizeOf(Chunk.Dele);
+            total_size += storage.inactive_entities.items.len * @sizeOf(EntityId);
+        }
+
         inline for (Storage.component_type_array) |Component| {
             const cull_component = comptime check_if_cull_needed_blk: {
                 for (comptime_config.culled_component_types) |CullComponent| {
@@ -110,7 +115,7 @@ pub fn serialize(
     {
         var byte_cursor: usize = 0;
 
-        // Write ezby
+        // Write ezby (header)
         const ezby_chunk = Chunk.Ezby{
             .version_major = version_major,
             .version_minor = version_minor,
@@ -122,6 +127,34 @@ pub fn serialize(
                 mem.asBytes(&ezby_chunk),
             );
             byte_cursor += @sizeOf(Chunk.Ezby);
+        }
+
+        // Write dele
+        if (storage.inactive_entities.items.len > 0) {
+            const dele_chunk = Chunk.Dele{
+                .entity_count = @intCast(storage.inactive_entities.items.len),
+            };
+            {
+                @memcpy(
+                    bytes[byte_cursor .. byte_cursor + @sizeOf(Chunk.Dele)],
+                    mem.asBytes(&dele_chunk),
+                );
+                byte_cursor += @sizeOf(Chunk.Dele);
+            }
+
+            // Write entity ids
+            {
+                // Ignore alignment when doing the write (padding bytes are undefined)
+                const size_of_entities = storage.inactive_entities.items.len * @sizeOf(EntityId);
+                const deleted_entities_bytes = bytes[byte_cursor .. byte_cursor + size_of_entities];
+
+                // Ensure alignment is respected for byte cursor
+                byte_cursor += calcAlignedEntityIdSize(storage.inactive_entities.items.len);
+                @memcpy(
+                    deleted_entities_bytes,
+                    std.mem.sliceAsBytes(storage.inactive_entities.items),
+                );
+            }
         }
 
         inline for (Storage.component_type_array, 0..) |Component, comp_index| {
@@ -247,16 +280,24 @@ pub fn deserialize(
 
     var cursor = ezby_bytes;
 
-    var ezby: *const Chunk.Ezby = undefined;
+    var ezby: Chunk.Ezby = undefined;
     cursor = try Chunk.parseEzby(cursor, &ezby);
 
     if (ezby.version_major != version_major) {
         return error.VersionMismatch;
     }
 
+    // Parse DELE chunk if present
+    if (mem.eql(u8, cursor[0..4], "DELE")) {
+        var dele: Chunk.Dele = undefined;
+        var entity_ids: Chunk.Comp.EntityIds = undefined;
+        cursor = Chunk.parseDele(cursor, &dele, &entity_ids);
+        try storage.inactive_entities.appendSlice(storage.allocator, entity_ids);
+    }
+
     storage.created_entity_count.store(@intCast(ezby.number_of_entities), .seq_cst);
     while (cursor.len > @sizeOf(Chunk.Comp) and mem.eql(u8, cursor[0..4], "COMP")) {
-        var comp: *const Chunk.Comp = undefined;
+        var comp: Chunk.Comp = undefined;
         var component_bytes: Chunk.Comp.ComponentBytes = undefined;
         var entity_ids: Chunk.Comp.EntityIds = undefined;
         cursor = Chunk.parseComp(
@@ -304,6 +345,7 @@ inline fn calcAlignedEntityIdSize(sparse_len: usize) usize {
 
 /// ezby v1 files can only have 2 chunks. Ezby chunk is always first, then 1 or many Comp chunks
 pub const Chunk = struct {
+    /// Header chunk
     pub const Ezby = packed struct {
         identifier: u32 = mem.bytesToValue(u32, "EZBY"),
         version_major: u16,
@@ -311,6 +353,7 @@ pub const Chunk = struct {
         number_of_entities: u64,
     };
 
+    /// Component chunk contains component data for a single component type
     pub const Comp = packed struct {
         identifier: u32 = mem.bytesToValue(u32, "COMP"),
         padding: u32 = 0,
@@ -324,8 +367,15 @@ pub const Chunk = struct {
         pub const ComponentBytes = []const u8;
     };
 
+    /// Deleted entitites
+    pub const Dele = packed struct {
+        identifier: u32 = mem.bytesToValue(u32, "DELE"),
+        entity_count: u32,
+        pub const EntityIds = []const EntityId;
+    };
+
     /// parse EZBY chunk from bytes and return remaining bytes
-    fn parseEzby(bytes: []const u8, chunk: **const Chunk.Ezby) error{UnexpectedEzbyIdentifier}![]const u8 {
+    fn parseEzby(bytes: []const u8, chunk: *Chunk.Ezby) error{UnexpectedEzbyIdentifier}![]const u8 {
         const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.serializer);
         defer zone.End();
 
@@ -335,13 +385,45 @@ pub const Chunk = struct {
             return error.UnexpectedEzbyIdentifier;
         }
 
-        chunk.* = @as(*const Chunk.Ezby, @ptrCast(@alignCast(bytes.ptr)));
+        @memcpy(std.mem.asBytes(chunk), bytes[0..@sizeOf(Chunk.Ezby)]);
         return bytes[@sizeOf(Chunk.Ezby)..];
+    }
+
+    /// parse DELE chunk from bytes and return remaining bytes
+    fn parseDele(
+        bytes: []const u8,
+        chunk: *Chunk.Dele,
+        entity_ids: *Chunk.Comp.EntityIds,
+    ) []const u8 {
+        const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.serializer);
+        defer zone.End();
+
+        std.debug.assert(mem.eql(u8, bytes[0..4], "DELE"));
+        std.debug.assert(bytes.len >= @sizeOf(Chunk.Dele));
+
+        var bytes_cursor: usize = parse_comp_chunk_blk: {
+            @memcpy(std.mem.asBytes(chunk), bytes[0..@sizeOf(Chunk.Dele)]);
+            break :parse_comp_chunk_blk @sizeOf(Chunk.Dele);
+        };
+
+        bytes_cursor += parse_entity_ids_blk: {
+            // Point at actual entities, ignoring any written alignment padding
+            entity_ids.ptr = @as(
+                [*]const EntityId,
+                @ptrCast(@alignCast(bytes[bytes_cursor..].ptr)),
+            );
+            entity_ids.len = @intCast(chunk.*.entity_count);
+
+            // Report new offset by respecting alignment padding
+            break :parse_entity_ids_blk calcAlignedEntityIdSize(@intCast(chunk.*.entity_count));
+        };
+
+        return bytes[bytes_cursor..];
     }
 
     fn parseComp(
         bytes: []const u8,
-        chunk: **const Chunk.Comp,
+        chunk: *Chunk.Comp,
         entity_ids: *Chunk.Comp.EntityIds,
         component_bytes: *Chunk.Comp.ComponentBytes,
     ) []const u8 {
@@ -351,10 +433,7 @@ pub const Chunk = struct {
         std.debug.assert(mem.eql(u8, bytes[0..4], "COMP"));
 
         var bytes_cursor: usize = parse_comp_chunk_blk: {
-            chunk.* = @as(
-                *const Chunk.Comp,
-                @ptrCast(@alignCast(bytes.ptr)),
-            );
+            @memcpy(std.mem.asBytes(chunk), bytes[0..@sizeOf(Chunk.Comp)]);
             break :parse_comp_chunk_blk @sizeOf(Chunk.Comp);
         };
 
@@ -400,14 +479,14 @@ test "serializing then using Chunk.parseEzby produce expected EZBY chunk" {
     );
     defer testing.allocator.free(bytes);
 
-    var ezby: *const Chunk.Ezby = undefined;
+    var ezby: Chunk.Ezby = undefined;
     _ = try Chunk.parseEzby(bytes, &ezby);
 
     try testing.expectEqual(Chunk.Ezby{
         .version_major = version_major,
         .version_minor = version_minor,
         .number_of_entities = 0,
-    }, ezby.*);
+    }, ezby);
 }
 
 test "Chunk.parseComp" {
@@ -434,11 +513,11 @@ test "Chunk.parseComp" {
 
     var cursor = bytes;
 
-    var ezby: *const Chunk.Ezby = undefined;
+    var ezby: Chunk.Ezby = undefined;
     cursor = try Chunk.parseEzby(bytes, &ezby);
 
     inline for (Testing.AllComponentsArr) |Component| {
-        var comp: *const Chunk.Comp = undefined;
+        var comp: Chunk.Comp = undefined;
         var entity_ids: Chunk.Comp.EntityIds = undefined;
         var component_bytes: Chunk.Comp.ComponentBytes = undefined;
         cursor = Chunk.parseComp(
@@ -455,7 +534,7 @@ test "Chunk.parseComp" {
                 .type_size = @sizeOf(Component),
                 .type_alignment = @alignOf(Component),
                 .type_name_hash = comptime hashfn(@typeName(Component)),
-            }, comp.*);
+            }, comp);
         } else {
             try testing.expectEqual(Chunk.Comp{
                 .sparse_count = 128 / 32,
@@ -463,7 +542,7 @@ test "Chunk.parseComp" {
                 .type_size = @sizeOf(Component),
                 .type_alignment = @alignOf(Component),
                 .type_name_hash = comptime hashfn(@typeName(Component)),
-            }, comp.*);
+            }, comp);
         }
     }
 }
@@ -1006,5 +1085,62 @@ test "serialize Storage B into Storage AB works" {
 
         const b = to_storage.getComponent(entity, Testing.Component.B).?;
         try testing.expectEqual(Testing.Component.B{ .value = @intCast(entity_id) }, b);
+    }
+}
+
+test "serialize and deserialize deleted emtities into works" {
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
+
+    var entities: [200]Entity = undefined;
+    for (&entities, 0..) |*entity, index| {
+        entity.* = try storage.createEntity(.{
+            Testing.Component.A{ .value = @intCast(index) },
+            Testing.Component.B{ .value = @intCast(index) },
+            Testing.Component.E{ .two = @intCast(index) },
+        });
+    }
+
+    for (entities[100..150]) |entity| {
+        try storage.destroyEntity(entity);
+    }
+
+    for (&entities, 0..) |entity, entity_id| {
+        if (entity_id < 100 or entity_id >= 150) {
+            const abe = storage.getComponents(entity, struct {
+                a: Testing.Component.A,
+                b: Testing.Component.B,
+                e: Testing.Component.E,
+            }).?;
+            try testing.expectEqual(Testing.Component.A{ .value = @intCast(entity_id) }, abe.a);
+            try testing.expectEqual(Testing.Component.B{ .value = @intCast(entity_id) }, abe.b);
+            try testing.expectEqual(Testing.Component.E{ .two = @intCast(entity_id) }, abe.e);
+        } else {
+            try testing.expect(storage.hasComponents(entity, .{Testing.Component.A}) == false);
+            try testing.expect(storage.hasComponents(entity, .{Testing.Component.B}) == false);
+            try testing.expect(storage.hasComponents(entity, .{Testing.Component.E}) == false);
+        }
+    }
+
+    const bytes = try serialize(std.testing.allocator, StorageStub, storage, .{});
+    defer std.testing.allocator.free(bytes);
+
+    try deserialize(StorageStub, &storage, bytes);
+
+    for (&entities, 0..) |entity, entity_id| {
+        if (entity_id < 100 or entity_id >= 150) {
+            const abe = storage.getComponents(entity, struct {
+                a: Testing.Component.A,
+                b: Testing.Component.B,
+                e: Testing.Component.E,
+            }).?;
+            try testing.expectEqual(Testing.Component.A{ .value = @intCast(entity_id) }, abe.a);
+            try testing.expectEqual(Testing.Component.B{ .value = @intCast(entity_id) }, abe.b);
+            try testing.expectEqual(Testing.Component.E{ .two = @intCast(entity_id) }, abe.e);
+        } else {
+            try testing.expect(storage.hasComponents(entity, .{Testing.Component.A}) == false);
+            try testing.expect(storage.hasComponents(entity, .{Testing.Component.B}) == false);
+            try testing.expect(storage.hasComponents(entity, .{Testing.Component.E}) == false);
+        }
     }
 }
