@@ -160,7 +160,7 @@ pub fn main() anyerror!void {
         defer ztracy.FrameMark();
 
         // schedule a new update cycle
-        scheduler.dispatchEvent(&storage, .loop, EventArgument{
+        try scheduler.dispatchEvent(&storage, .loop, EventArgument{
             .grid_config = grid_config,
             .render_entity = render_entity,
             .entity_grid = &entity_grid,
@@ -408,7 +408,7 @@ test "systems produce expected 3x3 grid state" {
             });
         }
 
-        scheduler.dispatchEvent(&storage, .loop, event_arg);
+        try scheduler.dispatchEvent(&storage, .loop, event_arg);
         scheduler.waitEvent(.loop);
 
         for ([_]bool{
@@ -446,7 +446,7 @@ test "systems produce expected 3x3 grid state" {
             ) catch unreachable;
         }
 
-        scheduler.dispatchEvent(&storage, .loop, event_arg);
+        try scheduler.dispatchEvent(&storage, .loop, event_arg);
         scheduler.waitEvent(.loop);
 
         for (&cell_entities, state_2) |entity, alive| {
@@ -454,7 +454,7 @@ test "systems produce expected 3x3 grid state" {
             try std.testing.expectEqual(alive, cell.h.alive[0]);
         }
 
-        scheduler.dispatchEvent(&storage, .loop, event_arg);
+        try scheduler.dispatchEvent(&storage, .loop, event_arg);
         scheduler.waitEvent(.loop);
 
         for (&cell_entities, state_1) |entity, alive| {
@@ -488,7 +488,7 @@ test "systems produce expected 3x3 grid state" {
             ) catch unreachable;
         }
 
-        scheduler.dispatchEvent(&storage, .loop, event_arg);
+        try scheduler.dispatchEvent(&storage, .loop, event_arg);
         scheduler.waitEvent(.loop);
 
         for (&cell_entities, state_2) |entity, alive| {
@@ -522,7 +522,7 @@ test "systems produce expected 3x3 grid state" {
             ) catch unreachable;
         }
 
-        scheduler.dispatchEvent(&storage, .loop, event_arg);
+        try scheduler.dispatchEvent(&storage, .loop, event_arg);
         scheduler.waitEvent(.loop);
 
         for (&cell_entities, state_2) |entity, alive| {

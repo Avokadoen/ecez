@@ -197,13 +197,13 @@ pub fn main() anyerror!void {
     const mouse_event = MouseEvent{ .x = 99, .y = 98 };
 
     // disaptch our first event which we name "myFirstEvent"
-    scheduler.dispatchEvent(&storage, .myFirstEvent, mouse_event);
+    try scheduler.dispatchEvent(&storage, .myFirstEvent, mouse_event);
 
     // events are async, so we must wait for it to complete
     scheduler.waitEvent(.myFirstEvent);
 
     // Like the first event we can also dispatch our second event
-    scheduler.dispatchEvent(&storage, .mySecondEvent, mouse_event);
+    try scheduler.dispatchEvent(&storage, .mySecondEvent, mouse_event);
 
     // we can also check if the event is currently being executed
     _ = scheduler.isEventInFlight(.mySecondEvent);
