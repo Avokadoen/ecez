@@ -1621,6 +1621,11 @@ test "event in flight" {
     resets.start[2].set();
     resets.stop[2].wait();
 
+    // Even though we wait on resets.stop[2], this ResetEvent is signaled by the system.
+    // We dont have any guarantee that scheduler's internal tracking of onFoo will actually propagate as done
+    // before sampling event status with 'isEventInFlight'.
+    scheduler.waitEvent(.onFoo);
+
     try std.testing.expect(!scheduler.isEventInFlight(.onFoo));
 }
 
