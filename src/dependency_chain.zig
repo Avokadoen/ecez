@@ -17,7 +17,8 @@ const Access = struct {
 };
 
 pub const Dependency = struct {
-    wait_on_indices: []const u32,
+    prereq_count: u32,
+    signal_indices: []const u32,
 };
 
 /// Must be called after verify systems on systems
@@ -123,7 +124,10 @@ pub fn buildDependencyList(
         }
 
         var systems_dependencies: [system_count]Dependency = undefined;
-        systems_dependencies[0] = Dependency{ .wait_on_indices = &[_]u32{} };
+        systems_dependencies[0] = Dependency{
+            .prereq_count = 0,
+            .signal_indices = &[_]u32{},
+        };
         for (systems_dependencies[1..], graph[1..], 1..) |*system_dependencies, this_node, node_index| {
             var this_node_access_not_locked: [this_node.access.len]Access = undefined;
             var this_node_access_not_locked_len = this_node_access_not_locked.len;
@@ -237,17 +241,56 @@ pub fn buildDependencyList(
             }
 
             system_dependencies.* = Dependency{
-                .wait_on_indices = globalArrayVariableRefWorkaround(dependencies, dependencies_len)[0..dependencies_len],
+                .prereq_count = 0,
+                .signal_indices = dependencies[0..dependencies_len],
             };
         }
-        break :calc_dependencies_blk systems_dependencies;
+
+        // Reverse dependency tracking
+        // Example:
+        //      | Job ID | Wait on |                | Job ID | Signal |
+        //      | A      |         |                | A      |   B    |
+        //      | B      |    A    |  -Reverse To-> | B      |   C    |
+        //      | C      |    B    |                | C      |        |
+        //
+        var reverse_systems_dependencies: [system_count]Dependency = undefined;
+        reverse_systems_dependencies[system_count - 1] = Dependency{
+            .prereq_count = systems_dependencies[system_count - 1].signal_indices.len,
+            .signal_indices = &[_]u32{},
+        };
+        for (reverse_systems_dependencies[0..system_count], 0..) |*reverse_systems_dependency, dep_index| {
+            var signal_count: comptime_int = 0;
+            for (systems_dependencies[dep_index + 1 ..]) |dependency| {
+                for (dependency.signal_indices) |index| {
+                    if (index == dep_index) signal_count += 1;
+                }
+            }
+
+            var signal_indices: [signal_count]u32 = undefined;
+            var current_index: u32 = 0;
+            for (systems_dependencies[dep_index + 1 ..], dep_index + 1..) |dependency, to_be_signaled_index| {
+                for (dependency.signal_indices) |index| {
+                    if (index == dep_index) {
+                        signal_indices[current_index] = to_be_signaled_index;
+                        current_index += 1;
+                    }
+                }
+            }
+
+            reverse_systems_dependency.* = Dependency{
+                .prereq_count = systems_dependencies[dep_index].signal_indices.len,
+                .signal_indices = globalArrayVariableRefWorkaround(signal_indices, signal_count)[0..signal_count],
+            };
+        }
+
+        break :calc_dependencies_blk reverse_systems_dependencies;
     };
 
     return final_systems_dependencies;
 }
 
 pub fn locateDependency(systems_dependencies: []const Dependency, higher_dependency: u32, lower_dependency: u32) bool {
-    for (systems_dependencies[higher_dependency].wait_on_indices) |high_dep| {
+    for (systems_dependencies[higher_dependency].signal_indices) |high_dep| {
         // if we have found dependency
         if (high_dep == lower_dependency) {
             return true;
@@ -680,12 +723,12 @@ test buildDependencyList {
                 SingleQuerySystemsT.writeA,
             }, 2);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{1} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
             };
 
             for (dependencies, expected_dependencies) |system_dependencies, expected_system_dependencies| {
-                try std.testing.expectEqualSlices(u32, system_dependencies.wait_on_indices, expected_system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, system_dependencies.signal_indices, expected_system_dependencies.signal_indices);
             }
         }
 
@@ -696,12 +739,12 @@ test buildDependencyList {
                 SingleQuerySystemsT.writeA,
             }, 2);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{1} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
             };
 
             for (dependencies, expected_dependencies) |system_dependencies, expected_system_dependencies| {
-                try std.testing.expectEqualSlices(u32, system_dependencies.wait_on_indices, expected_system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, system_dependencies.signal_indices, expected_system_dependencies.signal_indices);
             }
         }
 
@@ -712,12 +755,12 @@ test buildDependencyList {
                 SingleQuerySystemsT.readAValue,
             }, 2);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -728,12 +771,12 @@ test buildDependencyList {
                 SingleQuerySystemsT.readAConstPtr,
             }, 2);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -744,12 +787,12 @@ test buildDependencyList {
                 SingleQuerySystemsT.readAValue,
             }, 2);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{1} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -760,12 +803,12 @@ test buildDependencyList {
                 SingleQuerySystemsT.readAConstPtr,
             }, 2);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{1} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -777,13 +820,13 @@ test buildDependencyList {
                 SingleQuerySystemsT.writeA,
             }, 3);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[2]u32{ 1, 0 } },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{2} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{2} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -795,13 +838,13 @@ test buildDependencyList {
                 SingleQuerySystemsT.writeA,
             }, 3);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[2]u32{ 1, 0 } },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{2} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{2} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -814,14 +857,14 @@ test buildDependencyList {
                 SingleQuerySystemsT.writeA,
             }, 4);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -834,14 +877,14 @@ test buildDependencyList {
                 SingleQuerySystemsT.writeA,
             }, 4);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -857,15 +900,15 @@ test buildDependencyList {
                 SingleQuerySystemsT.writeA,
             }, 5);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
-                Dependency{ .wait_on_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{4} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -879,15 +922,15 @@ test buildDependencyList {
                 SingleQuerySystemsT.writeA,
             }, 5);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
-                Dependency{ .wait_on_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{4} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
     }
@@ -902,13 +945,13 @@ test buildDependencyList {
                 SingleQuerySystemsT.readAReadB,
             }, 3);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{2} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{2} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -920,13 +963,13 @@ test buildDependencyList {
                 SingleQuerySystemsT.writeB,
             }, 3);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -938,13 +981,13 @@ test buildDependencyList {
                 SingleQuerySystemsT.readB,
             }, 3);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -956,13 +999,13 @@ test buildDependencyList {
                 SingleQuerySystemsT.writeAWriteB,
             }, 3);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{2} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{2} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -975,14 +1018,14 @@ test buildDependencyList {
                 SingleQuerySystemsT.writeAWriteB,
             }, 4);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -996,15 +1039,15 @@ test buildDependencyList {
                 SingleQuerySystemsT.writeAWriteB,
             }, 5);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
-                Dependency{ .wait_on_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{4} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -1018,15 +1061,15 @@ test buildDependencyList {
                 SingleQuerySystemsT.writeAWriteB,
             }, 5);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
-                Dependency{ .wait_on_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{4} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -1044,19 +1087,19 @@ test buildDependencyList {
                 SingleQuerySystemsT.writeAWriteB,
             }, 9);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} }, // 0: writeA,
-                Dependency{ .wait_on_indices = &[_]u32{} }, // 1: readB,
-                Dependency{ .wait_on_indices = &[_]u32{0} }, // 2: readA,
-                Dependency{ .wait_on_indices = &[_]u32{2} }, // 3: writeA,
-                Dependency{ .wait_on_indices = &[_]u32{} }, // 4: readB,
-                Dependency{ .wait_on_indices = &[_]u32{ 4, 1 } }, // 5: writeB,
-                Dependency{ .wait_on_indices = &[_]u32{ 5, 3 } }, // 6: readAreadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 5, 3 } }, // 7: readAreadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 7, 6 } }, // 8: writeAwriteB,
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{2} }, // 0: writeA,
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{5} }, // 1: readB,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} }, // 2: readA,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{ 6, 7 } }, // 3: writeA,
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{5} }, // 4: readB,
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{ 6, 7 } }, // 5: writeB,
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{8} }, // 6: readAreadB,
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{8} }, // 7: readAreadB,
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{} }, // 8: writeAwriteB,
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
     }
@@ -1072,14 +1115,14 @@ test buildDependencyList {
                 SingleQuerySystemsT.readAReadBInclD,
             }, 4);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1, 0 } },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 3, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -1092,14 +1135,14 @@ test buildDependencyList {
                 SingleQuerySystemsT.writeD,
             }, 4);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 2, 3 } },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -1112,14 +1155,14 @@ test buildDependencyList {
                 SingleQuerySystemsT.readD,
             }, 4);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 2, 3 } },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -1132,14 +1175,14 @@ test buildDependencyList {
                 SingleQuerySystemsT.writeAWriteBWriteD,
             }, 4);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1, 0 } },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 3, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -1159,21 +1202,21 @@ test buildDependencyList {
                 SingleQuerySystemsT.readAReadBInclD,
             }, 11);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} }, // 0: writeA,
-                Dependency{ .wait_on_indices = &[_]u32{0} }, // 1: writeAWriteBWriteD,
-                Dependency{ .wait_on_indices = &[_]u32{1} }, // 2: readA,
-                Dependency{ .wait_on_indices = &[_]u32{1} }, // 3: readD,
-                Dependency{ .wait_on_indices = &[_]u32{1} }, // 4: readB,
-                Dependency{ .wait_on_indices = &[_]u32{1} }, // 5: readAReadB,
-                Dependency{ .wait_on_indices = &[_]u32{1} }, // 6: readAReadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 6, 5, 4, 2 } }, // 7: writeAWriteB,
-                Dependency{ .wait_on_indices = &[_]u32{ 7, 3 } }, // 8: writeAWriteBWriteD,
-                Dependency{ .wait_on_indices = &[_]u32{8} }, // 9: readAReadB,
-                Dependency{ .wait_on_indices = &[_]u32{8} }, // 10: readAReadBInclD,
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{1} }, // 0: writeA,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{ 2, 3, 4, 5, 6 } }, // 1: writeAWriteBWriteD,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{7} }, // 2: readA,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{8} }, // 3: readD,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{7} }, // 4: readB,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{7} }, // 5: readAReadB,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{7} }, // 6: readAReadB,
+                Dependency{ .prereq_count = 4, .signal_indices = &[_]u32{8} }, // 7: writeAWriteB,
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{ 9, 10 } }, // 8: writeAWriteBWriteD,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} }, // 9: readAReadB,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} }, // 10: readAReadBInclD,
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
     }
@@ -1189,14 +1232,14 @@ test buildDependencyList {
                 TwoQuerySystemsT.writeAWriteB,
             }, 4);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -1208,13 +1251,13 @@ test buildDependencyList {
                 TwoQuerySystemsT.readAReadB,
             }, 3);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{2} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{2} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -1226,13 +1269,13 @@ test buildDependencyList {
                 TwoQuerySystemsT.writeAWriteB,
             }, 3);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{2} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{2} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -1252,21 +1295,21 @@ test buildDependencyList {
                 SingleQuerySystemsT.readAReadBInclD,
             }, 11);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} }, // 0: writeA,
-                Dependency{ .wait_on_indices = &[_]u32{0} }, // 1: writeAWriteBWriteC,
-                Dependency{ .wait_on_indices = &[_]u32{1} }, // 2: readA,
-                Dependency{ .wait_on_indices = &[_]u32{1} }, // 3: readC,
-                Dependency{ .wait_on_indices = &[_]u32{1} }, // 4: readB,
-                Dependency{ .wait_on_indices = &[_]u32{1} }, // 5: readAReadB,
-                Dependency{ .wait_on_indices = &[_]u32{1} }, // 6: readAReadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 6, 5, 4, 2 } }, // 7: writeAWriteB,
-                Dependency{ .wait_on_indices = &[_]u32{ 7, 3 } }, // 8: writeAWriteBWriteC,
-                Dependency{ .wait_on_indices = &[_]u32{8} }, // 9: readAReadB,
-                Dependency{ .wait_on_indices = &[_]u32{8} }, // 10: readAReadBInclD,
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{1} }, // 0: writeA,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{ 2, 3, 4, 5, 6 } }, // 1: writeAWriteBWriteC,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{7} }, // 2: readA,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{8} }, // 3: readC,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{7} }, // 4: readB,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{7} }, // 5: readAReadB,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{7} }, // 6: readAReadB,
+                Dependency{ .prereq_count = 4, .signal_indices = &[_]u32{8} }, // 7: writeAWriteB,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{ 9, 10 } }, // 8: writeAWriteBWriteC,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} }, // 9: readAReadB,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} }, // 10: readAReadBInclD,
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
     }
@@ -1281,13 +1324,13 @@ test buildDependencyList {
                 SingleQuerySystemsT.readAReadB,
             }, 3);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{2} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{2} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -1299,13 +1342,13 @@ test buildDependencyList {
                 SingleSubStorageSystems.writeB,
             }, 3);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -1317,13 +1360,13 @@ test buildDependencyList {
                 SingleQuerySystemsT.readB,
             }, 3);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -1335,13 +1378,13 @@ test buildDependencyList {
                 SingleSubStorageSystems.writeAWriteB,
             }, 3);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{ 1, 0 } },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{2} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{2} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -1354,14 +1397,14 @@ test buildDependencyList {
                 SingleSubStorageSystems.writeAWriteB,
             }, 4);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -1375,15 +1418,15 @@ test buildDependencyList {
                 SingleSubStorageSystems.writeAWriteB,
             }, 5);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
-                Dependency{ .wait_on_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{4} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -1397,15 +1440,15 @@ test buildDependencyList {
                 SingleSubStorageSystems.writeAWriteB,
             }, 5);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
-                Dependency{ .wait_on_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{4} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -1423,19 +1466,19 @@ test buildDependencyList {
                 SingleSubStorageSystems.writeAWriteB,
             }, 9);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} }, // 0: writeA,
-                Dependency{ .wait_on_indices = &[_]u32{} }, // 1: readB,
-                Dependency{ .wait_on_indices = &[_]u32{0} }, // 2: readA,
-                Dependency{ .wait_on_indices = &[_]u32{2} }, // 3: writeA,
-                Dependency{ .wait_on_indices = &[_]u32{} }, // 4: readB,
-                Dependency{ .wait_on_indices = &[_]u32{ 4, 1 } }, // 5: writeB,
-                Dependency{ .wait_on_indices = &[_]u32{ 5, 3 } }, // 6: readAreadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 5, 3 } }, // 7: readAreadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 7, 6 } }, // 8: writeAwriteB,
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{2} }, // 0: writeA,
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{5} }, // 1: readB,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} }, // 2: readA,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{ 6, 7 } }, // 3: writeA,
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{5} }, // 4: readB,
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{ 6, 7 } }, // 5: writeB,
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{8} }, // 6: readAreadB,
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{8} }, // 7: readAreadB,
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{} }, // 8: writeAwriteB,
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -1455,21 +1498,21 @@ test buildDependencyList {
                 SingleSubStorageSystems.readAReadBReadC,
             }, 11);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} }, // 0: writeA,
-                Dependency{ .wait_on_indices = &[_]u32{0} }, // 1: writeAWriteBWriteC,
-                Dependency{ .wait_on_indices = &[_]u32{1} }, // 2: readA,
-                Dependency{ .wait_on_indices = &[_]u32{} }, // 3: readD,
-                Dependency{ .wait_on_indices = &[_]u32{1} }, // 4: readB,
-                Dependency{ .wait_on_indices = &[_]u32{1} }, // 5: readAReadB,
-                Dependency{ .wait_on_indices = &[_]u32{1} }, // 6: readAReadB,
-                Dependency{ .wait_on_indices = &[_]u32{ 6, 5, 4, 2 } }, // 7: writeAWriteB,
-                Dependency{ .wait_on_indices = &[_]u32{7} }, // 8: writeAWriteBWriteC,
-                Dependency{ .wait_on_indices = &[_]u32{8} }, // 9: readAReadB,
-                Dependency{ .wait_on_indices = &[_]u32{8} }, // 10: readAReadBReadC,
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{1} }, // 0: writeA,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{ 2, 4, 5, 6 } }, // 1: writeAWriteBWriteC,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{7} }, // 2: readA,
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{} }, // 3: readD,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{7} }, // 4: readB,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{7} }, // 5: readAReadB,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{7} }, // 6: readAReadB,
+                Dependency{ .prereq_count = 4, .signal_indices = &[_]u32{8} }, // 7: writeAWriteB,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{ 9, 10 } }, // 8: writeAWriteBWriteC,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} }, // 9: readAReadB,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} }, // 10: readAReadBReadC,
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
     }
@@ -1484,15 +1527,15 @@ test buildDependencyList {
             SingleQuerySystemsT.writeA,
         }, 5);
         const expected_dependencies = [_]Dependency{
-            Dependency{ .wait_on_indices = &[_]u32{} },
-            Dependency{ .wait_on_indices = &[_]u32{0} },
-            Dependency{ .wait_on_indices = &[_]u32{1} },
-            Dependency{ .wait_on_indices = &[_]u32{2} },
-            Dependency{ .wait_on_indices = &[_]u32{3} },
+            Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{1} },
+            Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{2} },
+            Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+            Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{4} },
+            Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
         };
 
         for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-            try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
         }
     }
 
@@ -1505,15 +1548,15 @@ test buildDependencyList {
             SingleQuerySystemsT.writeB,
         }, 5);
         const expected_dependencies = [_]Dependency{
-            Dependency{ .wait_on_indices = &[_]u32{} },
-            Dependency{ .wait_on_indices = &[_]u32{0} },
-            Dependency{ .wait_on_indices = &[_]u32{1} },
-            Dependency{ .wait_on_indices = &[_]u32{2} },
-            Dependency{ .wait_on_indices = &[_]u32{2} },
+            Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{1} },
+            Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{2} },
+            Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{ 3, 4 } },
+            Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
+            Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
         };
 
         for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-            try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
         }
     }
 
@@ -1526,14 +1569,14 @@ test buildDependencyList {
             SingleQuerySystemsT.readAReadB,
         }, 4);
         const expected_dependencies = [_]Dependency{
-            Dependency{ .wait_on_indices = &[_]u32{} },
-            Dependency{ .wait_on_indices = &[_]u32{} },
-            Dependency{ .wait_on_indices = &[_]u32{} },
-            Dependency{ .wait_on_indices = &[_]u32{} },
+            Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{} },
+            Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{} },
+            Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{} },
+            Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{} },
         };
 
         for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-            try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
         }
     }
 
@@ -1548,16 +1591,16 @@ test buildDependencyList {
             SingleQuerySystemsT.writeB,
         }, 6);
         const expected_dependencies = [_]Dependency{
-            Dependency{ .wait_on_indices = &[_]u32{} },
-            Dependency{ .wait_on_indices = &[_]u32{0} },
-            Dependency{ .wait_on_indices = &[_]u32{0} },
-            Dependency{ .wait_on_indices = &[_]u32{0} },
-            Dependency{ .wait_on_indices = &[_]u32{ 3, 2, 1 } },
-            Dependency{ .wait_on_indices = &[_]u32{ 3, 1 } },
+            Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 2, 3 } },
+            Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{ 4, 5 } },
+            Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{4} },
+            Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{ 4, 5 } },
+            Dependency{ .prereq_count = 3, .signal_indices = &[_]u32{} },
+            Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{} },
         };
 
         for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-            try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+            try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
         }
     }
 
@@ -1573,15 +1616,15 @@ test buildDependencyList {
                 SingleSubStorageSystems.writeAWriteB,
             }, 5);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
-                Dependency{ .wait_on_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{4} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
 
@@ -1595,15 +1638,15 @@ test buildDependencyList {
                 SingleSubStorageSystems.writeAWriteB,
             }, 5);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{0} },
-                Dependency{ .wait_on_indices = &[_]u32{ 2, 1 } },
-                Dependency{ .wait_on_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 2 } },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
+                Dependency{ .prereq_count = 2, .signal_indices = &[_]u32{4} },
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} },
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
     }
@@ -1629,24 +1672,24 @@ test buildDependencyList {
                 SingleQuerySystemsT.writeAWriteB,
             }, 14);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} }, // 0: writeAWriteB,
-                Dependency{ .wait_on_indices = &[_]u32{0} }, // 1: readA,
-                Dependency{ .wait_on_indices = &[_]u32{1} }, // 2: writeA,
-                Dependency{ .wait_on_indices = &[_]u32{2} }, // 3: readA,
-                Dependency{ .wait_on_indices = &[_]u32{3} }, // 4: writeA,
-                Dependency{ .wait_on_indices = &[_]u32{4} }, // 5: readA,
-                Dependency{ .wait_on_indices = &[_]u32{5} }, // 6: writeA,
-                Dependency{ .wait_on_indices = &[_]u32{0} }, // 7: readBValue,
-                Dependency{ .wait_on_indices = &[_]u32{7} }, // 8: writeB,
-                Dependency{ .wait_on_indices = &[_]u32{8} }, // 9: readBValue,
-                Dependency{ .wait_on_indices = &[_]u32{9} }, // 10: writeB,
-                Dependency{ .wait_on_indices = &[_]u32{10} }, // 11: readBValue,
-                Dependency{ .wait_on_indices = &[_]u32{11} }, // 12: writeB,
-                Dependency{ .wait_on_indices = &[_]u32{ 12, 6 } }, // 13: writeAWriteB,
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{ 1, 7 } }, // 0: writeAWriteB,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{2} }, // 1: readA,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} }, // 2: writeA,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{4} }, // 3: readA,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{5} }, // 4: writeA,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{6} }, // 5: readA,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{13} }, // 6: writeA,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{8} }, // 7: readBValue,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{9} }, // 8: writeB,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{10} }, // 9: readBValue,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{11} }, // 10: writeB,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{12} }, // 11: readBValue,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{13} }, // 12: writeB,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} }, // 13: writeAWriteB,
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
     }
@@ -1664,16 +1707,16 @@ test buildDependencyList {
                 SingleSubStorageSystems.all,
             }, 6);
             const expected_dependencies = [_]Dependency{
-                Dependency{ .wait_on_indices = &[_]u32{} }, // 0: readAValue,
-                Dependency{ .wait_on_indices = &[_]u32{0} }, // 1: all,
-                Dependency{ .wait_on_indices = &[_]u32{1} }, // 2: readB,
-                Dependency{ .wait_on_indices = &[_]u32{2} }, // 3: all,
-                Dependency{ .wait_on_indices = &[_]u32{3} }, // 4: readD,
-                Dependency{ .wait_on_indices = &[_]u32{4} }, // 5: all,
+                Dependency{ .prereq_count = 0, .signal_indices = &[_]u32{1} }, // 0: readAValue,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{2} }, // 1: all,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{3} }, // 2: readB,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{4} }, // 3: all,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{5} }, // 4: readD,
+                Dependency{ .prereq_count = 1, .signal_indices = &[_]u32{} }, // 5: all,
             };
 
             for (expected_dependencies, dependencies) |expected_system_dependencies, system_dependencies| {
-                try std.testing.expectEqualSlices(u32, expected_system_dependencies.wait_on_indices, system_dependencies.wait_on_indices);
+                try std.testing.expectEqualSlices(u32, expected_system_dependencies.signal_indices, system_dependencies.signal_indices);
             }
         }
     }

@@ -1,9 +1,29 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const ResetEvent = std.Thread.ResetEvent;
 
 const ztracy = @import("ecez_ztracy.zig");
 const Color = @import("misc.zig").Color;
+
+const Dependency = @import("dependency_chain.zig").Dependency;
+
+pub const RunQueue = std.DoublyLinkedList(Runnable);
+const RunProto = *const fn (*Runnable) void;
+pub const Runnable = struct {
+    pub const Index = u32;
+    pub const is_done_value = std.math.maxInt(u32);
+
+    entry_index: Index,
+    dependencies: []const Dependency,
+    other_runnables: []*RunQueue.Node,
+    prereq_jobs_inflight: std.atomic.Value(Index),
+    grouped_runnables_done: *std.atomic.Value(u32),
+
+    runFn: RunProto,
+
+    pub fn getNode(runnable: *Runnable) *RunQueue.Node {
+        return @as(*RunQueue.Node, @fieldParentPtr("data", runnable));
+    }
+};
 
 // Based on zig std.Thread.Pool
 pub fn Create() type {
@@ -16,18 +36,6 @@ pub fn Create() type {
         is_running: bool = true,
         allocator: std.mem.Allocator,
         threads: []std.Thread,
-
-        const RunQueue = std.DoublyLinkedList(Runnable);
-        const Runnable = struct {
-            runFn: RunProto,
-        };
-
-        const RunProto = *const fn (*Runnable) FnStatus;
-
-        const FnStatus = enum {
-            yield,
-            done,
-        };
 
         pub const Options = struct {
             allocator: std.mem.Allocator,
@@ -102,39 +110,61 @@ pub fn Create() type {
 
         pub fn Closure(comptime Args: type, comptime func: anytype) type {
             return struct {
+                pub const is_done_value = std.math.maxInt(u32);
+
                 arguments: Args,
                 pool: *Pool,
-                run_node: RunQueue.Node = .{ .data = .{ .runFn = runFn } },
-                spawned_event_index: u32,
-                event_dependency_indices: []const u32,
-                event_collection: []ResetEvent,
+                run_node: RunQueue.Node,
 
-                fn runFn(runnable: *Runnable) FnStatus {
+                pub fn runFn(runnable: *Runnable) void {
                     const thread_zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.job_queue);
                     defer thread_zone.End();
-                    const run_node: *RunQueue.Node = @fieldParentPtr("data", runnable);
+                    const run_node: *RunQueue.Node = Runnable.getNode(runnable);
                     const closure: *@This() = @alignCast(@fieldParentPtr("run_node", run_node));
 
-                    // wait for system dependencies to complete
-                    for (closure.event_dependency_indices) |dependency_index| {
-                        if (false == closure.event_collection[dependency_index].isSet()) {
-                            return .yield;
-                        }
-                    }
-
                     @call(.auto, func, .{closure.arguments});
-                    closure.event_collection[closure.spawned_event_index].set();
 
                     // The thread pool's allocator is protected by the mutex.
                     const mutex = &closure.pool.mutex;
                     mutex.lock();
                     defer mutex.unlock();
-
                     closure.pool.allocator.destroy(closure);
-
-                    return .done;
                 }
             };
+        }
+
+        pub fn allocClosure(
+            pool: *Pool,
+            entry_index: Runnable.Index,
+            dependencies: []const Dependency,
+            event_runnables: []*RunQueue.Node,
+            grouped_runnables_done: *std.atomic.Value(u32),
+            args: anytype,
+        ) !type_blk: {
+            const Args = @TypeOf(args);
+            const dispatch_exec_func = Args.exec;
+            break :type_blk *Closure(Args, dispatch_exec_func);
+        } {
+            const Args = @TypeOf(args);
+            const dispatch_exec_func = Args.exec;
+
+            const ClosureT = Closure(Args, dispatch_exec_func);
+
+            pool.mutex.lock();
+            const closure = try pool.allocator.create(ClosureT);
+            pool.mutex.unlock();
+
+            const prereq_jobs_inflight = dependencies[entry_index].prereq_count;
+            closure.* = .{ .arguments = args, .pool = pool, .run_node = .{ .data = .{
+                .entry_index = entry_index,
+                .dependencies = dependencies,
+                .other_runnables = event_runnables,
+                .prereq_jobs_inflight = std.atomic.Value(Runnable.Index).init(prereq_jobs_inflight),
+                .grouped_runnables_done = grouped_runnables_done,
+                .runFn = ClosureT.runFn,
+            } } };
+
+            return closure;
         }
 
         // TODO: we know statically how much memory is needed and should not need allocator
@@ -142,53 +172,22 @@ pub fn Create() type {
         ///
         /// In the case that queuing the function call fails to allocate memory, or the
         /// target is single-threaded, the function is called directly.
-        pub fn spawnRe(
+        pub fn spawn(
             pool: *Pool,
-            comptime event_dependency_indices: []const u32,
-            comptime force_single_threaded: bool,
-            event_collection: []ResetEvent,
-            spawned_event_index: u32,
-            args: anytype,
+            dependendency: Dependency,
+            run_node: *RunQueue.Node,
         ) void {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.job_queue);
             defer zone.End();
 
-            event_collection[spawned_event_index].reset();
-
-            const Args = @TypeOf(args);
-            const dispatch_exec_func = Args.exec;
-
-            if (builtin.single_threaded or pool.threads.len == 0 or force_single_threaded) {
-                @call(.auto, dispatch_exec_func, .{args});
-                event_collection[spawned_event_index].set();
-                return;
-            }
-
-            const ClosureT = Closure(Args, dispatch_exec_func);
-            {
+            if (dependendency.prereq_count == 0) {
                 pool.mutex.lock();
-
-                // TODO: avoid constant alloc, pool previous allocs, or use a more fitting allocator for the pool
-                const closure = pool.allocator.create(ClosureT) catch {
-                    pool.mutex.unlock();
-                    @call(.auto, dispatch_exec_func, .{args});
-                    event_collection[spawned_event_index].set();
-                    return;
-                };
-                closure.* = .{
-                    .arguments = args,
-                    .pool = pool,
-                    .spawned_event_index = spawned_event_index,
-                    .event_dependency_indices = event_dependency_indices,
-                    .event_collection = event_collection,
-                };
-
-                pool.run_queue.prepend(&closure.run_node);
+                pool.run_queue.prepend(run_node);
                 pool.mutex.unlock();
-            }
 
-            // Notify waiting threads outside the lock to try and keep the critical section small.
-            pool.cond.signal();
+                // Notify waiting threads outside the lock to try and keep the critical section small.
+                pool.cond.signal();
+            }
         }
 
         fn worker(pool: *Pool) void {
@@ -200,16 +199,29 @@ pub fn Create() type {
 
             while (true) {
                 while (pool.run_queue.pop()) |run_node| {
-                    const fn_outcome = run_fn_blk: {
-                        // Temporarily unlock the mutex in order to execute the run_node
-                        pool.mutex.unlock();
-                        defer pool.mutex.lock();
-                        const runFn = run_node.data.runFn;
-                        break :run_fn_blk runFn(&run_node.data);
-                    };
+                    // Temporarily unlock the mutex in order to execute the run_node
+                    pool.mutex.unlock();
+                    defer pool.mutex.lock();
 
-                    if (.yield == fn_outcome) {
-                        pool.run_queue.prepend(run_node);
+                    // Grab pointers before closure is destroyed by runFn
+                    const signal_indices = run_node.data.dependencies[run_node.data.entry_index].signal_indices;
+                    const grouped_runnables_done = run_node.data.grouped_runnables_done;
+                    const other_runnables = run_node.data.other_runnables;
+                    const runFn = run_node.data.runFn;
+                    runFn(&run_node.*.data);
+
+                    _ = grouped_runnables_done.fetchSub(1, .monotonic);
+
+                    for (signal_indices) |signal_index| {
+                        const blocking_count = other_runnables[signal_index].data.prereq_jobs_inflight.fetchSub(1, .acq_rel);
+                        if (blocking_count == 1) {
+                            pool.mutex.lock();
+                            pool.run_queue.prepend(other_runnables[signal_index]);
+                            pool.mutex.unlock();
+
+                            // Notify waiting threads outside the lock to try and keep the critical section small.
+                            pool.cond.signal();
+                        }
                     }
                 }
 
