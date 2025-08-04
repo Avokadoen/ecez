@@ -15,6 +15,9 @@ const Access = struct {
     type: type,
     right: Right,
 };
+const ForwardDependency = struct {
+    wait_for_indices: []const u32,
+};
 
 pub const Dependency = struct {
     prereq_count: u32,
@@ -123,12 +126,11 @@ pub fn buildDependencyList(
             };
         }
 
-        var systems_dependencies: [system_count]Dependency = undefined;
-        systems_dependencies[0] = Dependency{
-            .prereq_count = 0,
-            .signal_indices = &[_]u32{},
+        var forward_dependencies: [system_count]ForwardDependency = undefined;
+        forward_dependencies[0] = ForwardDependency{
+            .wait_for_indices = &[_]u32{},
         };
-        for (systems_dependencies[1..], graph[1..], 1..) |*system_dependencies, this_node, node_index| {
+        for (forward_dependencies[1..], graph[1..], 1..) |*forward_dependency, this_node, node_index| {
             var this_node_access_not_locked: [this_node.access.len]Access = undefined;
             var this_node_access_not_locked_len = this_node_access_not_locked.len;
 
@@ -228,7 +230,7 @@ pub fn buildDependencyList(
                     var other_dep_index = 1;
                     while (other_dep_index < dependencies_len) : (other_dep_index += 1) {
                         const other_dependency = dependencies[other_dep_index];
-                        if (locateDependency(systems_dependencies[0..node_index], dependency, other_dependency)) {
+                        if (locateDependency(forward_dependencies[0..node_index], dependency, other_dependency)) {
                             // remove dependency which is already transitively tracked
                             if (dependencies[other_dep_index..dependencies_len].len > 1) {
                                 std.mem.rotate(u32, dependencies[other_dep_index..dependencies_len], dependencies[other_dep_index..dependencies_len].len - 1);
@@ -240,9 +242,8 @@ pub fn buildDependencyList(
                 }
             }
 
-            system_dependencies.* = Dependency{
-                .prereq_count = 0,
-                .signal_indices = dependencies[0..dependencies_len],
+            forward_dependency.* = ForwardDependency{
+                .wait_for_indices = dependencies[0..dependencies_len],
             };
         }
 
@@ -253,23 +254,23 @@ pub fn buildDependencyList(
         //      | B      |    A    |  -Reverse To-> | B      |   C    |
         //      | C      |    B    |                | C      |        |
         //
-        var reverse_systems_dependencies: [system_count]Dependency = undefined;
-        reverse_systems_dependencies[system_count - 1] = Dependency{
-            .prereq_count = systems_dependencies[system_count - 1].signal_indices.len,
+        var systems_dependencies: [system_count]Dependency = undefined;
+        systems_dependencies[system_count - 1] = Dependency{
+            .prereq_count = forward_dependencies[system_count - 1].wait_for_indices.len,
             .signal_indices = &[_]u32{},
         };
-        for (reverse_systems_dependencies[0..system_count], 0..) |*reverse_systems_dependency, dep_index| {
+        for (systems_dependencies[0..system_count], 0..) |*systems_dependency, dep_index| {
             var signal_count: comptime_int = 0;
-            for (systems_dependencies[dep_index + 1 ..]) |dependency| {
-                for (dependency.signal_indices) |index| {
+            for (forward_dependencies[dep_index + 1 ..]) |dependency| {
+                for (dependency.wait_for_indices) |index| {
                     if (index == dep_index) signal_count += 1;
                 }
             }
 
             var signal_indices: [signal_count]u32 = undefined;
             var current_index: u32 = 0;
-            for (systems_dependencies[dep_index + 1 ..], dep_index + 1..) |dependency, to_be_signaled_index| {
-                for (dependency.signal_indices) |index| {
+            for (forward_dependencies[dep_index + 1 ..], dep_index + 1..) |dependency, to_be_signaled_index| {
+                for (dependency.wait_for_indices) |index| {
                     if (index == dep_index) {
                         signal_indices[current_index] = to_be_signaled_index;
                         current_index += 1;
@@ -277,20 +278,20 @@ pub fn buildDependencyList(
                 }
             }
 
-            reverse_systems_dependency.* = Dependency{
-                .prereq_count = systems_dependencies[dep_index].signal_indices.len,
+            systems_dependency.* = Dependency{
+                .prereq_count = forward_dependencies[dep_index].wait_for_indices.len,
                 .signal_indices = globalArrayVariableRefWorkaround(signal_indices, signal_count)[0..signal_count],
             };
         }
 
-        break :calc_dependencies_blk reverse_systems_dependencies;
+        break :calc_dependencies_blk systems_dependencies;
     };
 
     return final_systems_dependencies;
 }
 
-pub fn locateDependency(systems_dependencies: []const Dependency, higher_dependency: u32, lower_dependency: u32) bool {
-    for (systems_dependencies[higher_dependency].signal_indices) |high_dep| {
+pub fn locateDependency(systems_dependencies: []const ForwardDependency, higher_dependency: u32, lower_dependency: u32) bool {
+    for (systems_dependencies[higher_dependency].wait_for_indices) |high_dep| {
         // if we have found dependency
         if (high_dep == lower_dependency) {
             return true;
