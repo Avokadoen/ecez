@@ -284,9 +284,6 @@ pub fn CreateScheduler(comptime events: anytype) type {
                 storage: *Storage,
 
                 pub fn exec(self_job: DispatchJob) void {
-                    const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
-                    defer zone.End();
-
                     const FuncType = @TypeOf(func);
                     const param_types = comptime get_param_types_blk: {
                         const func_info = @typeInfo(FuncType);
