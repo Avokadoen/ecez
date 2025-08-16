@@ -1,14 +1,18 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-
-const set = @import("sparse_set.zig");
-
-const ztracy = @import("ecez_ztracy.zig");
+const testing = std.testing;
 
 const Color = @import("misc.zig").Color;
-
 const entity_type = @import("entity_type.zig");
 const Entity = entity_type.Entity;
+const set = @import("sparse_set.zig");
+const Testing = @import("Testing.zig");
+const AbEntityType = Testing.Structure.AB;
+const AcEntityType = Testing.Structure.AC;
+const BcEntityType = Testing.Structure.BC;
+const AbcEntityType = Testing.Structure.ABC;
+const StorageStub = Testing.StorageStub;
+const ztracy = @import("ecez_ztracy.zig");
 
 pub const StorageType = struct {};
 pub const SubsetType = struct {};
@@ -967,17 +971,6 @@ pub const CompileReflect = struct {
         }
     }
 };
-
-const Testing = @import("Testing.zig");
-const testing = std.testing;
-
-// TODO: we cant use tuples here because of https://github.com/ziglang/zig/issues/12963
-const AbEntityType = Testing.Structure.AB;
-const AcEntityType = Testing.Structure.AC;
-const BcEntityType = Testing.Structure.BC;
-const AbcEntityType = Testing.Structure.ABC;
-
-const StorageStub = Testing.StorageStub;
 
 test "init() + deinit() is idempotent" {
     var storage = try StorageStub.init(testing.allocator);
