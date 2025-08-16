@@ -1474,6 +1474,42 @@ test "getComponent() can mutate component value with ptr" {
     try testing.expectEqual(new_b_value, storage.getComponent(entity, Testing.Component.B).?);
 }
 
+test "getComponent() can request const ptr" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    const a = Testing.Component.A{ .value = 32 };
+    const b = Testing.Component.B{ .value = 42 };
+    const initial_state = AbEntityType{
+        .a = a,
+        .b = b,
+    };
+    const entity = try storage.createEntity(initial_state);
+
+    const stored_a = storage.getComponent(entity, *const Testing.Component.A).?;
+    try testing.expectEqual(a, stored_a.*);
+}
+
+test "getComponents() can request const ptr" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    const a = Testing.Component.A{ .value = 32 };
+    const b = Testing.Component.B{ .value = 42 };
+    const initial_state = AbEntityType{
+        .a = a,
+        .b = b,
+    };
+    const entity = try storage.createEntity(initial_state);
+
+    const stored = storage.getComponents(entity, struct {
+        a: *const Testing.Component.A,
+        b: *const Testing.Component.B,
+    }).?;
+    try testing.expectEqual(a, stored.a.*);
+    try testing.expectEqual(b, stored.b.*);
+}
+
 test "clearRetainingCapacity() allow storage reuse" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
