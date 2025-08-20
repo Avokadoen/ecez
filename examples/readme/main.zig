@@ -218,5 +218,5 @@ pub fn main() anyerror!void {
     storage.clearRetainingCapacity();
 
     // restore the storage state with the slice of bytes which is ezby encoded
-    try ezby.deserialize(Storage, &storage, bytes);
+    try ezby.deserialize(Storage, .overwrite, &storage, bytes);
 }

@@ -1,18 +1,18 @@
 const std = @import("std");
 const mem = std.mem;
 const Allocator = mem.Allocator;
-
-const ztracy = @import("ecez_ztracy.zig");
+const hashfn: fn (str: []const u8) u64 = std.hash.Fnv1a_64.hash;
+const testing = std.testing;
 
 const Color = @import("misc.zig").Color;
-
+const CreateStorage = @import("storage.zig").CreateStorage;
 const entity_type = @import("entity_type.zig");
 const Entity = entity_type.Entity;
 const EntityId = entity_type.EntityId;
-
 const set = @import("sparse_set.zig");
+const Testing = @import("Testing.zig");
+const ztracy = @import("ecez_ztracy.zig");
 
-const hashfn: fn (str: []const u8) u64 = std.hash.Fnv1a_64.hash;
 pub fn hashTypeName(comptime T: type) u64 {
     if (@inComptime() == false) {
         @compileError(@src().fn_name ++ " is not allowed during runtime");
@@ -263,20 +263,37 @@ pub fn serialize(
     return bytes;
 }
 
+pub const DeserializeOp = enum {
+    /// Deserialize the ezby stream and overwrite the submitted storage data.
+    /// This *will clear the storage* of any pre-existing data.
+    /// Any entity handles will remain the same as when the source storage was serialized
+    overwrite,
+    /// Append the ezby stream to the storage.
+    /// Entity handles from the source storage that was serialized will not survive and should not be used
+    /// To interact with the deserialized storage
+    append,
+};
+
 /// Deserialize the supplied bytes and insert them into a storage. This function will
 /// clear the storage memory which means that **current storage will be cleared**
 ///
 /// In the event of error, the storage will be empty
 pub fn deserialize(
     comptime Storage: type,
+    comptime op: DeserializeOp,
     storage: *Storage,
     ezby_bytes: []const u8,
 ) DeserializeError!void {
     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.serializer);
     defer zone.End();
 
-    storage.clearRetainingCapacity();
-    errdefer storage.clearRetainingCapacity();
+    switch (op) {
+        .overwrite => {
+            storage.clearRetainingCapacity();
+            errdefer storage.clearRetainingCapacity();
+        },
+        .append => {},
+    }
 
     var cursor = ezby_bytes;
 
@@ -295,7 +312,7 @@ pub fn deserialize(
         try storage.inactive_entities.appendSlice(storage.allocator, entity_ids);
     }
 
-    storage.created_entity_count.store(@intCast(ezby.number_of_entities), .seq_cst);
+    const beginning = storage.created_entity_count.fetchAdd(@intCast(ezby.number_of_entities), .seq_cst);
     while (cursor.len > @sizeOf(Chunk.Comp) and mem.eql(u8, cursor[0..4], "COMP")) {
         var comp: Chunk.Comp = undefined;
         var component_bytes: Chunk.Comp.ComponentBytes = undefined;
@@ -313,26 +330,74 @@ pub fn deserialize(
                 std.debug.assert(comp.type_size == @sizeOf(Component));
                 std.debug.assert(comp.type_alignment == @alignOf(Component));
 
-                const sparse_set = storage.getSparseSetPtr(Component);
-                const grow_by = if (@sizeOf(Component) > 0)
-                    comp.sparse_count
-                else
-                    comp.sparse_count * @bitSizeOf(EntityId);
-                try sparse_set.grow(storage.allocator, grow_by);
+                if (entity_ids.len > 0) {
+                    const extra_grow = if (op == .append) beginning else 0;
+                    const sparse_set = storage.getSparseSetPtr(Component);
+                    const grow_by = if (@sizeOf(Component) > 0)
+                        comp.sparse_count
+                    else
+                        comp.sparse_count * @bitSizeOf(EntityId);
+                    try sparse_set.grow(storage.allocator, extra_grow + grow_by);
 
-                if (@sizeOf(Component) > 0) {
-                    // Set full sparse
-                    @memcpy(sparse_set.sparse[0..entity_ids.len], entity_ids);
+                    switch (op) {
+                        .append => {
+                            if (@sizeOf(Component) > 0) {
+                                const dense_set = storage.getDenseSetPtr(Component);
 
-                    // set dense
-                    const dense_set = storage.getDenseSetPtr(Component);
-                    dense_set.dense_len = comp.dense_count;
-                    const component_data = std.mem.bytesAsSlice(Component, component_bytes);
-                    try dense_set.grow(storage.allocator, comp.dense_count);
-                    @memcpy(dense_set.dense[0..component_data.len], component_data);
-                } else {
-                    // Set tag sparse bits
-                    @memcpy(sparse_set.sparse_bits[0..entity_ids.len], entity_ids);
+                                // Set full sparse
+                                {
+                                    const sparse_begin = beginning;
+                                    const sparse_end = sparse_begin + entity_ids.len;
+                                    @memcpy(sparse_set.sparse[sparse_begin..sparse_end], entity_ids);
+
+                                    // Offset each entry by pre-existing dense entries
+                                    for (sparse_set.sparse[sparse_begin..sparse_end]) |*sparse| {
+                                        if (sparse.* != set.Sparse.not_set)
+                                            sparse.* += dense_set.dense_len;
+                                    }
+                                }
+
+                                // set dense
+                                const component_data = std.mem.bytesAsSlice(Component, component_bytes);
+                                try dense_set.grow(storage.allocator, dense_set.dense_len + component_data.len);
+                                const dense_begin = dense_set.dense_len;
+                                const dense_end = dense_begin + component_data.len;
+                                @memcpy(dense_set.dense[dense_begin..dense_end], component_data);
+                                dense_set.dense_len += comp.dense_count;
+                            } else {
+                                // Set tag sparse bits
+
+                                // If the bits align
+                                const unaligned_bits = beginning % @bitSizeOf(EntityId);
+                                if (unaligned_bits == 0) {
+                                    @memcpy(sparse_set.sparse_bits[0..entity_ids.len], entity_ids);
+                                } else {
+                                    const sparse_begin = beginning / @bitSizeOf(EntityId);
+                                    const sparse_end = sparse_begin + entity_ids.len;
+                                    sparse_set.sparse_bits[sparse_begin] |= entity_ids[0] << @as(std.math.Log2Int(EntityId), @intCast(unaligned_bits));
+                                    @memcpy(sparse_set.sparse_bits[sparse_begin + 1 .. sparse_end], entity_ids);
+                                }
+                            }
+                        },
+                        .overwrite => {
+                            if (@sizeOf(Component) > 0) {
+                                // Set full sparse
+                                const sparse_begin = beginning;
+                                const sparse_end = sparse_begin + entity_ids.len;
+                                @memcpy(sparse_set.sparse[sparse_begin..sparse_end], entity_ids);
+
+                                // set dense
+                                const dense_set = storage.getDenseSetPtr(Component);
+                                dense_set.dense_len = comp.dense_count;
+                                const component_data = std.mem.bytesAsSlice(Component, component_bytes);
+                                try dense_set.grow(storage.allocator, component_bytes.len);
+                                @memcpy(dense_set.dense[0..component_data.len], component_data);
+                            } else {
+                                // Set tag sparse bits
+                                @memcpy(sparse_set.sparse_bits[0..entity_ids.len], entity_ids);
+                            }
+                        },
+                    }
                 }
             }
         }
@@ -461,10 +526,6 @@ pub const Chunk = struct {
     }
 };
 
-const Testing = @import("Testing.zig");
-const testing = std.testing;
-
-const CreateStorage = @import("storage.zig").CreateStorage;
 const StorageStub = CreateStorage(Testing.AllComponentsTuple);
 
 test "serializing then using Chunk.parseEzby produce expected EZBY chunk" {
@@ -597,6 +658,7 @@ test "serialize and deserialized is idempotent" {
 
     try deserialize(
         StorageStub,
+        .overwrite,
         &storage,
         bytes,
     );
@@ -648,6 +710,7 @@ test "deserialized single entity works" {
 
     try deserialize(
         StorageStub,
+        .overwrite,
         &storage,
         bytes,
     );
@@ -718,6 +781,7 @@ test "serialize and deserialized with types of higher alignment works" {
 
     try deserialize(
         TestStorage,
+        .overwrite,
         &storage,
         bytes,
     );
@@ -805,6 +869,7 @@ test "serialize with culled_component_types config can be deserialized by other 
 
         try deserialize(
             StorageStub,
+            .overwrite,
             &bc_storage,
             bytes,
         );
@@ -852,6 +917,7 @@ test "serialize with culled_component_types config can be deserialized by other 
 
         try deserialize(
             StorageStub,
+            .overwrite,
             &ac_storage,
             bytes,
         );
@@ -900,6 +966,7 @@ test "serialize with culled_component_types config can be deserialized by other 
 
         try deserialize(
             StorageStub,
+            .overwrite,
             &ab_storage,
             bytes,
         );
@@ -948,6 +1015,7 @@ test "serialize with culled_component_types config can be deserialized by other 
 
         try deserialize(
             StorageStub,
+            .overwrite,
             &b_storage,
             bytes,
         );
@@ -1014,7 +1082,7 @@ test "serialize Storage A into Storage AB works" {
     var to_storage = try StorageAB.init(std.testing.allocator);
     defer to_storage.deinit();
 
-    try deserialize(StorageAB, &to_storage, bytes);
+    try deserialize(StorageAB, .overwrite, &to_storage, bytes);
 
     for (&a_entities_0, 0..) |entity, entity_id| {
         try testing.expectEqual(entity_id, entity.id);
@@ -1069,7 +1137,7 @@ test "serialize Storage B into Storage AB works" {
     var to_storage = try StorageAB.init(std.testing.allocator);
     defer to_storage.deinit();
 
-    try deserialize(StorageAB, &to_storage, bytes);
+    try deserialize(StorageAB, .overwrite, &to_storage, bytes);
 
     for (&b_entities_0, 0..) |entity, entity_id| {
         try testing.expectEqual(entity_id, entity.id);
@@ -1088,7 +1156,7 @@ test "serialize Storage B into Storage AB works" {
     }
 }
 
-test "serialize and deserialize deleted emtities into works" {
+test "serialize and deserialize deleted entities works" {
     var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
 
@@ -1125,7 +1193,7 @@ test "serialize and deserialize deleted emtities into works" {
     const bytes = try serialize(std.testing.allocator, StorageStub, storage, .{});
     defer std.testing.allocator.free(bytes);
 
-    try deserialize(StorageStub, &storage, bytes);
+    try deserialize(StorageStub, .overwrite, &storage, bytes);
 
     for (&entities, 0..) |entity, entity_id| {
         if (entity_id < 100 or entity_id >= 150) {
@@ -1142,5 +1210,55 @@ test "serialize and deserialize deleted emtities into works" {
             try testing.expect(storage.hasComponents(entity, .{Testing.Component.B}) == false);
             try testing.expect(storage.hasComponents(entity, .{Testing.Component.E}) == false);
         }
+    }
+}
+
+test "append works" {
+    var main_storage = try StorageStub.init(std.testing.allocator);
+    defer main_storage.deinit();
+
+    var entities: [200]Entity = undefined;
+    for (&entities, 0..) |*entity, index| {
+        entity.* = try main_storage.createEntity(.{
+            Testing.Component.A{ .value = @intCast(index) },
+            Testing.Component.B{ .value = @intCast(index) },
+            Testing.Component.E{ .two = @intCast(index) },
+        });
+    }
+
+    var src_storage = try StorageStub.init(std.testing.allocator);
+    defer src_storage.deinit();
+
+    const append_a_value = 0xBEEFBEEF;
+    _ = try src_storage.createEntity(.{
+        Testing.Component.A{ .value = append_a_value },
+    });
+
+    const bytes = try serialize(std.testing.allocator, StorageStub, src_storage, .{});
+    defer std.testing.allocator.free(bytes);
+
+    const append_count = 200;
+    for (0..append_count) |_| {
+        try deserialize(StorageStub, .append, &main_storage, bytes);
+    }
+
+    for (&entities, 0..) |entity, entity_id| {
+        const abe = main_storage.getComponents(entity, struct {
+            a: Testing.Component.A,
+            b: Testing.Component.B,
+            e: Testing.Component.E,
+        }).?;
+        try testing.expectEqual(Testing.Component.A{ .value = @intCast(entity_id) }, abe.a);
+        try testing.expectEqual(Testing.Component.B{ .value = @intCast(entity_id) }, abe.b);
+        try testing.expectEqual(Testing.Component.E{ .two = @intCast(entity_id) }, abe.e);
+    }
+
+    // Assumption: entity ids are incremental
+    const last_entity_id = entities[entities.len - 1].id + 1;
+    for (last_entity_id..last_entity_id + append_count) |appended_entity_id| {
+        const entity_a = main_storage.getComponents(Entity{ .id = @intCast(appended_entity_id) }, struct {
+            a: Testing.Component.A,
+        }).?;
+        try testing.expectEqual(Testing.Component.A{ .value = append_a_value }, entity_a.a);
     }
 }
