@@ -1262,3 +1262,54 @@ test "append works" {
         try testing.expectEqual(Testing.Component.A{ .value = append_a_value }, entity_a.a);
     }
 }
+
+test "reproducer: dense state remain intact" {
+    var src_storage = try StorageStub.init(std.testing.allocator);
+    defer src_storage.deinit();
+
+    var entities: [100]Entity = undefined;
+    for (&entities, 0..) |*entity, index| {
+        entity.* = try src_storage.createEntity(.{Testing.Component.A{ .value = @intCast(index) }});
+    }
+
+    const bytes = try serialize(
+        testing.allocator,
+        StorageStub,
+        src_storage,
+        .{},
+    );
+    defer testing.allocator.free(bytes);
+
+    var dst_storage = try StorageStub.init(std.testing.allocator);
+    defer dst_storage.deinit();
+
+    try deserialize(
+        StorageStub,
+        .overwrite,
+        &dst_storage,
+        bytes,
+    );
+
+    dst_storage.unsetComponents(entities[50], .{
+        Testing.Component.A,
+    });
+
+    try dst_storage.setComponents(
+        entities[50],
+        .{Testing.Component.A{ .value = 50 }},
+    );
+
+    for (entities[0..50], 0..) |entity, index| {
+        try testing.expectEqual(
+            Testing.Component.A{ .value = @intCast(index) },
+            dst_storage.getComponent(entity, Testing.Component.A).?,
+        );
+    }
+
+    for (entities[51..100], 51..) |entity, index| {
+        try testing.expectEqual(
+            Testing.Component.A{ .value = @intCast(index) },
+            dst_storage.getComponent(entity, Testing.Component.A).?,
+        );
+    }
+}
