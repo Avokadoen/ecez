@@ -1,6 +1,7 @@
 const entity_type = @import("entity_type.zig");
 const scheduler = @import("scheduler.zig");
 const query = @import("query.zig");
+const storage = @import("storage.zig");
 
 /// Ecez's entity type. Use this to apply changes to an entity that exist in a given storage.
 pub const Entity = entity_type.Entity;
@@ -9,7 +10,7 @@ pub const Entity = entity_type.Entity;
 pub const EntityId = entity_type.EntityId;
 
 /// Use this function to create the ecs storage type
-pub const CreateStorage = @import("storage.zig").CreateStorage;
+pub const CreateStorage = storage.CreateStorage;
 
 /// Use this function to create the ecs query type
 pub const Query = query.Query;
@@ -28,6 +29,11 @@ pub const Event = scheduler.Event;
 
 /// Ezby can be used to serialize and deserialize storages
 pub const ezby = @import("ezby.zig");
+
+/// Utility functions to perform compile time reflections on components and storage
+/// This may or may not be useful to you
+pub const StorageCompileReflect = storage.CompileReflect;
+
 
 test {
     _ = @import("dependency_chain.zig");
