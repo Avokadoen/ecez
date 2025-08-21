@@ -352,8 +352,9 @@ pub fn deserialize(
 
                                     // Offset each entry by pre-existing dense entries
                                     for (sparse_set.sparse[sparse_begin..sparse_end]) |*sparse| {
-                                        if (sparse.* != set.Sparse.not_set)
+                                        if (sparse.* != set.Sparse.not_set) {
                                             sparse.* += dense_set.dense_len;
+                                        }
                                     }
                                 }
 
@@ -364,6 +365,13 @@ pub fn deserialize(
                                 const dense_end = dense_begin + component_data.len;
                                 @memcpy(dense_set.dense[dense_begin..dense_end], component_data);
                                 dense_set.dense_len += comp.dense_count;
+
+                                // restore internal sparse_index slice in the dense set
+                                for (sparse_set.sparse[0..sparse_set.sparse_len], 0..) |dense_index, sparse_index| {
+                                    if (dense_index != set.Sparse.not_set) {
+                                        dense_set.sparse_index[dense_index] = @intCast(sparse_index);
+                                    }
+                                }
                             } else {
                                 // Set tag sparse bits
 
@@ -392,6 +400,13 @@ pub fn deserialize(
                                 const component_data = std.mem.bytesAsSlice(Component, component_bytes);
                                 try dense_set.grow(storage.allocator, component_bytes.len);
                                 @memcpy(dense_set.dense[0..component_data.len], component_data);
+
+                                // restore internal sparse_index slice in the dense set
+                                for (sparse_set.sparse[0..sparse_set.sparse_len], 0..) |dense_index, sparse_index| {
+                                    if (dense_index != set.Sparse.not_set) {
+                                        dense_set.sparse_index[dense_index] = @intCast(sparse_index);
+                                    }
+                                }
                             } else {
                                 // Set tag sparse bits
                                 @memcpy(sparse_set.sparse_bits[0..entity_ids.len], entity_ids);
