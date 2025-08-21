@@ -1,12 +1,10 @@
 const std = @import("std");
 
 /// Generate documentation if the user requests it
-pub fn doc(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
+pub fn doc(b: *std.Build, ecez_module: *std.Build.Module) void {
     const autodoc_test = b.addObject(.{
         .name = "ecez",
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = ecez_module,
     });
     const install_doc = b.addInstallDirectory(.{
         .source_dir = autodoc_test.getEmittedDocs(),
@@ -75,9 +73,7 @@ pub fn build(b: *std.Build) void {
     {
         const root_tests = b.addTest(.{
             .name = "root_tests",
-            .root_source_file = root_path,
-            .target = target,
-            .optimize = optimize,
+            .root_module = ecez_module,
         });
 
         root_tests.root_module.addImport("ecez", ecez_module);
@@ -88,12 +84,11 @@ pub fn build(b: *std.Build) void {
     }
 
     // generate documentation on demand
-    doc(b, target, optimize);
+    doc(b, ecez_module);
 
     // add library tests to the root tests
     const root_tests = b.addTest(.{
-        .root_source_file = root_path,
-        .optimize = optimize,
+        .root_module = ecez_module,
     });
 
     root_tests.root_module.addImport("ecez", ecez_module);
@@ -113,11 +108,14 @@ pub fn build(b: *std.Build) void {
         .{ .name = "readme" },
     }) |example| {
         const path = b.path("examples/" ++ example.name ++ "/main.zig");
+        const example_module = b.createModule(.{
+            .root_source_file = path,
+            .optimize = optimize,
+            .target = target,
+        });
         const exe = b.addExecutable(.{
             .name = example.name,
-            .root_source_file = path,
-            .target = target,
-            .optimize = optimize,
+            .root_module = example_module,
         });
 
         exe.root_module.addImport("ecez", ecez_module);
@@ -133,9 +131,7 @@ pub fn build(b: *std.Build) void {
 
         // add any tests that are define inside each example
         const example_tests = b.addTest(.{
-            .root_source_file = path,
-            .target = target,
-            .optimize = optimize,
+            .root_module = example_module,
         });
 
         example_tests.root_module.addImport("ecez", ecez_module);
