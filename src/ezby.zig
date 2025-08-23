@@ -1329,3 +1329,43 @@ test "reproducer: dense state remain intact" {
         );
     }
 }
+
+test "append unaligned tag components works" {
+    var src_storage = try StorageStub.init(std.testing.allocator);
+    defer src_storage.deinit();
+
+    const data_0 = Testing.Structure.ABC{
+        .a = .{ .value = 0 },
+        .b = .{ .value = 0 },
+        .c = .{},
+    };
+    const data_1 = Testing.Structure.ABC{
+        .a = .{ .value = 1 },
+        .b = .{ .value = 1 },
+        .c = .{},
+    };
+    const e_0 = try src_storage.createEntity(data_0);
+    const e_1 = try src_storage.createEntity(data_1);
+
+    const ezby_bytes = try serialize(testing.allocator, StorageStub, src_storage, .{});
+    defer testing.allocator.free(ezby_bytes);
+
+    try deserialize(StorageStub, .append, &src_storage, ezby_bytes);
+
+    try testing.expectEqual(
+        src_storage.getComponents(e_0, Testing.Structure.ABC).?,
+        data_0,
+    );
+    try testing.expectEqual(
+        src_storage.getComponents(e_1, Testing.Structure.ABC).?,
+        data_1,
+    );
+    try testing.expectEqual(
+        src_storage.getComponents(Entity{ .id = 2 }, Testing.Structure.ABC).?,
+        data_0,
+    );
+    try testing.expectEqual(
+        src_storage.getComponents(Entity{ .id = 3 }, Testing.Structure.ABC).?,
+        data_1,
+    );
+}
