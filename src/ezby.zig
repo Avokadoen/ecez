@@ -382,8 +382,9 @@ pub fn deserialize(
                                 } else {
                                     const sparse_begin = beginning / @bitSizeOf(EntityId);
                                     const sparse_end = sparse_begin + entity_ids.len;
-                                    sparse_set.sparse_bits[sparse_begin] |= entity_ids[0] << @as(std.math.Log2Int(EntityId), @intCast(unaligned_bits));
-                                    @memcpy(sparse_set.sparse_bits[sparse_begin + 1 .. sparse_end], entity_ids);
+                                    const shift = @as(std.math.Log2Int(EntityId), @intCast(unaligned_bits));
+                                    sparse_set.sparse_bits[sparse_begin] &= (entity_ids[0] << shift) | (@as(EntityId, 1) << shift) - 1;
+                                    @memcpy(sparse_set.sparse_bits[sparse_begin + 1 .. sparse_end], entity_ids[1..]);
                                 }
                             }
                         },
