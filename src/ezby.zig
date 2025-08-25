@@ -39,6 +39,10 @@ pub const DeserializeError = error{
     UnexpectedEzbyIdentifier,
     /// major, or minor version was not the same
     VersionMismatch,
+    /// Incomatible component size
+    IncompatibleCompSize,
+    /// Incomatible component alignment
+    IncompatibleCompAlign,
     /// Missing one or more component types from the serializer type
     UnknownComponentType,
 };
@@ -327,8 +331,12 @@ pub fn deserialize(
         inline for (Storage.component_type_array) |Component| {
             const type_hash = comptime hashTypeName(Component);
             if (type_hash == comp.type_name_hash) {
-                std.debug.assert(comp.type_size == @sizeOf(Component));
-                std.debug.assert(comp.type_alignment == @alignOf(Component));
+                if (comp.type_size != @sizeOf(Component)) {
+                    return error.IncompatibleCompSize;
+                }
+                if (comp.type_alignment != @alignOf(Component)) {
+                    return error.IncompatibleCompAlign;
+                }
 
                 if (entity_ids.len > 0) {
                     const extra_grow = if (op == .append) beginning else 0;
