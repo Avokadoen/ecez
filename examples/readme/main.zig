@@ -90,6 +90,9 @@ pub fn main() anyerror!void {
     // We can set components (add or reassign)
     try storage.setComponents(my_living_entity, .{Component.Health{ .value = 50 }});
 
+    // We can get the current number of active entities
+    _ = storage.getNumActiveEntities();
+
     // Using query example:
     {
         var living_iter = try Queries.Living.submit(allocator, &storage);
