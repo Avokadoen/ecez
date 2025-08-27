@@ -278,20 +278,24 @@ pub const DeserializeOp = enum {
     append,
 };
 
+pub const DeserializeConfig = struct {
+    op: DeserializeOp,
+};
+
 /// Deserialize the supplied bytes and insert them into a storage. This function will
 /// clear the storage memory which means that **current storage will be cleared**
 ///
 /// In the event of error, the storage will be empty
 pub fn deserialize(
     comptime Storage: type,
-    comptime op: DeserializeOp,
     storage: *Storage,
     ezby_bytes: []const u8,
+    comptime config: DeserializeConfig,
 ) DeserializeError!void {
     const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.serializer);
     defer zone.End();
 
-    switch (op) {
+    switch (config.op) {
         .overwrite => {
             storage.clearRetainingCapacity();
             errdefer storage.clearRetainingCapacity();
@@ -339,7 +343,7 @@ pub fn deserialize(
                 }
 
                 if (entity_ids.len > 0) {
-                    const extra_grow = if (op == .append) beginning else 0;
+                    const extra_grow = if (config.op == .append) beginning else 0;
                     const sparse_set = storage.getSparseSetPtr(Component);
                     const grow_by = if (@sizeOf(Component) > 0)
                         comp.sparse_count
@@ -347,7 +351,7 @@ pub fn deserialize(
                         comp.sparse_count * @bitSizeOf(EntityId);
                     try sparse_set.grow(storage.allocator, extra_grow + grow_by);
 
-                    switch (op) {
+                    switch (config.op) {
                         .append => {
                             if (@sizeOf(Component) > 0) {
                                 const dense_set = storage.getDenseSetPtr(Component);
@@ -682,9 +686,9 @@ test "serialize and deserialized is idempotent" {
 
     try deserialize(
         StorageStub,
-        .overwrite,
         &storage,
         bytes,
+        .{ .op = .overwrite },
     );
 
     for (a_as, a_entities) |a, a_entity| {
@@ -734,9 +738,9 @@ test "deserialized single entity works" {
 
     try deserialize(
         StorageStub,
-        .overwrite,
         &storage,
         bytes,
+        .{ .op = .overwrite },
     );
 
     try testing.expectEqual(
@@ -805,9 +809,9 @@ test "serialize and deserialized with types of higher alignment works" {
 
     try deserialize(
         TestStorage,
-        .overwrite,
         &storage,
         bytes,
+        .{ .op = .overwrite },
     );
 
     for (a_as, a_entities) |a, a_entity| {
@@ -893,9 +897,9 @@ test "serialize with culled_component_types config can be deserialized by other 
 
         try deserialize(
             StorageStub,
-            .overwrite,
             &bc_storage,
             bytes,
+            .{ .op = .overwrite },
         );
 
         for (a_entities) |a_entity| {
@@ -941,9 +945,9 @@ test "serialize with culled_component_types config can be deserialized by other 
 
         try deserialize(
             StorageStub,
-            .overwrite,
             &ac_storage,
             bytes,
+            .{ .op = .overwrite },
         );
 
         for (a_as, a_entities) |a, a_entity| {
@@ -990,9 +994,9 @@ test "serialize with culled_component_types config can be deserialized by other 
 
         try deserialize(
             StorageStub,
-            .overwrite,
             &ab_storage,
             bytes,
+            .{ .op = .overwrite },
         );
 
         for (a_as, a_entities) |a, a_entity| {
@@ -1039,9 +1043,9 @@ test "serialize with culled_component_types config can be deserialized by other 
 
         try deserialize(
             StorageStub,
-            .overwrite,
             &b_storage,
             bytes,
+            .{ .op = .overwrite },
         );
 
         for (a_entities) |a_entity| {
@@ -1106,7 +1110,7 @@ test "serialize Storage A into Storage AB works" {
     var to_storage = try StorageAB.init(std.testing.allocator);
     defer to_storage.deinit();
 
-    try deserialize(StorageAB, .overwrite, &to_storage, bytes);
+    try deserialize(StorageAB, &to_storage, bytes, .{ .op = .overwrite });
 
     for (&a_entities_0, 0..) |entity, entity_id| {
         try testing.expectEqual(entity_id, entity.id);
@@ -1161,7 +1165,7 @@ test "serialize Storage B into Storage AB works" {
     var to_storage = try StorageAB.init(std.testing.allocator);
     defer to_storage.deinit();
 
-    try deserialize(StorageAB, .overwrite, &to_storage, bytes);
+    try deserialize(StorageAB, &to_storage, bytes, .{ .op = .overwrite });
 
     for (&b_entities_0, 0..) |entity, entity_id| {
         try testing.expectEqual(entity_id, entity.id);
@@ -1217,7 +1221,7 @@ test "serialize and deserialize deleted entities works" {
     const bytes = try serialize(std.testing.allocator, StorageStub, storage, .{});
     defer std.testing.allocator.free(bytes);
 
-    try deserialize(StorageStub, .overwrite, &storage, bytes);
+    try deserialize(StorageStub, &storage, bytes, .{ .op = .overwrite });
 
     for (&entities, 0..) |entity, entity_id| {
         if (entity_id < 100 or entity_id >= 150) {
@@ -1263,7 +1267,7 @@ test "append works" {
 
     const append_count = 200;
     for (0..append_count) |_| {
-        try deserialize(StorageStub, .append, &main_storage, bytes);
+        try deserialize(StorageStub, &main_storage, bytes, .{ .op = .append });
     }
 
     for (&entities, 0..) |entity, entity_id| {
@@ -1309,9 +1313,9 @@ test "reproducer: dense state remain intact" {
 
     try deserialize(
         StorageStub,
-        .overwrite,
         &dst_storage,
         bytes,
+        .{ .op = .overwrite },
     );
 
     dst_storage.unsetComponents(entities[50], .{
@@ -1358,7 +1362,7 @@ test "append unaligned tag components works" {
     const ezby_bytes = try serialize(testing.allocator, StorageStub, src_storage, .{});
     defer testing.allocator.free(ezby_bytes);
 
-    try deserialize(StorageStub, .append, &src_storage, ezby_bytes);
+    try deserialize(StorageStub, &src_storage, ezby_bytes, .{ .op = .append });
 
     try testing.expectEqual(
         src_storage.getComponents(e_0, Testing.Structure.ABC).?,
