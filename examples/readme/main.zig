@@ -105,6 +105,15 @@ pub fn main() anyerror!void {
         }
     }
 
+    // Entities can also be destroyed, unsetting all their components
+    const short_lived_entity = try storage.createEntity(.{Component.Health{ .value = 50 }});
+    try storage.destroyEntity(short_lived_entity);
+
+    // creating a new entity after destroying will recycle the handle
+    const recreated_entity = try storage.createEntity(.{});
+    std.debug.assert(recreated_entity == short_lived_entity);
+    std.debug.assert(storage.hasComponents(recreated_entity, .{Component.Health}) == false);
+
     // You can define subsets of the storage.
     // This is used to track what components systems will read/write
     const StorageSubset = Storage.Subset(
