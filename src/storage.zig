@@ -520,6 +520,18 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             }
         }
 
+        /// Get the current number of active entities.
+        pub fn getNumActiveEntities(self: *Storage) entity_type.EntityId {
+            // Without the lock, there is no way to ensure nothing modifies either the total count or
+            // number of inactive entities inbetween reading one and the other
+            // Un/locking the mutex means self cannot be constant
+            self.inactive_entity_lock.lock();
+            defer self.inactive_entity_lock.unlock();
+
+            // Casting the len to EntityId should be safe, having more inactive entities than can be represented should be impossible
+            return self.created_entity_count.load(.monotonic) - @as(entity_type.EntityId, @intCast(self.inactive_entities.items.len));
+        }
+
         /// Create a SubStorage api. Allows calling createEntity, (un)setComponents, getComponent(s), hasComponents
         /// using types registered in fn SubStorage arg 'components'.
         ///
@@ -1945,4 +1957,20 @@ test "reproducer: Removing component cause storage to become in invalid state" {
         try testing.expectEqual(scale, actual_state.scale);
         try testing.expectEqual(instance_handle, actual_state.instance_handle);
     }
+}
+
+test "getNumActiveEntities() works" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    try testing.expectEqual(storage.getNumActiveEntities(), 0);
+
+    const e_1 = try storage.createEntity(.{});
+    _ = try storage.createEntity(.{});
+
+     try testing.expectEqual(storage.getNumActiveEntities(), 2);
+
+     try storage.destroyEntity(e_1);
+
+     try testing.expectEqual(storage.getNumActiveEntities(), 1);
 }
