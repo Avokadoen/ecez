@@ -476,7 +476,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         /// Parameters:
         ///
         ///     - entity:    the entity to retrieve Component from
-        ///     - Component: Component to fetch from entity. Size of Component must be greater than 0
+        ///     - Component: Component to fetch from entity. If the component is a pointer, its size must be greater than 0
         ///
         /// Hazards:
         ///
@@ -500,14 +500,25 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             );
 
             const component_to_get = CompileReflect.compactComponentRequest(Component);
-            comptime {
-                if (@sizeOf(component_to_get.type) == 0) {
-                    const error_message = std.fmt.comptimePrint("Component size must be greater than 0, @sizeOf({s}) == 0", .{@typeName(component_to_get.type)});
-                    @compileError(error_message);
+            const sparse_set = self.getSparseSetConstPtr(component_to_get.type);
+
+            // handle zero sized components
+            if (@sizeOf(component_to_get.type) == 0) {
+                switch (component_to_get.attr) {
+                    .ptr, .const_ptr => comptime {
+                        const error_message = std.fmt.comptimePrint("Calling getComponent() with a pointer to zero a sized component ({s}) is illegal", .{@typeName(component_to_get.type)});
+                        @compileError(error_message);
+                    },
+                    .value => {
+                        if (sparse_set.isSet(entity.id)) {
+                            return .{};
+                        } else {
+                            return null;
+                        }
+                    },
                 }
             }
 
-            const sparse_set = self.getSparseSetConstPtr(component_to_get.type);
             const dense_set = self.getDenseSetConstPtr(component_to_get.type);
             const get_ptr = set.get(
                 sparse_set,
@@ -1945,4 +1956,26 @@ test "reproducer: Removing component cause storage to become in invalid state" {
         try testing.expectEqual(scale, actual_state.scale);
         try testing.expectEqual(instance_handle, actual_state.instance_handle);
     }
+}
+
+test "zero sized getComponent(s)()" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    const initial_state = Testing.Structure.AC{
+        .a = Testing.Component.A{},
+        .c = Testing.Component.C{},
+    };
+
+    const e_1 = try storage.createEntity(initial_state);
+
+    const c = storage.getComponent(e_1, Testing.Component.C);
+    try std.testing.expectEqual(Testing.Component.C{}, c);
+
+    const a_c = storage.getComponents(e_1, Testing.Structure.AC);
+    try std.testing.expectEqual(initial_state, a_c);
+
+    const e_2 = try storage.createEntity(.{ .a = Testing.Component.A{} });
+    try std.testing.expectEqual(storage.getComponent(e_2, Testing.Component.C), null);
+    try std.testing.expectEqual(storage.getComponents(e_2, Testing.Structure.AC), null);
 }
