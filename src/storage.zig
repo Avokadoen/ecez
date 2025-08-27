@@ -399,7 +399,6 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///
         ///     - entity:    the entity to retrieve Component from
         ///     - Components: a struct type where fields are compoents that that belong to entity.
-        ///                   It's illegal to have field that is pointer to Component of size == 0
         ///
         /// Hazards:
         ///
@@ -450,21 +449,13 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                         .value => @field(result, field.name) = get_ptr.*,
                     }
                 } else {
-                    comptime {
-                        switch (component_to_get.attr) {
-                            .ptr, .const_ptr => {
-                                const error_message = std.fmt.comptimePrint("field '{s}' is a pointer to zero sized component which is illegal", .{field.name});
-                                @compileError(error_message);
-                            },
-                            .value => {},
-                        }
-                    }
-
                     if (sparse_set.isSet(entity.id) == false) {
                         return null;
                     }
-
-                    @field(result, field.name) = component_to_get.type{};
+                    switch (component_to_get.attr) {
+                        .ptr, .const_ptr => @field(result, field.name) = @ptrCast(@constCast(self)),
+                        .value => @field(result, field.name) = component_to_get.type{},
+                    }
                 }
             }
 
@@ -476,7 +467,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         /// Parameters:
         ///
         ///     - entity:    the entity to retrieve Component from
-        ///     - Component: Component to fetch from entity. Size of Component must be greater than 0
+        ///     - Component: Component to fetch from entity
         ///
         /// Hazards:
         ///
@@ -500,23 +491,27 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             );
 
             const component_to_get = CompileReflect.compactComponentRequest(Component);
-            comptime {
-                if (@sizeOf(component_to_get.type) == 0) {
-                    const error_message = std.fmt.comptimePrint("Component size must be greater than 0, @sizeOf({s}) == 0", .{@typeName(component_to_get.type)});
-                    @compileError(error_message);
-                }
-            }
-
             const sparse_set = self.getSparseSetConstPtr(component_to_get.type);
-            const dense_set = self.getDenseSetConstPtr(component_to_get.type);
-            const get_ptr = set.get(
-                sparse_set,
-                dense_set,
-                entity.id,
-            ) orelse return null;
-            switch (component_to_get.attr) {
-                .ptr, .const_ptr => return get_ptr,
-                .value => return get_ptr.*,
+
+            if (@sizeOf(component_to_get.type) > 0) {
+                const dense_set = self.getDenseSetConstPtr(component_to_get.type);
+                const get_ptr = set.get(
+                    sparse_set,
+                    dense_set,
+                    entity.id,
+                ) orelse return null;
+                switch (component_to_get.attr) {
+                    .ptr, .const_ptr => return get_ptr,
+                    .value => return get_ptr.*,
+                }
+            } else {
+                if (!sparse_set.isSet(entity.id)) {
+                    return null;
+                }
+                switch (component_to_get.attr) {
+                    .ptr, .const_ptr => return @ptrCast(@constCast(self)),
+                    .value => return .{},
+                }
             }
         }
 
@@ -1968,9 +1963,46 @@ test "getNumActiveEntities() works" {
     const e_1 = try storage.createEntity(.{});
     _ = try storage.createEntity(.{});
 
-     try testing.expectEqual(storage.getNumActiveEntities(), 2);
+    try testing.expectEqual(storage.getNumActiveEntities(), 2);
 
-     try storage.destroyEntity(e_1);
+    try storage.destroyEntity(e_1);
 
-     try testing.expectEqual(storage.getNumActiveEntities(), 1);
+    try testing.expectEqual(storage.getNumActiveEntities(), 1);
+}
+
+test "getComponent(s)() with zero sized components" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    const initial_state = Testing.Structure.AC{
+        .a = Testing.Component.A{},
+        .c = Testing.Component.C{},
+    };
+
+    // Add this to Testing.zig?
+    const AC_ptr = struct {
+        a: Testing.Component.A,
+        c: *Testing.Component.C,
+    };
+
+    const e_1 = try storage.createEntity(initial_state);
+
+    const c = storage.getComponent(e_1, Testing.Component.C);
+    try std.testing.expectEqual(Testing.Component.C{}, c);
+
+    const c_ptr = storage.getComponent(e_1, *Testing.Component.C);
+    try std.testing.expectEqual(Testing.Component.C{}, c_ptr.?.*);
+
+    const a_c = storage.getComponents(e_1, Testing.Structure.AC);
+    try std.testing.expectEqual(initial_state, a_c);
+
+    const a_c_ptr = storage.getComponents(e_1, AC_ptr);
+    try std.testing.expectEqual(initial_state.a, a_c_ptr.?.a);
+    try std.testing.expectEqual(initial_state.c, a_c_ptr.?.c.*);
+
+    const e_2 = try storage.createEntity(.{ .a = Testing.Component.A{} });
+    try std.testing.expectEqual(storage.getComponent(e_2, Testing.Component.C), null);
+    try std.testing.expectEqual(storage.getComponent(e_2, *Testing.Component.C), null);
+    try std.testing.expectEqual(storage.getComponents(e_2, Testing.Structure.AC), null);
+    try std.testing.expectEqual(storage.getComponents(e_2, AC_ptr), null);
 }
