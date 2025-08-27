@@ -79,7 +79,7 @@ pub fn main() anyerror!void {
         health_organ: Component.HeartOrgan,
     }).?;
 
-    std.debug.assert(storage.hasComponents(my_living_entity, .{Component.Health}) == false);
+    std.debug.assert(storage.hasComponents(my_living_entity, .{Component.Health}));
 
     // You can unset components (remove)
     storage.unsetComponents(my_living_entity, .{Component.Health});
