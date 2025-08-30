@@ -175,10 +175,13 @@ pub fn CreateScheduler(comptime events: anytype) type {
                 };
             };
 
-            self.event_systems_running[event_index].store(
-                system_counts[event_index],
-                .monotonic,
-            );
+            const run_on_main_thread = builtin.single_threaded or self.thread_pool.threads.len == 0 or triggered_event._run_on_main_thread;
+            if (run_on_main_thread == false) {
+                self.event_systems_running[event_index].store(
+                    system_counts[event_index],
+                    .monotonic,
+                );
+            }
 
             const event_dependencies = @field(Dependencies, triggered_event._name);
             // Ensure each runnable is ready to be signaled by previous jobs
@@ -205,23 +208,24 @@ pub fn CreateScheduler(comptime events: anytype) type {
                 };
 
                 const dispatch_exec_func = DispatchJob.exec;
-                if (builtin.single_threaded or self.thread_pool.threads.len == 0 or triggered_event._run_on_main_thread) {
+                if (run_on_main_thread) {
                     @call(.auto, dispatch_exec_func, .{system_job});
-                    return;
+                } else {
+                    @branchHint(.likely);
+                    const closure = try self.thread_pool.allocClosure(
+                        entry_index,
+                        &event_dependencies,
+                        event_system_run_state,
+                        &self.event_systems_running[event_index],
+                        system_job,
+                    );
+
+                    runnable_node.* = &closure.run_node;
                 }
-
-                const closure = try self.thread_pool.allocClosure(
-                    entry_index,
-                    &event_dependencies,
-                    event_system_run_state,
-                    &self.event_systems_running[event_index],
-                    system_job,
-                );
-
-                runnable_node.* = &closure.run_node;
             }
 
-            if (triggered_event._run_on_main_thread == false) {
+            if (run_on_main_thread == false) {
+                @branchHint(.likely);
                 for (event_system_run_state, event_dependencies) |runnable_node, dependency| {
                     self.thread_pool.spawn(
                         dependency,
