@@ -1,20 +1,25 @@
 const std = @import("std");
+const ResetEvent = std.Thread.ResetEvent;
+const testing = std.testing;
 const builtin = @import("builtin");
 
-const ztracy = @import("ecez_ztracy.zig");
-
-const thread_pool_impl = @import("thread_pool.zig");
-const ResetEvent = std.Thread.ResetEvent;
-
+const Color = @import("misc.zig").Color;
+const CreateStorage = @import("storage.zig").CreateStorage;
+const Entity = @import("entity_type.zig").Entity;
+const gen_dependency_chain = @import("dependency_chain.zig");
 const query = @import("query.zig");
 const QueryType = query.QueryType;
 const QueryAnyType = query.QueryAnyType;
 const StorageType = @import("storage.zig").StorageType;
 const SubsetType = @import("storage.zig").SubsetType;
-
-const gen_dependency_chain = @import("dependency_chain.zig");
-
-const Color = @import("misc.zig").Color;
+const Testing = @import("Testing.zig");
+const AbEntityType = Testing.Structure.AB;
+const AcEntityType = Testing.Structure.AC;
+const BcEntityType = Testing.Structure.BC;
+const AbcEntityType = Testing.Structure.ABC;
+const Queries = Testing.Queries;
+const thread_pool_impl = @import("thread_pool.zig");
+const ztracy = @import("ecez_ztracy.zig");
 
 pub const Config = struct {
     /// Used to handle auxiliary memory for thread workers in the thread pool
@@ -538,19 +543,7 @@ pub const CompileReflect = struct {
     }
 };
 
-const Testing = @import("Testing.zig");
-const testing = std.testing;
-
-const CreateStorage = @import("storage.zig").CreateStorage;
-const Entity = @import("entity_type.zig").Entity;
-
-const AbEntityType = Testing.Structure.AB;
-const AcEntityType = Testing.Structure.AC;
-const BcEntityType = Testing.Structure.BC;
-const AbcEntityType = Testing.Structure.ABC;
-
 const StorageStub = CreateStorage(Testing.AllComponentsTuple);
-const Queries = Testing.Queries;
 
 test "system query can mutate components" {
     const QueryTypes = Testing.QueryAndQueryAny(
@@ -1709,5 +1702,58 @@ test "reproducer: Scheduler does not include new components to systems previousl
         // t2: t1 + 1 + 1 + 1 + 1
         // = 6
         try testing.expectEqual(@as(u32, 6), tracker.count);
+    }
+}
+
+// Reproduces an issue with calling waitForEvent on a dispatch to main thread
+test "reproducer: single threaded dispatch with a waitForEvent is idempotent" {
+    inline for (Queries.WriteA, Queries.WriteB) |WriteA, WriteB| {
+        const Systems = struct {
+            pub fn writeA(a_query: *WriteA) void {
+                while (a_query.next()) |item| {
+                    item.a.value += 1;
+                }
+            }
+
+            pub fn writeB(a_query: *WriteB) void {
+                while (a_query.next()) |item| {
+                    item.b.value += 1;
+                }
+            }
+        };
+
+        const RepStorage = CreateStorage(Testing.AllComponentsTuple);
+        const Scheduler = CreateScheduler(.{Event(
+            "on_foo",
+            .{
+                Systems.writeA,
+                Systems.writeB,
+                Systems.writeA,
+            },
+            .{},
+        )});
+
+        var storage = try RepStorage.init(testing.allocator);
+        defer storage.deinit();
+
+        var scheduler = try Scheduler.init(.{
+            .pool_allocator = std.testing.allocator,
+            .query_submit_allocator = std.testing.allocator,
+            .thread_count = 0,
+        });
+        defer scheduler.deinit();
+
+        const inital_state = .{
+            Testing.Component.A{ .value = 0 },
+            Testing.Component.B{ .value = 0 },
+        };
+        const my_entity = try storage.createEntity(inital_state);
+
+        try scheduler.dispatchEvent(&storage, .on_foo, .{});
+        scheduler.waitEvent(.on_foo);
+
+        const final_state = storage.getComponents(my_entity, Testing.Structure.AB).?;
+        try testing.expectEqual(@as(u32, 2), final_state.a.value);
+        try testing.expectEqual(@as(u32, 1), final_state.b.value);
     }
 }
