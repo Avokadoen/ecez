@@ -816,22 +816,30 @@ test "Thread count 0 works" {
                 SystemStruct.decrB,
                 SystemStruct.incrA,
                 SystemStruct.decrA,
+                SystemStruct.incrB,
             },
             .{},
         )}).init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
+            .thread_count = 0,
         });
         defer scheduler.deinit();
 
-        for (0..128) |iter| {
-            _ = try storage.createEntity(.{
+        var entities: [128]Entity = undefined;
+        for (&entities, 0..) |*entity, iter| {
+            entity.* = try storage.createEntity(.{
                 Testing.Component.B{ .value = @intCast(iter) },
             });
         }
 
         try scheduler.dispatchEvent(&storage, .onFoo, .{});
         scheduler.waitEvent(.onFoo);
+
+        for (entities, 0..) |entity, iter| {
+            const b = storage.getComponent(entity, Testing.Component.B).?;
+            try std.testing.expectEqual(Testing.Component.B{ .value = @intCast(iter + 1) }, b);
+        }
     }
 }
 
