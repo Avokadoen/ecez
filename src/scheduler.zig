@@ -202,6 +202,7 @@ pub fn CreateScheduler(comptime events: anytype) type {
                 const dispatch_exec_func = DispatchJob.exec;
                 if (builtin.single_threaded or self.thread_pool.threads.len == 0 or triggered_event._run_on_main_thread) {
                     @call(.auto, dispatch_exec_func, .{system_job});
+                    self.event_systems_running[event_index].store(0, .monotonic);
                     return;
                 }
 
@@ -824,6 +825,7 @@ test "Thread count 0 works" {
         )}).init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
+            .thread_count = 0,
         });
         defer scheduler.deinit();
 
