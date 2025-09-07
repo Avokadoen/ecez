@@ -1,11 +1,12 @@
 .{
     .name = .ecez,
+    .minimum_zig_version = "0.15.1",
     .fingerprint = 0xcf77aa94a064e75f,
-    .version = "0.0.0",
+    .version = "2.3.0",
     .dependencies = .{
         .ztracy = .{
-            .url = "git+https://github.com/avokadoen/ztracy/?ref=0.15.x#2a51f35c5d27b708c315f36beb91fc5b74482a8c",
-            .hash = "ztracy-0.15.0-dev-zHJSq1bvGAAsO4Al0iIyMBvHk-sy2-u_UMvzSyonrSsn",
+            .url = "git+https://github.com/avokadoen/ztracy/?ref=0.12.2#cfa1a61ccdc1b2b80f403259177e5f96af88bd37",
+            .hash = "ztracy-0.14.0-dev-zHJSq8SJGAB2yxA4nVsY8R_x3sI4aXxmKeCBUXwJcY-r",
         },
     },
     .paths = .{
