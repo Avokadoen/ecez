@@ -1,6 +1,6 @@
-const builtin = @import("builtin");
 const std = @import("std");
 const Src = std.builtin.SourceLocation;
+const builtin = @import("builtin");
 
 const ztracy = @import("ztracy");
 

@@ -1,6 +1,7 @@
 const std = @import("std");
 const ResetEvent = std.Thread.ResetEvent;
 const testing = std.testing;
+const ThreadPool = std.Thread.Pool;
 const builtin = @import("builtin");
 
 const Color = @import("misc.zig").Color;
@@ -18,7 +19,6 @@ const AcEntityType = Testing.Structure.AC;
 const BcEntityType = Testing.Structure.BC;
 const AbcEntityType = Testing.Structure.ABC;
 const Queries = Testing.Queries;
-const thread_pool_impl = @import("thread_pool.zig");
 const ztracy = @import("ecez_ztracy.zig");
 
 pub const Config = struct {
@@ -31,12 +31,12 @@ pub const Config = struct {
     query_submit_allocator: std.mem.Allocator,
     /// Override the pool thread count.
     /// By default it will query the current host CPU and use the logical core count.
-    thread_count: ?u32 = null,
+    thread_count: ?usize = null,
 };
 
 /// Allow the user to attach systems to a storage. The user can then trigger events on the scheduler to execute
 /// the systems in a multithreaded environment
-pub fn CreateScheduler(comptime events: anytype) type {
+pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
     const event_count = CompileReflect.countAndVerifyEvents(events);
 
     const system_counts = init_system_count_array_blk: {
@@ -48,51 +48,54 @@ pub fn CreateScheduler(comptime events: anytype) type {
         break :init_system_count_array_blk _system_counts;
     };
 
-    // Store each individual thread_pool_impl.Runnable
-    const ThreadpoolRunnables = comptime blk: {
-        // TODO: move to meta
-        const Type = std.builtin.Type;
-        var fields: [event_count]Type.StructField = undefined;
-        for (&fields, system_counts, 0..) |*field, system_count, i| {
-            const default_value = [_]*thread_pool_impl.RunQueue.Node{undefined} ** system_count;
-            const name = CompileReflect.getRunnablesFieldName(i);
-
-            field.* = Type.StructField{
-                .name = name[0.. :0],
-                .type = [system_count]*thread_pool_impl.RunQueue.Node,
-                .default_value_ptr = @ptrCast(&default_value),
-                .is_comptime = false,
-                .alignment = @alignOf([system_count]*thread_pool_impl.RunQueue.Node),
-            };
-        }
-
-        break :blk @Type(Type{ .@"struct" = Type.Struct{
-            .layout = .auto,
-            .backing_integer = null,
-            .fields = &fields,
-            .decls = &[0]Type.Declaration{},
-            .is_tuple = false,
-        } });
-    };
-
     // Calculate dependencies
-    const Dependencies = CompileReflect.DependencyListsType(events, event_count){};
+    const Dependencies: type = CompileReflect.DependencyListsType(events, event_count);
+
+    // Store each individual thread_pool_impl.Runnable
+    const EventsScheduler: type = CompileReflect.EventSchedulerType(event_count, events, &system_counts, Storage);
+
+    // We need some memory to store the individual system interfaces
+    const SystemSchedulerInterfaceStorage: type = CompileReflect.EventSystemStorageType(
+        event_count,
+        events,
+        &system_counts,
+        SystemSchedulerInterface,
+    );
+
+    // We need some memory to store the individual system pre-req counts
+    const PreReqInflightStorage: type = CompileReflect.EventSystemStorageType(
+        event_count,
+        events,
+        &system_counts,
+        std.atomic.Value(u32),
+    );
 
     return struct {
-        pub const ThreadPool = thread_pool_impl.Create();
-
         const Scheduler = @This();
 
         pub const EventsEnum = CompileReflect.GenerateEventEnum(events);
 
+        pub const uninitialized = Scheduler{
+            .query_submit_allocator = undefined,
+            .thread_pool = undefined,
+            .events_scheduler = undefined,
+            .system_scheduler_interface_storage = undefined,
+            .pre_req_inflight_storage = undefined,
+            .events_systems_running = undefined,
+            .dependencies = undefined,
+        };
+
         query_submit_allocator: std.mem.Allocator,
         thread_pool: *ThreadPool,
 
-        system_run_state: ThreadpoolRunnables,
-        event_systems_running: [event_count]std.atomic.Value(u32),
+        events_scheduler: EventsScheduler,
+        system_scheduler_interface_storage: SystemSchedulerInterfaceStorage,
+        pre_req_inflight_storage: PreReqInflightStorage,
+        events_systems_running: [event_count]std.atomic.Value(u32),
+        dependencies: Dependencies,
 
         /// Initialized the system scheduler. User must make sure to call deinit
-        pub fn init(config: Config) !Scheduler {
+        pub fn init(scheduler: *Scheduler, config: Config) !void {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.scheduler);
             defer zone.End();
 
@@ -104,17 +107,42 @@ pub fn CreateScheduler(comptime events: anytype) type {
                 .n_jobs = config.thread_count,
             });
 
-            return Scheduler{
-                .query_submit_allocator = config.query_submit_allocator,
-                .thread_pool = thread_pool,
-                .system_run_state = ThreadpoolRunnables{},
-                .event_systems_running = [_]std.atomic.Value(u32){.{ .raw = 0 }} ** event_count,
-            };
+            scheduler.query_submit_allocator = config.query_submit_allocator;
+            scheduler.thread_pool = thread_pool;
+            scheduler.dependencies = .{};
+            for (&scheduler.events_systems_running) |*systems_running| {
+                systems_running.* = .init(0);
+            }
+
+            var events_scheduler: *EventsScheduler = &scheduler.events_scheduler;
+            var system_scheduler_interface_storage = &scheduler.system_scheduler_interface_storage;
+            var pre_req_inflight_storage = &scheduler.pre_req_inflight_storage;
+            inline for (@typeInfo(EventsScheduler).@"struct".fields, 0..) |event_field, event_index| {
+                var prereq_jobs_inflights = &@field(pre_req_inflight_storage, event_field.name);
+                var event_scheduler = &@field(events_scheduler, event_field.name);
+                const system_scheduler_interfaces = &@field(system_scheduler_interface_storage, event_field.name);
+                inline for (@typeInfo(event_field.type).@"struct".fields, system_scheduler_interfaces, 0..) |system_field, *system_scheduler_interface, system_index| {
+                    const system_scheduler = &@field(event_scheduler, system_field.name);
+                    system_scheduler.* = .{
+                        .entry_index = system_index,
+                        .system_schedulers = system_scheduler_interfaces,
+                        .prereq_jobs_inflights = prereq_jobs_inflights,
+                        .systems_running = &scheduler.events_systems_running[event_index],
+                        .pool = thread_pool,
+                        .execute_args = undefined, // Assigned in dispatch
+                    };
+
+                    prereq_jobs_inflights[system_index] = .init(0);
+
+                    system_scheduler.execute_args.query_submit_allocator = scheduler.query_submit_allocator;
+                    system_scheduler_interface.* = system_scheduler.systemSchedulerInterface();
+                }
+            }
         }
 
         pub fn deinit(self: *Scheduler) void {
-            self.thread_pool.deinit();
             const allocator = self.thread_pool.allocator;
+            self.thread_pool.deinit();
             allocator.destroy(self.thread_pool);
         }
 
@@ -123,114 +151,73 @@ pub fn CreateScheduler(comptime events: anytype) type {
         /// Parameters:
         ///     - event:            The event enum identifier. When registering an event on Wolrd creation a identifier is
         ///                         submitted.
-        ///     - event_argument:   An event specific argument. Keep in mind that if you submit a pointer as argument data
-        ///                         then the lifetime of the argument must out live the execution of the event.
+        ///     - event_argument:   An event specific argument.
         ///
         /// Example:
         /// ```
-        /// const Scheduler = ecez.CreateScheduler(Storage, .{ecez.Event("onMouse", .{onMouseSystem}, MouseArg)})
+        /// const Scheduler = ecez.CreateScheduler(
+        ///     Storage,
+        ///     .{
+        ///         ecez.Event("onMouse", .{onMouseSystem}, .{ .EventArgument = EventArgument}),
+        ///     },
+        /// );
         /// // ... storage creation etc ...
         /// // trigger mouse handle
         /// try scheduler.dispatchEvent(&storage, .onMouse, @as(MouseArg, mouse));
         /// ```
-        pub fn dispatchEvent(self: *Scheduler, storage: anytype, comptime event: EventsEnum, event_argument: anytype) error{OutOfMemory}!void {
+        pub fn dispatchEvent(self: *Scheduler, storage: *Storage, comptime event: EventsEnum, event_argument: getEventArgumentType(event)) error{OutOfMemory}!void {
             const tracy_zone_name = comptime std.fmt.comptimePrint("dispatchEvent {s}", .{@tagName(event)});
             const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.scheduler);
             defer zone.End();
 
-            const Storage = get_storage_type_blk: {
-                const StoragePtr = @TypeOf(storage);
-                const storage_ptr = @typeInfo(StoragePtr);
-                if (storage_ptr != .pointer) {
-                    @compileError(@src().fn_name ++ " expected argument storage to be pointer to a ecez.Storage, got " ++ @typeName(StoragePtr));
-                }
-
-                const child_type = storage_ptr.pointer.child;
-                const is_storage_type = check_if_storage_type_blk: {
-                    if (@hasDecl(child_type, "EcezType") == false) {
-                        break :check_if_storage_type_blk false;
-                    }
-
-                    if (child_type.EcezType != StorageType) {
-                        break :check_if_storage_type_blk false;
-                    }
-
-                    break :check_if_storage_type_blk true;
-                };
-
-                if (is_storage_type == false) {
-                    @compileError(@src().fn_name ++ " got storage of unkown type " ++ @typeName(@TypeOf(storage)) ++ ", expected *ecez.CreateStorage");
-                }
-
-                break :get_storage_type_blk child_type;
-            };
-
             const event_index = @intFromEnum(event);
-            const event_system_run_state, const triggered_event = extract_event_blk: {
-                const event_field_name = comptime CompileReflect.getRunnablesFieldName(event_index);
+            const triggered_event = events[event_index];
 
-                break :extract_event_blk .{
-                    &@field(self.system_run_state, event_field_name),
-                    events[event_index],
-                };
-            };
-
+            const event_dependencies: []const gen_dependency_chain.Dependency = &@field(self.dependencies, triggered_event._name);
+            const prereq_jobs_inflights = &@field(self.pre_req_inflight_storage, triggered_event._name);
+            const event_scheduler = &@field(self.events_scheduler, triggered_event._name);
             const run_on_main_thread = builtin.single_threaded or self.thread_pool.threads.len == 0 or triggered_event._run_on_main_thread;
             if (run_on_main_thread == false) {
-                self.event_systems_running[event_index].store(
+                @branchHint(.likely);
+
+                self.events_systems_running[event_index].store(
                     system_counts[event_index],
                     .monotonic,
                 );
-            }
 
-            const event_dependencies = @field(Dependencies, triggered_event._name);
-            // Ensure each runnable is ready to be signaled by previous jobs
-            inline for (
-                event_system_run_state,
-                triggered_event._systems,
-                0..,
-            ) |
-                *runnable_node,
-                system,
-                entry_index,
-            | {
-                const DispatchJob = EventDispatchJob(
-                    system,
-                    Storage,
-                    @TypeOf(event_argument),
-                );
-
-                // initialized the system job
-                const system_job = DispatchJob{
-                    .query_submit_allocator = self.query_submit_allocator,
-                    .storage = storage,
-                    .event_argument = event_argument,
-                };
-
-                const dispatch_exec_func = DispatchJob.exec;
-                if (run_on_main_thread) {
-                    @call(.auto, dispatch_exec_func, .{system_job});
-                } else {
-                    @branchHint(.likely);
-                    const closure = try self.thread_pool.allocClosure(
-                        entry_index,
-                        &event_dependencies,
-                        event_system_run_state,
-                        &self.event_systems_running[event_index],
-                        system_job,
-                    );
-
-                    runnable_node.* = &closure.run_node;
+                for (prereq_jobs_inflights, 0..) |*prereq_jobs_inflight, system_index| {
+                    const system_dep_count = event_dependencies[system_index].prereq_count;
+                    prereq_jobs_inflight.store(system_dep_count, .monotonic);
                 }
             }
 
-            if (run_on_main_thread == false) {
+            inline for (event_scheduler) |*system_scheduler| {
+                system_scheduler.execute_args.storage = storage;
+                system_scheduler.execute_args.event_argument = event_argument;
+            }
+
+            // Ensure each runnable is ready to be signaled by previous jobs
+            if (run_on_main_thread) {
+                @branchHint(.unlikely);
+
+                inline for (event_scheduler) |*system_scheduler| {
+                    var opaque_scheduler: *anyopaque = @ptrCast(system_scheduler);
+                    _ = &opaque_scheduler; // silence zig thinking opaque_scheduler is not a var
+
+                    @TypeOf(system_scheduler.*).execute(opaque_scheduler);
+                }
+            } else {
                 @branchHint(.likely);
-                for (event_system_run_state, event_dependencies) |runnable_node, dependency| {
-                    self.thread_pool.spawn(
-                        dependency,
-                        runnable_node,
-                    );
+
+                const event_scheduler_info = @typeInfo(@TypeOf(@field(self.events_scheduler, triggered_event._name)));
+                inline for (event_scheduler, event_scheduler_info.@"struct".fields, 0..) |*system_scheduler, field_info, system_index| {
+                    const system_dep_count = event_dependencies[system_index].prereq_count;
+                    if (system_dep_count == 0) {
+                        var opaque_scheduler: *anyopaque = @ptrCast(system_scheduler);
+                        _ = &opaque_scheduler; // silence zig thinking opaque_scheduler is not a var
+
+                        try self.thread_pool.spawn(field_info.type.schedule, .{ opaque_scheduler, event_dependencies });
+                    }
                 }
             }
         }
@@ -244,7 +231,7 @@ pub fn CreateScheduler(comptime events: anytype) type {
 
             // Spinlock :/
             const event_index = @intFromEnum(event);
-            while (self.event_systems_running[event_index].load(.monotonic) > 0) {}
+            while (self.events_systems_running[event_index].load(.monotonic) > 0) {}
         }
 
         /// Check if an event is currently being executed
@@ -255,7 +242,7 @@ pub fn CreateScheduler(comptime events: anytype) type {
             defer zone.End();
 
             const event_index = @intFromEnum(event);
-            return self.event_systems_running[event_index].load(.monotonic) > 0;
+            return self.events_systems_running[event_index].load(.monotonic) > 0;
         }
 
         /// Force the storage to flush all current in flight jobs before continuing
@@ -276,81 +263,158 @@ pub fn CreateScheduler(comptime events: anytype) type {
 
             const event_index = @intFromEnum(event);
             const triggered_event = events[event_index];
-            const event_dependencies = @field(Dependencies, triggered_event._name);
+            const event_dependencies = @field(Dependencies{}, triggered_event._name);
             return &event_dependencies;
         }
 
-        fn EventDispatchJob(
-            comptime func: anytype,
-            comptime Storage: type,
-            comptime EventArgument: type,
-        ) type {
-            return struct {
-                const DispatchJob = @This();
+        pub fn getEventArgumentType(comptime event: EventsEnum) type {
+            if (@inComptime() == false) {
+                @compileError(@src().fn_name ++ " should be called in comptime only");
+            }
 
-                event_argument: EventArgument,
-                query_submit_allocator: std.mem.Allocator,
-                storage: *Storage,
+            const event_index = @intFromEnum(event);
+            const triggered_event = events[event_index];
+            return triggered_event._EventArgument;
+        }
+    };
+}
 
-                pub fn exec(self_job: DispatchJob) void {
-                    const FuncType = @TypeOf(func);
-                    const param_types = comptime get_param_types_blk: {
-                        const func_info = @typeInfo(FuncType);
-                        var types: [func_info.@"fn".params.len]type = undefined;
-                        for (&types, func_info.@"fn".params) |*Type, param| {
-                            Type.* = param.type.?;
-                        }
+const SystemSchedulerInterface = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
 
-                        break :get_param_types_blk types;
-                    };
+    const VTable = struct {
+        schedule: *const fn (*anyopaque, dependencies: []const gen_dependency_chain.Dependency) void,
+        execute: *const fn (*anyopaque) void,
+    };
 
-                    var arguments: std.meta.Tuple(&param_types) = undefined;
-                    inline for (param_types, &arguments) |Param, *argument| {
-                        var arg = get_arg_blk: {
-                            if (Param == EventArgument) {
-                                break :get_arg_blk self_job.event_argument;
-                            }
+    pub fn schedule(scheduler: SystemSchedulerInterface, dependencies: []const gen_dependency_chain.Dependency) void {
+        scheduler.vtable.schedule(scheduler.ptr, dependencies);
+    }
 
-                            const param_info = @typeInfo(Param);
-                            if (param_info != .pointer) {
-                                @compileError("System Query and Subset arguments must be pointer type");
-                            }
+    pub fn execute(scheduler: SystemSchedulerInterface) void {
+        scheduler.vtable.execute(scheduler.ptr);
+    }
+};
 
-                            break :get_arg_blk switch (param_info.pointer.child.EcezType) {
-                                // TODO: scheduler should have an allocator for this
-                                QueryType => param_info.pointer.child.submit(self_job.query_submit_allocator, self_job.storage) catch @panic("Scheduler dispatch query_submit_allocator OOM"),
-                                QueryAnyType => param_info.pointer.child.prepare(self_job.storage),
-                                SubsetType => param_info.pointer.child{ .storage = self_job.storage },
-                                else => |Type| @compileError("Unknown EcezType " ++ @typeName(Type)), // This is a ecez bug if hit (i.e not user error)
-                            };
-                        };
+fn SystemScheduler(
+    comptime func: anytype,
+    comptime Storage: type,
+    comptime EventArgument: type,
+) type {
+    return struct {
+        pub const Index = u32;
 
-                        // TODO: store all queries on self_job struct to ensure lifetime
-                        if (Param == EventArgument) {
-                            argument.* = self_job.event_argument;
-                        } else {
-                            argument.* = &arg;
-                        }
-                    }
+        pub const SystemExecute = struct {
+            event_argument: EventArgument,
+            query_submit_allocator: std.mem.Allocator,
+            storage: *Storage,
+        };
 
-                    // if this is a debug build we do not want inline (to get better error messages), otherwise inline systems for performance
-                    const system_call_modidifer: std.builtin.CallModifier = if (@import("builtin").mode == .Debug) .never_inline else .auto;
-                    @call(system_call_modidifer, func, arguments);
+        entry_index: Index,
+        system_schedulers: []SystemSchedulerInterface,
+        prereq_jobs_inflights: []std.atomic.Value(u32),
+        systems_running: *std.atomic.Value(u32),
 
-                    inline for (param_types, &arguments) |Param, *arg| {
-                        if (Param == EventArgument) {
-                            continue;
-                        }
+        pool: *ThreadPool,
 
-                        const param_info = @typeInfo(Param);
+        execute_args: SystemExecute,
 
-                        switch (param_info.pointer.child.EcezType) {
-                            QueryType => arg.*.deinit(self_job.query_submit_allocator),
-                            else => {},
-                        }
-                    }
-                }
+        pub fn systemSchedulerInterface(self: *@This()) SystemSchedulerInterface {
+            return SystemSchedulerInterface{
+                .ptr = @ptrCast(self),
+                .vtable = &.{
+                    .schedule = schedule,
+                    .execute = execute,
+                },
             };
+        }
+
+        pub fn schedule(ctx: *anyopaque, dependencies: []const gen_dependency_chain.Dependency) void {
+            const thread_zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.scheduler);
+            defer thread_zone.End();
+
+            const system_scheduler: *@This() = @ptrCast(@alignCast(ctx));
+
+            // Launch system
+            execute(ctx);
+
+            // Decrement schedulers "system in-flight" count
+            _ = system_scheduler.systems_running.fetchSub(1, .acq_rel);
+
+            // Once done, loop all systems that depend on this system
+            const signal_indices = dependencies[system_scheduler.entry_index].signal_indices;
+            const other_event_schedulers = system_scheduler.system_schedulers;
+            for (signal_indices) |signal_index| {
+                // Decrement blocking prerequisites count for these systems
+                const blocking_count = system_scheduler.prereq_jobs_inflights[signal_index].fetchSub(1, .monotonic);
+                if (blocking_count == 1) {
+                    // Schedule depending systems that are no longer blocked
+                    system_scheduler.pool.spawn(
+                        SystemSchedulerInterface.schedule,
+                        .{ other_event_schedulers[signal_index], dependencies },
+                    ) catch @panic("failed to spawn system");
+                }
+            }
+        }
+
+        pub fn execute(ctx: *anyopaque) void {
+            const system_scheduler: *@This() = @ptrCast(@alignCast(ctx));
+            const execute_args = &system_scheduler.execute_args;
+            const FuncType = @TypeOf(func);
+            const param_types = comptime get_param_types_blk: {
+                const func_info = @typeInfo(FuncType);
+                var types: [func_info.@"fn".params.len]type = undefined;
+                for (&types, func_info.@"fn".params) |*Type, param| {
+                    Type.* = param.type.?;
+                }
+
+                break :get_param_types_blk types;
+            };
+
+            var arguments: std.meta.Tuple(&param_types) = undefined;
+            inline for (param_types, &arguments) |Param, *argument| {
+                var arg = get_arg_blk: {
+                    if (Param == EventArgument) {
+                        break :get_arg_blk execute_args.event_argument;
+                    }
+
+                    const param_info = @typeInfo(Param);
+                    if (param_info != .pointer) {
+                        @compileError("System Query and Subset arguments must be pointer type");
+                    }
+
+                    break :get_arg_blk switch (param_info.pointer.child.EcezType) {
+                        QueryType => param_info.pointer.child.submit(execute_args.query_submit_allocator, execute_args.storage) catch @panic("Scheduler dispatch query_submit_allocator OOM"),
+                        QueryAnyType => param_info.pointer.child.prepare(execute_args.storage),
+                        SubsetType => param_info.pointer.child{ .storage = execute_args.storage },
+                        else => |Type| @compileError("Unknown EcezType " ++ @typeName(Type)), // This is a ecez bug if hit (i.e not user error)
+                    };
+                };
+
+                if (Param == EventArgument) {
+                    argument.* = execute_args.event_argument;
+                } else {
+                    argument.* = &arg;
+                }
+            }
+
+            // if this is a debug build we do not want inline (to get better error messages), otherwise inline systems for performance
+            const system_call_modidifer: std.builtin.CallModifier = if (@import("builtin").mode == .Debug) .never_inline else .auto;
+            @call(system_call_modidifer, func, arguments);
+
+            // For each system argument, make sure to deinitialize any queries produced by system dispatch
+            inline for (param_types, &arguments) |Param, *arg| {
+                if (Param == EventArgument) {
+                    continue;
+                }
+
+                const param_info = @typeInfo(Param);
+                switch (param_info.pointer.child.EcezType) {
+                    QueryType => arg.*.deinit(execute_args.query_submit_allocator),
+                    else => {},
+                }
+            }
         }
     };
 }
@@ -358,6 +422,7 @@ pub fn CreateScheduler(comptime events: anytype) type {
 pub const EventType = struct {};
 
 pub const EventConfig = struct {
+    EventArgument: type = void,
     run_on_main_thread: bool = false,
 };
 
@@ -385,6 +450,7 @@ pub fn Event(comptime name: []const u8, comptime systems: anytype, comptime conf
         pub const _name = name;
         pub const _systems = systems;
         pub const _run_on_main_thread = config.run_on_main_thread;
+        pub const _EventArgument = config.EventArgument;
 
         // TODO: validate given a storage
         pub fn getSystemCount() u32 {
@@ -405,7 +471,7 @@ pub fn Event(comptime name: []const u8, comptime systems: anytype, comptime conf
 
 // TODO: move scheduler and dependency_chain to same folder. Move this logic in this folder out of this file
 pub const CompileReflect = struct {
-    pub inline fn getRunnablesFieldName(comptime index: u32) []const u8 {
+    pub inline fn getTupleFieldName(comptime index: u32) []const u8 {
         var num_buf: [8:0]u8 = undefined;
         const name = std.fmt.bufPrint(&num_buf, "{d}", .{index}) catch unreachable;
         num_buf[name.len] = 0;
@@ -533,7 +599,7 @@ pub const CompileReflect = struct {
                 .name = event._name[0.. :0],
                 .type = DependecyArrayType,
                 .default_value_ptr = @ptrCast(&value),
-                .is_comptime = true,
+                .is_comptime = false,
                 .alignment = @alignOf(DependecyArrayType),
             };
         }
@@ -542,6 +608,85 @@ pub const CompileReflect = struct {
             .layout = .auto,
             .fields = &dependency_lists_type_fields,
             .decls = &[_]std.builtin.Type.Declaration{},
+            .is_tuple = false,
+        } });
+    }
+
+    pub fn EventSchedulerType(
+        comptime event_count: u32,
+        comptime events: anytype,
+        comptime system_counts: []const u32,
+        comptime Storage: type,
+    ) type {
+        const Type = std.builtin.Type;
+        var fields: [event_count]Type.StructField = undefined;
+        for (&fields, events, system_counts) |*field, event, system_count| {
+            var event_fields: [system_count]Type.StructField = undefined;
+            for (&event_fields, event._systems, 0..) |*event_field, system, system_index| {
+                const field_name = CompileReflect.getTupleFieldName(system_index);
+                const FieldType = SystemScheduler(
+                    system,
+                    Storage,
+                    event._EventArgument,
+                );
+                event_field.* = Type.StructField{
+                    .name = field_name[0.. :0],
+                    .type = FieldType,
+                    .default_value_ptr = null,
+                    .is_comptime = false,
+                    .alignment = @alignOf(FieldType),
+                };
+            }
+
+            const EventSystemContainer = @Type(Type{ .@"struct" = Type.Struct{
+                .layout = .auto,
+                .backing_integer = null,
+                .fields = &event_fields,
+                .decls = &[0]Type.Declaration{},
+                .is_tuple = true,
+            } });
+            field.* = Type.StructField{
+                .name = event._name[0.. :0],
+                .type = EventSystemContainer,
+                .default_value_ptr = null,
+                .is_comptime = false,
+                .alignment = @alignOf(EventSystemContainer),
+            };
+        }
+
+        return @Type(Type{ .@"struct" = Type.Struct{
+            .layout = .auto,
+            .backing_integer = null,
+            .fields = &fields,
+            .decls = &[0]Type.Declaration{},
+            .is_tuple = false,
+        } });
+    }
+
+    pub fn EventSystemStorageType(
+        comptime event_count: u32,
+        comptime events: anytype,
+        comptime system_counts: []const u32,
+        comptime StoreType: type,
+    ) type {
+        const Type = std.builtin.Type;
+        var fields: [event_count]Type.StructField = undefined;
+        for (&fields, events, system_counts) |*field, event, system_count| {
+            const FieldType = [system_count]StoreType;
+            field.* = Type.StructField{
+                .name = event._name[0.. :0],
+                .type = FieldType,
+                .default_value_ptr = null,
+                .is_comptime = false,
+                .alignment = @alignOf(FieldType),
+            };
+        }
+
+        return @Type(Type{ .@"struct" = Type.Struct{
+            .layout = .auto,
+            .backing_integer = null,
+            .fields = &fields,
+            .decls = &[0]Type.Declaration{},
             .is_tuple = false,
         } });
     }
@@ -577,13 +722,15 @@ test "system query can mutate components" {
             .{},
         );
 
-        var scheduler = try CreateScheduler(.{OnFooEvent}).init(.{
+        var scheduler = CreateScheduler(StorageStub, .{OnFooEvent}).uninitialized;
+
+        try scheduler.init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
         });
         defer scheduler.deinit();
 
-        try scheduler.dispatchEvent(&storage, .onFoo, .{});
+        try scheduler.dispatchEvent(&storage, .onFoo, {});
         scheduler.waitEvent(.onFoo);
 
         const initial_state = AbEntityType{
@@ -592,67 +739,13 @@ test "system query can mutate components" {
         };
         const entity = try storage.createEntity(initial_state);
 
-        try scheduler.dispatchEvent(&storage, .onFoo, .{});
+        try scheduler.dispatchEvent(&storage, .onFoo, {});
         scheduler.waitEvent(.onFoo);
 
         try testing.expectEqual(
             Testing.Component.A{ .value = 3 },
             storage.getComponent(entity, Testing.Component.A).?,
         );
-    }
-}
-
-test "scheduler can be used for multiple storage types" {
-    const QueryTypes = Testing.QueryAndQueryAny(
-        struct {
-            a: *Testing.Component.A,
-            b: Testing.Component.B,
-        },
-        .{},
-        .{},
-    );
-
-    const StorageAC = CreateStorage(.{ Testing.Component.A, Testing.Component.B });
-    inline for (QueryTypes) |Query| {
-        const SystemStruct = struct {
-            pub fn mutateStuff(ab: *Query) void {
-                while (ab.next()) |ent_ab| {
-                    ent_ab.a.value += ent_ab.b.value;
-                }
-            }
-        };
-
-        const OnFooEvent = Event(
-            "onFoo",
-            .{SystemStruct.mutateStuff},
-            .{},
-        );
-        var scheduler = try CreateScheduler(.{OnFooEvent}).init(.{
-            .pool_allocator = std.testing.allocator,
-            .query_submit_allocator = std.testing.allocator,
-        });
-        defer scheduler.deinit();
-
-        inline for (0..2) |storage_type_index| {
-            const Storage = if (storage_type_index == 0) StorageStub else StorageAC;
-
-            var storage = try Storage.init(testing.allocator);
-            defer storage.deinit();
-
-            const initial_state = AbEntityType{
-                .a = Testing.Component.A{ .value = 1 },
-                .b = Testing.Component.B{ .value = 2 },
-            };
-            const entity = try storage.createEntity(initial_state);
-
-            try scheduler.dispatchEvent(&storage, .onFoo, .{});
-            scheduler.waitEvent(.onFoo);
-
-            try testing.expectEqual(
-                Testing.Component.A{ .value = 3 },
-                storage.getComponent(entity, Testing.Component.A).?,
-            );
-        }
     }
 }
 
@@ -680,18 +773,6 @@ test "system SubStorage can spawn new entites (and no race hazards)" {
                 }
             }
 
-            pub fn incrA(a_query: *WriteA) void {
-                while (a_query.next()) |item| {
-                    item.a.value += 1;
-                }
-            }
-
-            pub fn decrA(a_query: *WriteA) void {
-                while (a_query.next()) |item| {
-                    item.a.value -= 1;
-                }
-            }
-
             pub fn spawnEntityAFromB(b_query: *ReadB, a_sub: *SubsetA, spawned_entities: *SpawnedEntities) void {
                 for (&spawned_entities.a) |*entity| {
                     const item = b_query.next().?;
@@ -713,12 +794,24 @@ test "system SubStorage can spawn new entites (and no race hazards)" {
                     }) catch @panic("OOM");
                 }
             }
+
+            pub fn incrA(a_query: *WriteA) void {
+                while (a_query.next()) |item| {
+                    item.a.value += 1;
+                }
+            }
+
+            pub fn decrA(a_query: *WriteA) void {
+                while (a_query.next()) |item| {
+                    item.a.value -= 1;
+                }
+            }
         };
 
         var storage = try StorageStub.init(testing.allocator);
         defer storage.deinit();
 
-        var scheduler = try CreateScheduler(.{Event(
+        var scheduler = CreateScheduler(StorageStub, .{Event(
             "onFoo",
             .{
                 SystemStruct.incrB,
@@ -728,15 +821,19 @@ test "system SubStorage can spawn new entites (and no race hazards)" {
                 SystemStruct.incrA,
                 SystemStruct.decrA,
             },
-            .{},
-        )}).init(.{
+            .{
+                .EventArgument = *SpawnedEntities,
+            },
+        )}).uninitialized;
+
+        try scheduler.init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
         });
         defer scheduler.deinit();
 
         // Do this test repeatedly to ensure it's determenistic (no race hazards)
-        for (0..128) |_| {
+        for (0..256) |_| {
             storage.clearRetainingCapacity();
 
             var initial_entites: [initial_entity_count]Entity = undefined;
@@ -809,7 +906,7 @@ test "Thread count 0 works" {
         var storage = try StorageStub.init(testing.allocator);
         defer storage.deinit();
 
-        var scheduler = try CreateScheduler(.{Event(
+        var scheduler = CreateScheduler(StorageStub, .{Event(
             "onFoo",
             .{
                 SystemStruct.incrB,
@@ -819,7 +916,9 @@ test "Thread count 0 works" {
                 SystemStruct.incrB,
             },
             .{},
-        )}).init(.{
+        )}).uninitialized;
+
+        try scheduler.init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
             .thread_count = 0,
@@ -833,7 +932,7 @@ test "Thread count 0 works" {
             });
         }
 
-        try scheduler.dispatchEvent(&storage, .onFoo, .{});
+        try scheduler.dispatchEvent(&storage, .onFoo, {});
         scheduler.waitEvent(.onFoo);
 
         for (entities, 0..) |entity, iter| {
@@ -864,17 +963,19 @@ test "system sub storage can mutate components" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = try CreateScheduler(.{Event(
+    var scheduler = CreateScheduler(StorageStub, .{Event(
         "onFoo",
         .{SystemStruct.mutateStuff},
         .{},
-    )}).init(.{
+    )}).uninitialized;
+
+    try scheduler.init(.{
         .pool_allocator = std.testing.allocator,
         .query_submit_allocator = std.testing.allocator,
     });
     defer scheduler.deinit();
 
-    try scheduler.dispatchEvent(&storage, .onFoo, .{});
+    try scheduler.dispatchEvent(&storage, .onFoo, {});
     scheduler.waitEvent(.onFoo);
 
     const initial_state = AbEntityType{
@@ -882,7 +983,7 @@ test "system sub storage can mutate components" {
     };
     const entity = try storage.createEntity(initial_state);
 
-    try scheduler.dispatchEvent(&storage, .onFoo, .{});
+    try scheduler.dispatchEvent(&storage, .onFoo, {});
     scheduler.waitEvent(.onFoo);
 
     try testing.expectEqual(
@@ -964,7 +1065,7 @@ test "Dispatch is determenistic (no race conditions)" {
         for (0..128) |_| {
             defer storage.clearRetainingCapacity();
 
-            var scheduler = try CreateScheduler(.{
+            var scheduler = CreateScheduler(StorageStub, .{
                 Event(
                     "onFoo",
                     .{
@@ -980,7 +1081,9 @@ test "Dispatch is determenistic (no race conditions)" {
                     },
                     .{},
                 ),
-            }).init(.{
+            }).uninitialized;
+
+            try scheduler.init(.{
                 .pool_allocator = std.testing.allocator,
                 .query_submit_allocator = std.testing.allocator,
             });
@@ -998,7 +1101,7 @@ test "Dispatch is determenistic (no race conditions)" {
             // (((0 + 1) * 2) + 1) * 2 + 1 = 7
             const expected_value = 7;
 
-            try scheduler.dispatchEvent(&storage, .onFoo, .{});
+            try scheduler.dispatchEvent(&storage, .onFoo, {});
             scheduler.waitEvent(.onFoo);
 
             for (entities) |entity| {
@@ -1014,7 +1117,7 @@ test "Dispatch is determenistic (no race conditions)" {
             }
 
             // (((0 + 1) * 2) + 1) * 2 + 1 = 7
-            try scheduler.dispatchEvent(&storage, .onFoo, .{});
+            try scheduler.dispatchEvent(&storage, .onFoo, {});
             scheduler.waitEvent(.onFoo);
 
             for (entities) |entity| {
@@ -1063,7 +1166,7 @@ test "Dispatch with multiple events works" {
         var storage = try StorageStub.init(testing.allocator);
         defer storage.deinit();
 
-        var scheduler = try CreateScheduler(.{
+        var scheduler = CreateScheduler(StorageStub, .{
             Event(
                 "onA",
                 .{
@@ -1082,7 +1185,9 @@ test "Dispatch with multiple events works" {
                 },
                 .{},
             ),
-        }).init(.{
+        }).uninitialized;
+
+        try scheduler.init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
         });
@@ -1098,23 +1203,23 @@ test "Dispatch with multiple events works" {
         }
 
         // ((0 + 1) * 2) + 1 = 3
-        try scheduler.dispatchEvent(&storage, .onA, .{});
-        try scheduler.dispatchEvent(&storage, .onB, .{});
+        try scheduler.dispatchEvent(&storage, .onA, {});
+        try scheduler.dispatchEvent(&storage, .onB, {});
         scheduler.waitIdle();
 
         // ((3 + 1) * 2) + 1 = 9
-        try scheduler.dispatchEvent(&storage, .onA, .{});
-        try scheduler.dispatchEvent(&storage, .onB, .{});
+        try scheduler.dispatchEvent(&storage, .onA, {});
+        try scheduler.dispatchEvent(&storage, .onB, {});
         scheduler.waitIdle();
 
         // ((9 + 1) * 2) + 1 = 21
-        try scheduler.dispatchEvent(&storage, .onA, .{});
-        try scheduler.dispatchEvent(&storage, .onB, .{});
+        try scheduler.dispatchEvent(&storage, .onA, {});
+        try scheduler.dispatchEvent(&storage, .onB, {});
         scheduler.waitIdle();
 
         // ((21 + 1) * 2) + 1 = 45
-        try scheduler.dispatchEvent(&storage, .onA, .{});
-        try scheduler.dispatchEvent(&storage, .onB, .{});
+        try scheduler.dispatchEvent(&storage, .onA, {});
+        try scheduler.dispatchEvent(&storage, .onB, {});
         scheduler.waitIdle();
 
         const expected_value = 45;
@@ -1169,7 +1274,7 @@ test "Dispatch with destroyEntity is determenistic" {
         var storage = try StorageStub.init(testing.allocator);
         defer storage.deinit();
 
-        var scheduler = try CreateScheduler(.{
+        var scheduler = CreateScheduler(StorageStub, .{
             Event(
                 "incrDestroy",
                 .{
@@ -1183,7 +1288,9 @@ test "Dispatch with destroyEntity is determenistic" {
                 },
                 .{},
             ),
-        }).init(.{
+        }).uninitialized;
+
+        try scheduler.init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
         });
@@ -1219,7 +1326,7 @@ test "Dispatch with destroyEntity is determenistic" {
             }});
         }
 
-        try scheduler.dispatchEvent(&storage, .incrDestroy, .{});
+        try scheduler.dispatchEvent(&storage, .incrDestroy, {});
         scheduler.waitIdle();
 
         for (&entity_a0, 0..) |entity, index| {
@@ -1288,7 +1395,7 @@ test "dumpDependencyChain" {
         var storage = try StorageStub.init(testing.allocator);
         defer storage.deinit();
 
-        const Scheduler = CreateScheduler(.{
+        const Scheduler = CreateScheduler(StorageStub, .{
             Event(
                 "onA",
                 .{
@@ -1372,13 +1479,17 @@ test "systems can accepts event related data" {
         var storage = try StorageStub.init(testing.allocator);
         defer storage.deinit();
 
-        var scheduler = try CreateScheduler(.{
+        var scheduler = CreateScheduler(StorageStub, .{
             Event(
                 "onFoo",
                 .{System.addToA},
-                .{},
+                .{
+                    .EventArgument = AddValue,
+                },
             ),
-        }).init(.{
+        }).uninitialized;
+
+        try scheduler.init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
         });
@@ -1415,13 +1526,17 @@ test "systems can mutate event argument" {
         var storage = try StorageStub.init(testing.allocator);
         defer storage.deinit();
 
-        var scheduler = try CreateScheduler(.{
+        var scheduler = CreateScheduler(StorageStub, .{
             Event(
                 "onFoo",
                 .{System.addToA},
-                .{},
+                .{
+                    .EventArgument = *AddValue,
+                },
             ),
-        }).init(.{
+        }).uninitialized;
+
+        try scheduler.init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
         });
@@ -1461,13 +1576,15 @@ test "system can contain two queries" {
         var storage = try StorageStub.init(testing.allocator);
         defer storage.deinit();
 
-        var scheduler = try CreateScheduler(.{Event(
+        var scheduler = CreateScheduler(StorageStub, .{Event(
             "onFoo",
             .{
                 SystemStruct.eventSystem,
             },
             .{},
-        )}).init(.{
+        )}).uninitialized;
+
+        try scheduler.init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
         });
@@ -1475,7 +1592,7 @@ test "system can contain two queries" {
 
         const entity = try storage.createEntity(.{Testing.Component.A{ .value = fail_value }});
 
-        try scheduler.dispatchEvent(&storage, .onFoo, .{});
+        try scheduler.dispatchEvent(&storage, .onFoo, {});
         scheduler.waitEvent(.onFoo);
 
         try testing.expectEqual(
@@ -1506,10 +1623,12 @@ test "event caching works" {
         var storage = try StorageStub.init(testing.allocator);
         defer storage.deinit();
 
-        var scheduler = try CreateScheduler(.{
+        var scheduler = CreateScheduler(StorageStub, .{
             Event("onIncA", .{Systems.incA}, .{}),
             Event("onIncB", .{Systems.incB}, .{}),
-        }).init(.{
+        }).uninitialized;
+
+        try scheduler.init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
         });
@@ -1517,7 +1636,7 @@ test "event caching works" {
 
         const entity1 = try storage.createEntity(.{Testing.Component.A{ .value = 0 }});
 
-        try scheduler.dispatchEvent(&storage, .onIncA, .{});
+        try scheduler.dispatchEvent(&storage, .onIncA, {});
         scheduler.waitEvent(.onIncA);
 
         try testing.expectEqual(
@@ -1528,7 +1647,7 @@ test "event caching works" {
         // move entity to archetype A, B
         try storage.setComponents(entity1, .{Testing.Component.B{ .value = 0 }});
 
-        try scheduler.dispatchEvent(&storage, .onIncA, .{});
+        try scheduler.dispatchEvent(&storage, .onIncA, {});
         scheduler.waitEvent(.onIncA);
 
         try testing.expectEqual(
@@ -1536,7 +1655,7 @@ test "event caching works" {
             storage.getComponent(entity1, Testing.Component.A).?,
         );
 
-        try scheduler.dispatchEvent(&storage, .onIncB, .{});
+        try scheduler.dispatchEvent(&storage, .onIncB, {});
         scheduler.waitEvent(.onIncB);
 
         try testing.expectEqual(
@@ -1553,7 +1672,7 @@ test "event caching works" {
             break :blk try storage.createEntity(initial_state);
         };
 
-        try scheduler.dispatchEvent(&storage, .onIncA, .{});
+        try scheduler.dispatchEvent(&storage, .onIncA, {});
         scheduler.waitEvent(.onIncA);
 
         try testing.expectEqual(
@@ -1561,7 +1680,7 @@ test "event caching works" {
             storage.getComponent(entity2, Testing.Component.A).?,
         );
 
-        try scheduler.dispatchEvent(&storage, .onIncB, .{});
+        try scheduler.dispatchEvent(&storage, .onIncB, {});
         scheduler.waitEvent(.onIncB);
 
         try testing.expectEqual(
@@ -1584,20 +1703,22 @@ test "Event with no archetypes does not crash" {
         var storage = try StorageStub.init(testing.allocator);
         defer storage.deinit();
 
-        var scheduler = try CreateScheduler(.{Event(
+        var scheduler = CreateScheduler(StorageStub, .{Event(
             "onFoo",
             .{
                 Systems.incA,
             },
             .{},
-        )}).init(.{
+        )}).uninitialized;
+
+        try scheduler.init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
         });
         defer scheduler.deinit();
 
         for (0..100) |_| {
-            try scheduler.dispatchEvent(&storage, .onFoo, .{});
+            try scheduler.dispatchEvent(&storage, .onFoo, {});
             scheduler.waitEvent(.onFoo);
         }
     }
@@ -1627,13 +1748,17 @@ test "event in flight" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    var scheduler = try CreateScheduler(.{
+    var scheduler = CreateScheduler(StorageStub, .{
         Event("onFoo", .{
             Systems.first,
             Systems.second,
             Systems.third,
-        }, .{}),
-    }).init(.{
+        }, .{
+            .EventArgument = *Resets,
+        }),
+    }).uninitialized;
+
+    try scheduler.init(.{
         .pool_allocator = std.testing.allocator,
         .query_submit_allocator = std.testing.allocator,
     });
@@ -1679,16 +1804,19 @@ test "reproducer: Scheduler does not include new components to systems previousl
         };
 
         const RepStorage = CreateStorage(Testing.AllComponentsTuple);
-        const Scheduler = CreateScheduler(.{Event(
+        const Scheduler = CreateScheduler(RepStorage, .{Event(
             "onFoo",
             .{Systems.addToTracker},
-            .{},
+            .{
+                .EventArgument = *Tracker,
+            },
         )});
 
         var storage = try RepStorage.init(testing.allocator);
         defer storage.deinit();
 
-        var scheduler = try Scheduler.init(.{
+        var scheduler = Scheduler.uninitialized;
+        try scheduler.init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
         });
@@ -1735,7 +1863,7 @@ test "reproducer: single threaded dispatch with a waitForEvent is idempotent" {
         };
 
         const RepStorage = CreateStorage(Testing.AllComponentsTuple);
-        const Scheduler = CreateScheduler(.{Event(
+        const Scheduler = CreateScheduler(RepStorage, .{Event(
             "on_foo",
             .{
                 Systems.writeA,
@@ -1748,7 +1876,8 @@ test "reproducer: single threaded dispatch with a waitForEvent is idempotent" {
         var storage = try RepStorage.init(testing.allocator);
         defer storage.deinit();
 
-        var scheduler = try Scheduler.init(.{
+        var scheduler = Scheduler.uninitialized;
+        try scheduler.init(.{
             .pool_allocator = std.testing.allocator,
             .query_submit_allocator = std.testing.allocator,
             .thread_count = 0,
@@ -1761,7 +1890,7 @@ test "reproducer: single threaded dispatch with a waitForEvent is idempotent" {
         };
         const my_entity = try storage.createEntity(inital_state);
 
-        try scheduler.dispatchEvent(&storage, .on_foo, .{});
+        try scheduler.dispatchEvent(&storage, .on_foo, {});
         scheduler.waitEvent(.on_foo);
 
         const final_state = storage.getComponents(my_entity, Testing.Structure.AB).?;
