@@ -1,6 +1,6 @@
 const std = @import("std");
-const ecez = @import("ecez");
 
+const ecez = @import("ecez");
 const ztracy = @import("ztracy");
 
 pub const Color = struct {
@@ -52,7 +52,7 @@ const Storage = ecez.CreateStorage(.{
     Components.RenderTarget,
 });
 
-const Scheduler = ecez.CreateScheduler(.{ecez.Event(
+const Scheduler = ecez.CreateScheduler(Storage, .{ecez.Event(
     "loop",
     .{
         renderCellSystem,
@@ -63,7 +63,9 @@ const Scheduler = ecez.CreateScheduler(.{ecez.Event(
         flushBufferSystem,
         updateCellSystem,
     },
-    .{},
+    .{
+        .EventArgument = EventArgument,
+    },
 )});
 
 const EventArgument = struct {
@@ -95,7 +97,8 @@ pub fn main() anyerror!void {
     var storage = try Storage.init(allocator);
     defer storage.deinit();
 
-    var scheduler = try Scheduler.init(.{
+    var scheduler = Scheduler.uninitialized;
+    try scheduler.init(.{
         .pool_allocator = gpa.allocator(),
         .query_submit_allocator = gpa.allocator(),
     });
@@ -371,7 +374,8 @@ test "systems produce expected 3x3 grid state" {
     var storage = try Storage.init(std.testing.allocator);
     defer storage.deinit();
 
-    var scheduler = try Scheduler.init(.{
+    var scheduler = Scheduler.uninitialized;
+    try scheduler.init(.{
         .pool_allocator = std.testing.allocator,
         .query_submit_allocator = std.testing.allocator,
     });

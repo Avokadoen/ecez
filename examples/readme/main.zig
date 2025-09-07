@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const ecez = @import("ecez");
 const ezby = ecez.ezby;
 
@@ -178,7 +179,9 @@ pub fn main() anyerror!void {
             Systems.spawnLivingTrail,
             Systems.handleMouseEvent,
         },
-        .{},
+        .{
+            .EventArgument = MouseEvent,
+        },
     );
 
     // Scheduler can have multiple events ...
@@ -189,17 +192,20 @@ pub fn main() anyerror!void {
             Systems.spawnLivingTrail,
             Systems.handleMouseEvent,
         },
-        .{},
+        .{
+            .EventArgument = MouseEvent,
+        },
     );
 
     // Create a scheduler type with our events
-    const Scheduler = ecez.CreateScheduler(.{
+    const Scheduler = ecez.CreateScheduler(Storage, .{
         MyFirstEvent,
         MySecondEvent,
     });
 
     // Initialize a instance of our Scheduler type
-    var scheduler = try Scheduler.init(.{
+    var scheduler = Scheduler.uninitialized;
+    try scheduler.init(.{
         .pool_allocator = allocator,
         .query_submit_allocator = allocator,
     });

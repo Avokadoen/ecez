@@ -4,8 +4,8 @@
     .version = "0.0.0",
     .dependencies = .{
         .ztracy = .{
-            .url = "git+https://github.com/zig-gamedev/ztracy?ref=main#be3d003f29d59d72e68e493ab531374ab474a795",
-            .hash = "ztracy-0.14.0-dev-zHJSq1oQFwCAq2LhbqsBUmZAipMzsD8UfKL5Etc_OJMb",
+            .url = "git+https://github.com/avokadoen/ztracy/?ref=0.15.x#2a51f35c5d27b708c315f36beb91fc5b74482a8c",
+            .hash = "ztracy-0.15.0-dev-zHJSq1bvGAAsO4Al0iIyMBvHk-sy2-u_UMvzSyonrSsn",
         },
     },
     .paths = .{

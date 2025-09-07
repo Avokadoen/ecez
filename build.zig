@@ -1,7 +1,22 @@
 const std = @import("std");
 
 /// Generate documentation if the user requests it
-pub fn doc(b: *std.Build, ecez_module: *std.Build.Module) void {
+pub fn doc(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
+    const options_module = make_options_mod_blk: {
+        const options_step = b.addOptions();
+        options_step.addOption(bool, "enable_ztracy", false);
+        options_step.addOption(bool, "enable_ecez_dev_markers", false);
+        break :make_options_mod_blk options_step.createModule();
+    };
+
+    const root_path = b.path("src/root.zig");
+    const ecez_module = b.addModule("ecez", .{
+        .root_source_file = root_path,
+        .target = target,
+        .optimize = optimize,
+    });
+    ecez_module.addImport("ecez_options", options_module);
+
     const autodoc_test = b.addObject(.{
         .name = "ecez",
         .root_module = ecez_module,
@@ -59,6 +74,9 @@ pub fn build(b: *std.Build) void {
     });
     ecez_module.addImport("ecez_options", options_module);
 
+    // generate documentation on demand
+    doc(b, target, optimize);
+
     const ztracy_dep = b.dependency("ztracy", .{
         .enable_ztracy = options.enable_ztracy,
         .enable_fibers = options.enable_fibers,
@@ -82,9 +100,6 @@ pub fn build(b: *std.Build) void {
 
         b.installArtifact(root_tests);
     }
-
-    // generate documentation on demand
-    doc(b, ecez_module);
 
     // add library tests to the root tests
     const root_tests = b.addTest(.{
