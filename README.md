@@ -8,7 +8,7 @@ This is a ECS (Entity Component System) API for Zig.
 
 ### Requirements
 
-The [zig compiler 0.14.0](https://ziglang.org)
+The [zig compiler 0.15.1](https://ziglang.org)
 
 You can use zigup to easily get this specific version
 
@@ -109,7 +109,7 @@ python -m http.server 8000 -d ecez/zig-out/doc/ecez # you can then access the do
 ### Compile time based and type safe API
 Zig's comptime feature is utilized to perform static reflection on the usage of the API to validate usage and report useful messages to the user (in theory :)). 
 
-https://github.com/Avokadoen/ecez/blob/9467109635ae6249780e2e1948822879b2421090/examples/readme/main.zig#L12-L211
+https://github.com/Avokadoen/ecez/blob/dddc73a69be231f7d6cc435cab6038ee514dd271/examples/readme/main.zig#L12-L211
 
 ### System arguments
 
@@ -136,7 +136,7 @@ ecez uses a custom byte format to convert storages into a slice of bytes.
 
 #### Example
 
-https://github.com/Avokadoen/ecez/blob/9467109635ae6249780e2e1948822879b2421090/examples/readme/main.zig#L213-L224
+https://github.com/Avokadoen/ecez/blob/dddc73a69be231f7d6cc435cab6038ee514dd271/examples/readme/main.zig#L213-L224
 
 ### Tracy integration using [ztracy](https://github.com/michal-z/zig-gamedev/tree/main/libs/ztracy)
 ![ztracy](media/ztracy.png)
