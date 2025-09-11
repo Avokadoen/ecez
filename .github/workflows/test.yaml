@@ -35,11 +35,13 @@ jobs:
 
       # build examples without ztracy to check for compile issues
       - name: Build examples
-        run: ./zig build -Denable_ztracy=false
+        #                                     | Workaround #271
+        run: ./zig build -Denable_ztracy=false -Doptimize=ReleaseFast
 
       # build examples with ztracy to check for compile issues
       - name: Build examples with ztracy
-        run: ./zig build -Denable_ztracy=true
+        #                                    | Workaround #271
+        run: ./zig build -Denable_ztracy=true -Doptimize=ReleaseFast
 
       # build documentation
       - name: Build documentation
@@ -47,10 +49,12 @@ jobs:
 
       # test library
       - name: Run tests
-        run: ./zig build test
+        #                    | Workaround #271
+        run: ./zig build test -Doptimize=ReleaseFast
 
       # test readme example
       - name: Run readme
-        run: ./zig build run-readme
+        #                          | Workaround #271
+        run: ./zig build run-readme -Doptimize=ReleaseFast
 
 
