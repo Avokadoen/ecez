@@ -906,6 +906,8 @@ pub const CompileReflect = struct {
 
     /// Generate a tuple containing all component types as pointers
     pub fn AllWriteAccessType(comptime components: []const type) type {
+        @setEvalBranchQuota(10_000);
+
         var struct_fields: [components.len]std.builtin.Type.StructField = undefined;
         inline for (&struct_fields, components, 0..) |*struct_field, Component, index| {
             const TypeValue = *compactComponentRequest(Component).type;
