@@ -2,16 +2,14 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const ztracy = @import("../ecez_ztracy.zig");
-const Color = @import("../misc.zig").Color;
-
-const CreateConfig = @import("CreateConfig.zig");
-const SubmitConfig = @import("SubmitConfig.zig");
-
-const set = @import("../sparse_set.zig");
 const entity_type = @import("../entity_type.zig");
 const Entity = entity_type.Entity;
 const EntityId = entity_type.EntityId;
+const Color = @import("../misc.zig").Color;
+const set = @import("../sparse_set.zig");
 const CompileReflect = @import("../storage.zig").CompileReflect;
+const CreateConfig = @import("CreateConfig.zig");
+const SubmitConfig = @import("SubmitConfig.zig");
 
 pub fn Create(config: CreateConfig) type {
     return struct {
