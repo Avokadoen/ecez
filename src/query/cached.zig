@@ -83,7 +83,10 @@ pub fn Create(config: CreateConfig) type {
             };
 
             // Calculate the full set's search order.
-            // As an example if query ask for Component "A" and "B", There are 10 entities of A, and
+            // As an example if query ask to include Component "A" and "B" and exclude "C":
+            //  - There are 1 entities of A
+            //  - There are 5 entitites of B
+            // A only has one member so it might be faster to check A first. This way we only have to check one B entry.
             const full_set_search_order, const full_set_is_include = calc_search_order_blk: {
                 var _full_set_search_order: [config.full_sparse_set_count]usize = undefined;
                 var _full_set_is_include: [config.full_sparse_set_count]bool = undefined;
