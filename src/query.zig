@@ -1,17 +1,22 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const testing = std.testing;
 
-const set = @import("sparse_set.zig");
+const CompileReflect = @import("storage.zig").CompileReflect;
 const entity_type = @import("entity_type.zig");
 const Entity = entity_type.Entity;
 const EntityId = entity_type.EntityId;
-
-const CompileReflect = @import("storage.zig").CompileReflect;
-
 const CreateConfig = @import("query/CreateConfig.zig");
-
 pub const QueryType = CreateConfig.QueryType;
 pub const QueryAnyType = CreateConfig.QueryAnyType;
+const set = @import("sparse_set.zig");
+const Testing = @import("Testing.zig");
+const AbEntityType = Testing.Structure.AB;
+const AcEntityType = Testing.Structure.AC;
+const BcEntityType = Testing.Structure.BC;
+const AbcEntityType = Testing.Structure.ABC;
+const StorageStub = Testing.StorageStub;
+const Queries = Testing.Queries;
 
 /// Query components which can be iterated upon.
 ///
@@ -97,17 +102,7 @@ fn Create(
     };
 }
 
-const Testing = @import("Testing.zig");
-const testing = std.testing;
-
 // TODO: we cant use tuples here because of https://github.com/ziglang/zig/issues/12963
-const AbEntityType = Testing.Structure.AB;
-const AcEntityType = Testing.Structure.AC;
-const BcEntityType = Testing.Structure.BC;
-const AbcEntityType = Testing.Structure.ABC;
-
-const StorageStub = Testing.StorageStub;
-const Queries = Testing.Queries;
 
 test "query with single result component type works" {
     var storage = try StorageStub.init(std.testing.allocator);
