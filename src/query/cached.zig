@@ -213,13 +213,13 @@ pub fn Create(config: CreateConfig) type {
                 // TODO: unlikely branch
                 // if out of set bound, consider remaining entities as missing component
                 if (is_include_set) {
-                    if (sparse_set.sparse_len != 0) {
-                        const last_index = sparse_set.sparse_len - 1;
+                    if (sparse_len != 0) {
+                        const last_index = sparse_len - 1;
                         const bit_index = @divFloor(last_index, @bitSizeOf(EntityId));
                         if (@rem(last_index, @bitSizeOf(EntityId)) != 31) {
                             // populate partial bitmap
                             comptime std.debug.assert(EntityId == u32);
-                            const partial_bitmap_offset: u5 = @intCast(@rem(sparse_set.sparse_len, @bitSizeOf(EntityId)));
+                            const partial_bitmap_offset: u5 = @intCast(@rem(sparse_len, @bitSizeOf(EntityId)));
                             const partial_bitmap_set_bits = (@as(EntityId, 1) << (partial_bitmap_offset)) - 1;
                             result_entities_bitmap[bit_index] &= partial_bitmap_set_bits;
                         }
