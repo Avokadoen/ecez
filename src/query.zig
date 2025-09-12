@@ -1190,6 +1190,32 @@ test "query split works" {
     }
 }
 
+// Reproduce #272: OOB in cached tag queries
+test "query with more tag entries than total entity count" {
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
+
+    var entities: [736]Entity = undefined;
+    for (&entities) |*entity| {
+        entity.* = try storage.createEntity(.{
+            Testing.Component.B{},
+            Testing.Component.C{},
+        });
+    }
+
+    try storage.destroyEntity(entities[735]);
+
+    _ = try storage.createEntity(.{
+        Testing.Component.A{},
+    });
+
+    const TQueries = Testing.QueryAndQueryAny(struct { entity: Entity }, .{}, .{Testing.Component.A});
+    inline for (TQueries) |TQuery| {
+        var iter = try TQuery.submit(std.testing.allocator, &storage);
+        defer iter.deinit(std.testing.allocator);
+    }
+}
+
 test "reproducer: MineSweeper index out of bound caused by incorrect mapping of query to internal storage" {
     const transform = struct {
         const Position = struct {
