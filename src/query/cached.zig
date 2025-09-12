@@ -185,7 +185,8 @@ pub fn Create(config: CreateConfig) type {
             for (full_set_search_order, full_set_is_include) |search_order, is_include_set| {
                 const sparse_set = full_sparse_sets[search_order];
 
-                for (sparse_set.sparse[0..sparse_set.sparse_len], 0..) |dense_index, entity| {
+                const sparse_len = @min(number_of_entities, sparse_set.sparse_len);
+                for (sparse_set.sparse[0..sparse_len], 0..) |dense_index, entity| {
                     // Check if this bitmap entry has any set results, or if we can skip it
                     if (@rem(entity, @bitSizeOf(EntityId)) == 0) {
                         const bit_index = @divFloor(entity, @bitSizeOf(EntityId));
