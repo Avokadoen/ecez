@@ -745,6 +745,36 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     return self.storage.getComponent(entity, Component);
                 }
 
+                /// Safely down cast to another subset, validating component access permissions at compile time
+                pub fn downCast(self: *ThisSubset, comptime OtherSubset: type) *OtherSubset {
+                    comptime {
+                        if (@hasDecl(OtherSubset, "EcezType") == false and OtherSubset.EcezType != SubsetType) {
+                            @compileError(simplifiedTypeName() ++ ".cast(): Argument " ++ @typeName(OtherSubset) ++ " is not a Storage Subset");
+                        }
+
+                        // Verify ThisSubset has the access required by OtherSubset
+                        cast_validation_loop: for (OtherSubset.component_access) |Component| {
+                            const ComponentRequest = CompileReflect.compactComponentRequest(Component);
+
+                            for (ThisSubset.component_access) |SubsetComponent| {
+                                const SubsetAccess = CompileReflect.compactComponentRequest(SubsetComponent);
+
+                                if (SubsetAccess.type == ComponentRequest.type) {
+                                    switch (ComponentRequest.attr) {
+                                        .ptr => if (SubsetAccess.attr == .ptr) continue :cast_validation_loop,
+                                        .value => continue :cast_validation_loop,
+                                        .const_ptr => unreachable,
+                                    }
+                                }
+                            }
+
+                            @compileError(simplifiedTypeName() ++ " does not have access to " ++ @typeName(Component) ++ " required by cast to " ++ @typeName(OtherSubset));
+                        }
+                    }
+
+                    return @ptrCast(self);
+                }
+
                 fn simplifiedTypeName() [:0]const u8 {
                     const type_name = @typeName(ThisSubset);
                     const start_index = std.mem.indexOf(u8, type_name, "Subset").?;
@@ -2007,4 +2037,51 @@ test "getComponent(s)() with zero sized components" {
     try std.testing.expectEqual(storage.getComponent(e_2, *Testing.Component.C), null);
     try std.testing.expectEqual(storage.getComponents(e_2, Testing.Structure.AC), null);
     try std.testing.expectEqual(storage.getComponents(e_2, AC_ptr), null);
+}
+
+test "Subset.downCast() works" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    const WriteAB = StorageStub.Subset(.{
+        *Testing.Component.A,
+        *Testing.Component.B,
+    });
+    const MixedAB = StorageStub.Subset(.{
+        *Testing.Component.A,
+        Testing.Component.B,
+    });
+    const ReadAB = StorageStub.Subset(.{
+        Testing.Component.A,
+        Testing.Component.B,
+    });
+    const WriteA = StorageStub.Subset(.{
+        *Testing.Component.A,
+    });
+    const ReadA = StorageStub.Subset(.{
+        Testing.Component.A,
+    });
+    const ReadB = StorageStub.Subset(.{
+        Testing.Component.B,
+    });
+
+    var write_ab = WriteAB{ .storage = &storage };
+    _ = write_ab.downCast(MixedAB);
+    _ = write_ab.downCast(ReadAB);
+    _ = write_ab.downCast(WriteA);
+    _ = write_ab.downCast(ReadA);
+    _ = write_ab.downCast(ReadB);
+
+    var read_ab = ReadAB{ .storage = &storage };
+    _ = read_ab.downCast(ReadA);
+    _ = read_ab.downCast(ReadB);
+
+    var mixed_ab = MixedAB{ .storage = &storage };
+    _ = mixed_ab.downCast(WriteA);
+    _ = mixed_ab.downCast(ReadAB);
+    _ = mixed_ab.downCast(ReadA);
+    _ = mixed_ab.downCast(ReadB);
+
+    var write_a = WriteA{ .storage = &storage };
+    _ = write_a.downCast(ReadA);
 }
