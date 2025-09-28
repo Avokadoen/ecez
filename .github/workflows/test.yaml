@@ -18,43 +18,68 @@ permissions:
   contents: read
 
 jobs:
-  unit_test:
-    name: Zig unit tests
+  ubuntu-testing:
+    name: Ubuntu unit tests
     if: github.event.pull_request.draft == false
+    timeout-minutes: 5
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v2
+      - uses: actions/checkout@v3
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.1
 
-      - name: Download zig
-        run: wget https://ziglang.org/download/0.15.1/zig-x86_64-linux-0.15.1.tar.xz
-
-      - name: Install zig
-        run: tar -xf zig-x86_64-linux-0.15.1.tar.xz && mv zig-x86_64-linux-0.15.1/* ./
-
-      # build examples without ztracy to check for compile issues
       - name: Build examples
-        #                                     | Workaround #271
-        run: ./zig build -Denable_ztracy=false -Doptimize=ReleaseFast
+        #                                   | Workaround #271
+        run: zig build -Denable_ztracy=false -Doptimize=ReleaseFast
 
       # build examples with ztracy to check for compile issues
       - name: Build examples with ztracy
         #                                    | Workaround #271
-        run: ./zig build -Denable_ztracy=true -Doptimize=ReleaseFast
+        run: zig build -Denable_ztracy=true -Doptimize=ReleaseFast
 
       # build documentation
       - name: Build documentation
-        run: ./zig build doc
+        run: zig build doc
 
-      # test library
+        # test library
       - name: Run tests
         #                    | Workaround #271
-        run: ./zig build test -Doptimize=ReleaseFast
+        run: zig build test -Doptimize=ReleaseFast
 
       # test readme example
       - name: Run readme
         #                          | Workaround #271
-        run: ./zig build run-readme -Doptimize=ReleaseFast
+        run: zig build run-readme -Doptimize=ReleaseFast
+
+  windows-testing:
+    name: Windows unit tests
+    if: github.event.pull_request.draft == false
+    timeout-minutes: 5
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.1
+
+      - name: Build examples
+        run: zig build -Denable_ztracy=false
+
+      # build examples with ztracy to check for compile issues
+      - name: Build examples with ztracy
+        run: zig build -Denable_ztracy=true
+
+      # build documentation
+      - name: Build documentation
+        run: zig build doc
+
+        # test library
+      - name: Run tests
+        run: zig build test
+
+      # test readme example
+      - name: Run readme
+        run: zig build run-readme
 
 
