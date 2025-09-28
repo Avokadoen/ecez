@@ -210,11 +210,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
-            comptime CompileReflect.verifyInnerTypesIsInSlice(
-                " is not part of storage components",
-                &component_type_array,
-                EntityState,
-            );
+            comptime {
+                if (CompileReflect.verifyInnerIsInSlice(&component_type_array, EntityState, .if_exist_only)) |invalid_access| {
+                    @compileError(@typeName(invalid_access.type) ++ " is not part of storage components");
+                }
+            }
 
             if (additional_count == 0) {
                 return;
@@ -266,11 +266,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
-            comptime CompileReflect.verifyInnerTypesIsInSlice(
-                " is not part of storage components",
-                &component_type_array,
-                @TypeOf(struct_of_components),
-            );
+            comptime {
+                if (CompileReflect.verifyInnerIsInSlice(&component_type_array, @TypeOf(struct_of_components), .if_exist_only)) |invalid_access| {
+                    @compileError(@typeName(invalid_access.type) ++ " is not part of storage components");
+                }
+            }
 
             const field_info = @typeInfo(@TypeOf(struct_of_components));
 
@@ -331,11 +331,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
-            comptime CompileReflect.verifyInnerTypesIsInSlice(
-                " is not part of storage components",
-                &component_type_array,
-                struct_of_remove_components,
-            );
+            comptime {
+                if (CompileReflect.verifyInnerIsInSlice(&component_type_array, struct_of_remove_components, .if_exist_only)) |invalid_access| {
+                    @compileError(@typeName(invalid_access.type) ++ " is not part of storage components");
+                }
+            }
 
             const field_info = @typeInfo(@TypeOf(struct_of_remove_components));
             inline for (field_info.@"struct".fields) |field| {
@@ -374,11 +374,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
-            comptime CompileReflect.verifyInnerTypesIsInSlice(
-                " is not part of storage components",
-                &component_type_array,
-                components,
-            );
+            comptime {
+                if (CompileReflect.verifyInnerIsInSlice(&component_type_array, components, .if_exist_only)) |invalid_access| {
+                    @compileError(@typeName(invalid_access.type) ++ " is not part of storage components");
+                }
+            }
 
             const field_info = @typeInfo(@TypeOf(components));
 
@@ -420,11 +420,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
-            comptime CompileReflect.verifyInnerTypesIsInSlice(
-                " is not part of storage components",
-                &component_type_array,
-                Components,
-            );
+            comptime {
+                if (CompileReflect.verifyInnerIsInSlice(&component_type_array, Components, .if_exist_only)) |invalid_access| {
+                    @compileError(@typeName(invalid_access.type) ++ " is not part of storage components");
+                }
+            }
 
             var result: Components = undefined;
             const field_info = @typeInfo(Components);
@@ -484,11 +484,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
-            comptime CompileReflect.verifyInnerTypesIsInSlice(
-                " is not part of storage components",
-                &component_type_array,
-                .{Component},
-            );
+            comptime {
+                if (CompileReflect.verifyInnerIsInSlice(&component_type_array, .{Component}, .if_exist_only)) |invalid_access| {
+                    @compileError(@typeName(invalid_access.type) ++ " is not part of storage components");
+                }
+            }
 
             const component_to_get = CompileReflect.compactComponentRequest(Component);
             const sparse_set = self.getSparseSetConstPtr(component_to_get.type);
@@ -553,26 +553,13 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
             // Check if tuple is valid and get array of types instead if valid
             const comp_types = CompileReflect.verifyComponentTuple(component_subset);
-            const inner_comp_types = get_inner_blk: {
-                var inner: [comp_types.len]type = undefined;
-                for (&inner, comp_types) |*Inner, CompType| {
-                    const component_request = CompileReflect.compactComponentRequest(CompType);
-                    if (component_request.attr == .const_ptr) {
-                        // It does not make sense to express a const ptr for a subset type (you can still use it when retrieving a component)
-                        @compileError("Subset with const ptr to '" ++ @typeName(component_request.type) ++ "' is not legal, must be either pointer or value when creating a Subset type");
-                    }
-
-                    Inner.* = component_request.type;
-                }
-                break :get_inner_blk inner;
-            };
 
             // Check that each component type is part of the storage
-            comptime CompileReflect.verifyInnerTypesIsInSlice(
-                " is not a storage component",
-                &component_type_array,
-                component_subset,
-            );
+            comptime {
+                if (CompileReflect.verifyInnerIsInSlice(&component_type_array, component_subset, .if_exist_only)) |invalid_access| {
+                    @compileError(@typeName(invalid_access.type) ++ " is not part of storage components");
+                }
+            }
 
             return struct {
                 pub const EcezType = SubsetType;
@@ -585,27 +572,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                 pub fn createEntity(self: *ThisSubset, entity_state: anytype) error{OutOfMemory}!Entity {
                     // Validate that the correct access was requested in subset type
-                    comptime {
-                        const entity_state_info = @typeInfo(@TypeOf(entity_state));
-
-                        // Look up each component in the new entity and verify that each component is registered as write access
-                        get_validation_loop: for (entity_state_info.@"struct".fields) |field| {
-                            const FieldType = field.type;
-                            for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
-                                if (FieldType == InnerSubsetComp) {
-                                    // Subset is registered to have ptr access, validation is OK
-                                    const subset_access = CompileReflect.compactComponentRequest(SubsetComp);
-                                    if (subset_access.attr == .ptr) {
-                                        continue :get_validation_loop;
-                                    }
-
-                                    // Criteria above not met. Validation NOT OK
-                                    @compileError(@src().fn_name ++ " " ++ @typeName(InnerSubsetComp) ++ ", subset " ++ simplifiedTypeName() ++ " only has value access (must have ptr/write access)");
-                                }
-                            }
-                            @compileError(@src().fn_name ++ " " ++ @typeName(FieldType) ++ " subset " ++ simplifiedTypeName() ++ " does not have this type");
-                        }
-                    }
+                    comptime verifyAcces(@TypeOf(entity_state));
 
                     return self.storage.createEntity(entity_state);
                 }
@@ -621,126 +588,35 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 }
 
                 pub fn setComponents(self: *const ThisSubset, entity: Entity, struct_of_components: anytype) error{OutOfMemory}!void {
-                    // Validate that the correct access was requested in subset type
-                    comptime {
-                        const set_info = @typeInfo(@TypeOf(struct_of_components));
-
-                        // Look up each component in the new entity and verify that each component is registered as write access
-                        get_validation_loop: for (set_info.@"struct".fields) |field| {
-                            const FieldType = field.type;
-                            for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
-                                if (FieldType == InnerSubsetComp) {
-                                    // Subset is registered to have ptr access, validation is OK
-                                    const subset_access = CompileReflect.compactComponentRequest(SubsetComp);
-                                    if (subset_access.attr == .ptr) {
-                                        continue :get_validation_loop;
-                                    }
-
-                                    // Criteria above not met. Validation NOT OK
-                                    @compileError(@src().fn_name ++ " " ++ @typeName(InnerSubsetComp) ++ ", subset " ++ simplifiedTypeName() ++ " only has value access (must have ptr/write access)");
-                                }
-                            }
-                            @compileError(@src().fn_name ++ " " ++ @typeName(FieldType) ++ " subset " ++ simplifiedTypeName() ++ " does not have this type");
-                        }
-                    }
+                    comptime verifyAcces(@TypeOf(struct_of_components));
 
                     return self.storage.setComponents(entity, struct_of_components);
                 }
 
                 pub fn unsetComponents(self: *const ThisSubset, entity: Entity, comptime struct_of_remove_components: anytype) void {
-                    // Validate that the correct access was requested in subset type
-                    comptime {
-                        const unset_info = @typeInfo(@TypeOf(struct_of_remove_components));
-
-                        // Look up each component in the new entity and verify that each component is registered as write access
-                        get_validation_loop: for (unset_info.@"struct".fields) |field| {
-                            const FieldType = @field(struct_of_remove_components, field.name);
-                            for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
-                                if (FieldType == InnerSubsetComp) {
-                                    // Subset is registered to have ptr access, validation is OK
-                                    const subset_access = CompileReflect.compactComponentRequest(SubsetComp);
-                                    if (subset_access.attr == .ptr) {
-                                        continue :get_validation_loop;
-                                    }
-
-                                    // Criteria above not met. Validation NOT OK
-                                    @compileError(@src().fn_name ++ " " ++ @typeName(InnerSubsetComp) ++ ", subset " ++ simplifiedTypeName() ++ " only has value access (must have ptr/write access)");
-                                }
-                            }
-                            @compileError(@src().fn_name ++ " " ++ @typeName(FieldType) ++ " subset " ++ simplifiedTypeName() ++ " does not have this type");
-                        }
-                    }
+                    comptime verifyAcces(struct_of_remove_components);
 
                     self.storage.unsetComponents(entity, struct_of_remove_components);
                 }
 
                 pub fn hasComponents(self: *const ThisSubset, entity: Entity, comptime components: anytype) bool {
-                    comptime CompileReflect.verifyInnerTypesIsInSlice(
-                        " is not part of " ++ simplifiedTypeName(),
-                        &inner_comp_types,
-                        components,
-                    );
+                    comptime {
+                        if (CompileReflect.verifyInnerIsInSlice(&comp_types, components, .if_exist_only)) |invalid_access| {
+                            @compileError(@typeName(invalid_access.type) ++ " is not part of " ++ simplifiedTypeName());
+                        }
+                    }
 
                     return self.storage.hasComponents(entity, components);
                 }
 
                 pub fn getComponents(self: *const ThisSubset, entity: Entity, comptime Components: type) ?Components {
-                    // Validate that the correct access was requested in subset type
-                    comptime {
-                        const get_info = @typeInfo(Components);
-                        get_validation_loop: for (get_info.@"struct".fields) |field| {
-                            const component_to_get = CompileReflect.compactComponentRequest(field.type);
-
-                            for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
-                                if (component_to_get.type == InnerSubsetComp) {
-                                    // If we found get component in subset, and it is access read-only, then validation is OK
-                                    switch (component_to_get.attr) {
-                                        .value, .const_ptr => continue :get_validation_loop,
-                                        .ptr => {},
-                                    }
-
-                                    // Get by ptr, subset is registered to have ptr access, validation is OK
-                                    const subset_access = CompileReflect.compactComponentRequest(SubsetComp);
-                                    if (subset_access.attr == .ptr) {
-                                        continue :get_validation_loop;
-                                    }
-
-                                    // Criteria above not met. Validation NOT OK
-                                    @compileError(@src().fn_name ++ " called with ptr of " ++ @typeName(InnerSubsetComp) ++ ", subset " ++ simplifiedTypeName() ++ " only has value access");
-                                }
-                            }
-                            @compileError(@src().fn_name ++ " requested " ++ @typeName(component_to_get.type) ++ " subset " ++ simplifiedTypeName() ++ " does not have this type");
-                        }
-                    }
+                    comptime verifyAcces(Components);
 
                     return self.storage.getComponents(entity, Components);
                 }
 
                 pub fn getComponent(self: *const ThisSubset, entity: Entity, comptime Component: type) ?Component {
-                    // Validate that the correct access was requested in subset type
-                    comptime get_validation_blk: {
-                        const component_to_get = CompileReflect.compactComponentRequest(Component);
-
-                        for (inner_comp_types, comp_types) |InnerSubsetComp, SubsetComp| {
-                            if (component_to_get.type == InnerSubsetComp) {
-                                // If we found get component in subset, and it is access read-only, then validation is OK
-                                switch (component_to_get.attr) {
-                                    .value, .const_ptr => break :get_validation_blk,
-                                    .ptr => {},
-                                }
-
-                                // Get by ptr, subset is registered to have ptr access, validation is OK
-                                const subset_access = CompileReflect.compactComponentRequest(SubsetComp);
-                                if (subset_access.attr == .ptr) {
-                                    break :get_validation_blk;
-                                }
-
-                                // Criteria above not met. Validation NOT OK
-                                @compileError(@src().fn_name ++ " called with ptr of " ++ @typeName(InnerSubsetComp) ++ ", subset " ++ simplifiedTypeName() ++ " only has value access");
-                            }
-                        }
-                        @compileError(@src().fn_name ++ " requested " ++ @typeName(component_to_get.type) ++ " subset " ++ simplifiedTypeName() ++ " does not have this type");
-                    }
+                    comptime verifyAcces(.{Component});
 
                     return self.storage.getComponent(entity, Component);
                 }
@@ -779,6 +655,25 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     const type_name = @typeName(ThisSubset);
                     const start_index = std.mem.indexOf(u8, type_name, "Subset").?;
                     return type_name[start_index..];
+                }
+
+                fn verifyAcces(comptime components: anytype) void {
+                    // If subset has all access, no point in verifying anything
+                    if (@TypeOf(component_subset) == @TypeOf(AllComponentWriteAccess)) {
+                        return;
+                    }
+
+                    if (CompileReflect.verifyInnerIsInSlice(
+                        &comp_types,
+                        components,
+                        .if_exitst_and_access,
+                    )) |invalid_access| {
+                        const error_msg = switch (invalid_access.illegal_access) {
+                            .not_in_outer_slice => @src().fn_name ++ " " ++ @typeName(invalid_access.type) ++ " " ++ simplifiedTypeName() ++ " does not have this type",
+                            .illegal_write => @src().fn_name ++ " " ++ @typeName(invalid_access.type) ++ ", " ++ simplifiedTypeName() ++ " only has value access (must have ptr/write access)",
+                        };
+                        @compileError(error_msg);
+                    }
                 }
             };
         }
@@ -988,26 +883,69 @@ pub const CompileReflect = struct {
         return field_types;
     }
 
-    fn verifyInnerTypesIsInSlice(
-        comptime fmt_error_message: []const u8,
-        comptime type_slice: []const type,
-        comptime type_tuple: anytype,
-    ) void {
-        const TupleUnwrapped = if (@TypeOf(type_tuple) == type) type_tuple else @TypeOf(type_tuple);
+    const VerifyType = enum {
+        if_exist_only,
+        if_exitst_and_access,
+    };
+    const InvalidAccessResult = struct {
+        pub const IllegalAccess = enum {
+            not_in_outer_slice,
+            illegal_write,
+        };
+
+        illegal_access: IllegalAccess,
+        type: type,
+    };
+    fn verifyInnerIsInSlice(
+        comptime outer_type_slice: []const type,
+        comptime inner_type_tuple: anytype,
+        comptime verify_type: VerifyType,
+    ) ?InvalidAccessResult {
+        const TupleUnwrapped = if (@TypeOf(inner_type_tuple) == type) inner_type_tuple else @TypeOf(inner_type_tuple);
+
+        var outer_accesses: [outer_type_slice.len]CompactComponentRequest = undefined;
+        for (&outer_accesses, outer_type_slice) |*outer_access, outer_type| {
+            outer_access.* = compactComponentRequest(outer_type);
+        }
 
         const type_tuple_info = @typeInfo(TupleUnwrapped);
-        field_loop: for (type_tuple_info.@"struct".fields) |field| {
-            const FieldTypeUnwrapped = if (field.type == type) @field(type_tuple, field.name) else field.type;
-            const InnerType = compactComponentRequest(FieldTypeUnwrapped).type;
+        var inner_accesses: [type_tuple_info.@"struct".fields.len]CompactComponentRequest = undefined;
+        for (&inner_accesses, type_tuple_info.@"struct".fields) |*inner_access, field| {
+            const FieldTypeUnwrapped = if (field.type == type) @field(inner_type_tuple, field.name) else field.type;
+            inner_access.* = compactComponentRequest(FieldTypeUnwrapped);
+        }
 
-            for (type_slice) |Type| {
-                if (InnerType == Type) {
-                    continue :field_loop;
+        inner_access_loop: for (inner_accesses) |inner_access| {
+            for (outer_accesses) |outer_access| {
+                // If type exist in outer storage
+                if (inner_access.type == outer_access.type) {
+                    switch (verify_type) {
+                        .if_exitst_and_access => {
+                            // If access is legal, continue to next inner
+                            switch (inner_access.attr) {
+                                .ptr => if (outer_access.attr == .ptr) continue :inner_access_loop,
+                                .const_ptr, .value => continue :inner_access_loop,
+                            }
+                            std.debug.assert(inner_access.attr == .ptr and outer_access.attr != .ptr);
+
+                            // We did not continue, illegal access occured
+                            return InvalidAccessResult{
+                                .illegal_access = .illegal_write,
+                                .type = inner_access.type,
+                            };
+                        },
+                        .if_exist_only => continue :inner_access_loop,
+                    }
                 }
             }
 
-            @compileError(@typeName(InnerType) ++ fmt_error_message);
+            return InvalidAccessResult{
+                .illegal_access = .not_in_outer_slice,
+                .type = inner_access.type,
+            };
         }
+
+        return null;
     }
 };
 
