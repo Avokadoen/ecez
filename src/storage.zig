@@ -564,6 +564,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             return struct {
                 pub const EcezType = SubsetType;
 
+                pub const component_subset_tuple = component_subset;
                 pub const component_access = comp_types;
 
                 pub const ThisSubset = @This();
@@ -572,7 +573,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                 pub fn createEntity(self: *ThisSubset, entity_state: anytype) error{OutOfMemory}!Entity {
                     // Validate that the correct access was requested in subset type
-                    comptime verifyAcces(@TypeOf(entity_state));
+                    comptime verifyAccess(@TypeOf(entity_state));
 
                     return self.storage.createEntity(entity_state);
                 }
@@ -588,13 +589,13 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 }
 
                 pub fn setComponents(self: *const ThisSubset, entity: Entity, struct_of_components: anytype) error{OutOfMemory}!void {
-                    comptime verifyAcces(@TypeOf(struct_of_components));
+                    comptime verifyAccess(@TypeOf(struct_of_components));
 
                     return self.storage.setComponents(entity, struct_of_components);
                 }
 
                 pub fn unsetComponents(self: *const ThisSubset, entity: Entity, comptime struct_of_remove_components: anytype) void {
-                    comptime verifyAcces(struct_of_remove_components);
+                    comptime verifyAccess(struct_of_remove_components);
 
                     self.storage.unsetComponents(entity, struct_of_remove_components);
                 }
@@ -610,13 +611,13 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 }
 
                 pub fn getComponents(self: *const ThisSubset, entity: Entity, comptime Components: type) ?Components {
-                    comptime verifyAcces(Components);
+                    comptime verifyAccess(Components);
 
                     return self.storage.getComponents(entity, Components);
                 }
 
                 pub fn getComponent(self: *const ThisSubset, entity: Entity, comptime Component: type) ?Component {
-                    comptime verifyAcces(.{Component});
+                    comptime verifyAccess(.{Component});
 
                     return self.storage.getComponent(entity, Component);
                 }
@@ -624,28 +625,12 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 /// Safely down cast to another subset, validating component access permissions at compile time
                 pub fn downCast(self: *ThisSubset, comptime OtherSubset: type) *OtherSubset {
                     comptime {
-                        if (@hasDecl(OtherSubset, "EcezType") == false and OtherSubset.EcezType != SubsetType) {
-                            @compileError(simplifiedTypeName() ++ ".cast(): Argument " ++ @typeName(OtherSubset) ++ " is not a Storage Subset");
+                        if (@hasDecl(OtherSubset, "EcezType") == false or OtherSubset.EcezType != SubsetType) {
+                            const error_msg = std.fmt.comptimePrint("{s}.{s}: argument {s} is not a Storage.Subset", .{ simplifiedTypeName(), @src().fn_name, @typeName(OtherSubset) });
+                            @compileError(error_msg);
                         }
 
-                        // Verify ThisSubset has the access required by OtherSubset
-                        cast_validation_loop: for (OtherSubset.component_access) |Component| {
-                            const ComponentRequest = CompileReflect.compactComponentRequest(Component);
-
-                            for (ThisSubset.component_access) |SubsetComponent| {
-                                const SubsetAccess = CompileReflect.compactComponentRequest(SubsetComponent);
-
-                                if (SubsetAccess.type == ComponentRequest.type) {
-                                    switch (ComponentRequest.attr) {
-                                        .ptr => if (SubsetAccess.attr == .ptr) continue :cast_validation_loop,
-                                        .value => continue :cast_validation_loop,
-                                        .const_ptr => unreachable,
-                                    }
-                                }
-                            }
-
-                            @compileError(simplifiedTypeName() ++ " does not have access to " ++ @typeName(Component) ++ " required by cast to " ++ @typeName(OtherSubset));
-                        }
+                        verifyAccess(OtherSubset.component_subset_tuple);
                     }
 
                     return @ptrCast(self);
@@ -657,7 +642,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     return type_name[start_index..];
                 }
 
-                fn verifyAcces(comptime components: anytype) void {
+                fn verifyAccess(comptime components: anytype) void {
                     // If subset has all access, no point in verifying anything
                     if (@TypeOf(component_subset) == @TypeOf(AllComponentWriteAccess)) {
                         return;
