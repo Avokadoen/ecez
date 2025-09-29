@@ -1204,10 +1204,126 @@ test "query with more tag entries than total entity count" {
         Testing.Component.A{},
     });
 
-    const TQueries = Testing.QueryAndQueryAny(struct { entity: Entity }, .{}, .{Testing.Component.A});
+    const TQueries = Testing.QueryAndQueryAny(
+        struct { entity: Entity },
+        .{},
+        .{Testing.Component.A},
+    );
     inline for (TQueries) |TQuery| {
         var iter = try TQuery.submit(std.testing.allocator, &storage);
         defer iter.deinit(std.testing.allocator);
+    }
+}
+
+test "query with optional component" {
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
+
+    var entities: [128]Entity = undefined;
+    for (&entities, 0..) |*entity, index| {
+        if (index % 2 == 0) {
+            entity.* = try storage.createEntity(.{
+                Testing.Component.A{},
+                Testing.Component.B{},
+            });
+        } else {
+            entity.* = try storage.createEntity(.{
+                Testing.Component.B{},
+            });
+        }
+    }
+
+    {
+        const TQueries = Testing.QueryAndQueryAny(
+            struct {
+                handle: Entity,
+                a: ?Testing.Component.A,
+                b: Testing.Component.B,
+            },
+            .{},
+            .{},
+        );
+        inline for (TQueries) |TQuery| {
+            var iter = try TQuery.submit(std.testing.allocator, &storage);
+            defer iter.deinit(std.testing.allocator);
+
+            var index: u32 = 0;
+            while (iter.next()) |entity| {
+                try std.testing.expectEqual(index, entity.handle.id);
+
+                if (index % 2 == 0) {
+                    try std.testing.expectEqual(Testing.Component.A{}, entity.a.?);
+                } else {
+                    try std.testing.expectEqual(@as(?Testing.Component.A, null), entity.a);
+                }
+
+                try std.testing.expectEqual(Testing.Component.B{}, entity.b);
+
+                index += 1;
+            }
+        }
+    }
+
+    {
+        const TQueries = Testing.QueryAndQueryAny(
+            struct {
+                handle: Entity,
+                a: ?*Testing.Component.A,
+                b: Testing.Component.B,
+            },
+            .{},
+            .{},
+        );
+        inline for (TQueries) |TQuery| {
+            var iter = try TQuery.submit(std.testing.allocator, &storage);
+            defer iter.deinit(std.testing.allocator);
+
+            var index: u32 = 0;
+            while (iter.next()) |entity| {
+                try std.testing.expectEqual(index, entity.handle.id);
+
+                if (index % 2 == 0) {
+                    try std.testing.expectEqual(Testing.Component.A{}, entity.a.?.*);
+                } else {
+                    try std.testing.expectEqual(@as(?*Testing.Component.A, null), entity.a);
+                }
+
+                try std.testing.expectEqual(Testing.Component.B{}, entity.b);
+
+                index += 1;
+            }
+        }
+    }
+
+    {
+        const TQueries = Testing.QueryAndQueryAny(
+            struct {
+                handle: Entity,
+                a: ?*const Testing.Component.A,
+                b: Testing.Component.B,
+            },
+            .{},
+            .{},
+        );
+        inline for (TQueries) |TQuery| {
+            var iter = try TQuery.submit(std.testing.allocator, &storage);
+            defer iter.deinit(std.testing.allocator);
+
+            var index: u32 = 0;
+            while (iter.next()) |entity| {
+                try std.testing.expectEqual(index, entity.handle.id);
+
+                if (index % 2 == 0) {
+                    try std.testing.expectEqual(Testing.Component.A{}, entity.a.?.*);
+                } else {
+                    try std.testing.expectEqual(@as(?*const Testing.Component.A, null), entity.a);
+                }
+
+                try std.testing.expectEqual(Testing.Component.B{}, entity.b);
+
+                index += 1;
+            }
+        }
     }
 }
 

@@ -86,13 +86,17 @@ pub fn Create(config: CreateConfig) type {
             //  - There are 5 entitites of B
             // A only has one member so it might be faster to check A first. This way we only have to check one B entry.
             const full_set_search_order, const full_set_is_include = calc_search_order_blk: {
-                var _full_set_search_order: [config.full_sparse_set_count]usize = undefined;
-                var _full_set_is_include: [config.full_sparse_set_count]bool = undefined;
+                const search_order_count = config.full_sparse_set_count - config.full_sparse_set_optional_count;
+                var _full_set_search_order: [search_order_count]usize = undefined;
+                var _full_set_is_include: [search_order_count]bool = undefined;
                 var last_min_value: usize = 0;
-                inline for (&_full_set_search_order, &_full_set_is_include, 0..) |*search, *is_include, search_index| {
+                inline for (&_full_set_search_order, &_full_set_is_include, 0..) |
+                    *search,
+                    *is_include,
+                    search_index,
+                | {
                     var current_index: usize = undefined;
                     var global_comp_index: usize = undefined;
-
                     var current_min_value: usize = std.math.maxInt(usize);
 
                     comptime var sized_comp_index = 0;
@@ -101,40 +105,52 @@ pub fn Create(config: CreateConfig) type {
 
                         defer sized_comp_index += 1;
 
-                        // Skip indices we already stored
-                        const already_included: bool = already_included_search: {
-                            for (_full_set_search_order[0..search_index]) |prev_found| {
-                                if (prev_found == sized_comp_index) {
-                                    break :already_included_search true;
-                                }
+                        const is_result_optional: bool = comptime check_optional_blk: {
+                            const is_result = q_comp_index < config.result_component_count;
+                            if (is_result) {
+                                const request = CompileReflect.compactComponentRequest(_result_fields[q_comp_index].type);
+                                break :check_optional_blk request.isOptional();
                             }
-                            break :already_included_search false;
+
+                            break :check_optional_blk false;
                         };
 
-                        if (already_included == false) {
-                            const query_candidate_len = get_candidate_len_blk: {
-                                if (@sizeOf(QueryComp) > 0) {
-                                    const dense_set = storage.getDenseSetConstPtr(QueryComp);
-                                    break :get_candidate_len_blk dense_set.dense_len;
-                                } else {
-                                    const sparse_set: *const set.Sparse.Tag = storage.getSparseSetConstPtr(QueryComp);
-                                    break :get_candidate_len_blk sparse_set.sparse_len;
+                        if (comptime (is_result_optional == false)) {
+                            // Skip indices we already stored
+                            const already_included: bool = already_included_search: {
+                                for (_full_set_search_order[0..search_index]) |prev_found| {
+                                    if (prev_found == sized_comp_index) {
+                                        break :already_included_search true;
+                                    }
                                 }
+                                break :already_included_search false;
                             };
 
-                            const len_value = get_len_blk: {
-                                const is_result_or_include_component = q_comp_index < config.result_component_count + config.include_fields.len;
-                                if (is_result_or_include_component) {
-                                    break :get_len_blk query_candidate_len;
-                                } else {
-                                    break :get_len_blk number_of_entities - query_candidate_len;
-                                }
-                            };
+                            if (already_included == false) {
+                                const query_candidate_len = get_candidate_len_blk: {
+                                    if (@sizeOf(QueryComp) > 0) {
+                                        const dense_set = storage.getDenseSetConstPtr(QueryComp);
+                                        break :get_candidate_len_blk dense_set.dense_len;
+                                    } else {
+                                        const sparse_set: *const set.Sparse.Tag = storage.getSparseSetConstPtr(QueryComp);
+                                        break :get_candidate_len_blk sparse_set.sparse_len;
+                                    }
+                                };
 
-                            if (len_value <= current_min_value and len_value >= last_min_value) {
-                                current_index = sized_comp_index;
-                                current_min_value = len_value;
-                                global_comp_index = q_comp_index;
+                                const len_value = get_len_blk: {
+                                    const is_result_or_include_component = q_comp_index < config.result_component_count + config.include_fields.len;
+                                    if (is_result_or_include_component) {
+                                        break :get_len_blk query_candidate_len;
+                                    } else {
+                                        break :get_len_blk number_of_entities - query_candidate_len;
+                                    }
+                                };
+
+                                if (len_value <= current_min_value and len_value >= last_min_value) {
+                                    current_index = sized_comp_index;
+                                    current_min_value = len_value;
+                                    global_comp_index = q_comp_index;
+                                }
                             }
                         }
                     }
@@ -183,10 +199,13 @@ pub fn Create(config: CreateConfig) type {
                 }
             }
 
-            for (full_set_search_order, full_set_is_include) |search_order, is_include_set| {
+            for (full_set_search_order, full_set_is_include) |
+                search_order,
+                is_include_set,
+            | {
                 const sparse_set = full_sparse_sets[search_order];
-
                 const sparse_len = @min(number_of_entities, sparse_set.sparse_len);
+
                 for (sparse_set.sparse[0..sparse_len], 0..) |dense_index, entity| {
                     // Check if this bitmap entry has any set results, or if we can skip it
                     if (@rem(entity, @bitSizeOf(EntityId)) == 0) {
@@ -210,10 +229,11 @@ pub fn Create(config: CreateConfig) type {
                     }
                 }
 
-                // TODO: unlikely branch
                 // if out of set bound, consider remaining entities as missing component
                 if (is_include_set) {
                     if (sparse_len != 0) {
+                        @branchHint(.likely);
+
                         const last_index = sparse_len - 1;
                         const bit_index = @divFloor(last_index, @bitSizeOf(EntityId));
                         if (@rem(last_index, @bitSizeOf(EntityId)) != 31) {
@@ -289,11 +309,20 @@ pub fn Create(config: CreateConfig) type {
 
                 const sparse_set = self.full_sparse_sets[result_field_index];
                 const dense_set = @field(self.dense_sets, @typeName(component_to_get.type));
-                const component_ptr = set.get(sparse_set, dense_set, self.sparse_cursors).?;
 
-                switch (component_to_get.attr) {
-                    .ptr, .const_ptr => @field(result, result_field.name) = component_ptr,
-                    .value => @field(result, result_field.name) = component_ptr.*,
+                const maybe_component_ptr = set.get(sparse_set, dense_set, self.sparse_cursors);
+                if (component_to_get.isOptional()) {
+                    @field(result, result_field.name) = switch (component_to_get.attr) {
+                        .optional_ptr, .optional_const_ptr => maybe_component_ptr,
+                        .optional_value => if (maybe_component_ptr) |ptr| ptr.* else null,
+                        .ptr, .const_ptr, .value => unreachable,
+                    };
+                } else {
+                    @field(result, result_field.name) = switch (component_to_get.attr) {
+                        .ptr, .const_ptr => maybe_component_ptr.?,
+                        .value => maybe_component_ptr.?.*,
+                        .optional_value, .optional_ptr, .optional_const_ptr => unreachable,
+                    };
                 }
             }
 

@@ -1,10 +1,9 @@
 const std = @import("std");
 const Type = std.builtin.Type;
 
-const CompileReflect = @import("../storage.zig").CompileReflect;
-
 const entity_type = @import("../entity_type.zig");
 const Entity = entity_type.Entity;
+const CompileReflect = @import("../storage.zig").CompileReflect;
 
 pub const QueryType = struct {};
 pub const QueryAnyType = struct {};
@@ -28,6 +27,7 @@ result_end: comptime_int,
 result_component_count: comptime_int,
 exclude_type_start: comptime_int,
 full_sparse_set_count: comptime_int,
+full_sparse_set_optional_count: comptime_int,
 tag_sparse_set_count: comptime_int,
 tag_include_start: comptime_int,
 tag_exclude_start: comptime_int,
@@ -65,8 +65,9 @@ pub fn init(
         @compileError(error_message);
     }
 
-    const result_fields, const result_start_index, const result_end = check_for_entity_blk: {
+    const result_fields, const result_start_index, const result_end, const full_sparse_set_optional_count = check_for_entity_blk: {
         var _result_fields: [fields.len]std.builtin.Type.StructField = undefined;
+        var _full_sparse_set_optional_count: usize = 0;
 
         var has_entity = false;
         for (&_result_fields, fields, 0..) |*result_field, field, field_index| {
@@ -87,21 +88,27 @@ pub fn init(
                 has_entity = true;
             }
 
-            if (@sizeOf(result_field.type) == 0) {
+            const request = CompileReflect.compactComponentRequest(result_field.type);
+            if (@sizeOf(request.type) == 0) {
                 const error_message = std.fmt.comptimePrint(
                     "Query ResultItem '{s}'.{s} is illegal zero sized field. Use include parameter for tag types",
                     .{ @typeName(ResultItem), result_field.name },
                 );
                 @compileError(error_message);
             }
+
+            _full_sparse_set_optional_count += if (request.isOptional()) 1 else 0;
         }
 
         // Check if an Entity was requested as well
         // If it is, then we have our component queries from index 1
-        if (has_entity) {
-            break :check_for_entity_blk .{ _result_fields, 1, _result_fields.len };
-        }
-        break :check_for_entity_blk .{ _result_fields, 0, _result_fields.len };
+        const _result_start_index = if (has_entity) 1 else 0;
+        break :check_for_entity_blk .{
+            _result_fields,
+            _result_start_index,
+            _result_fields.len,
+            _full_sparse_set_optional_count,
+        };
     };
     const result_component_count = result_end - result_start_index;
 
@@ -140,7 +147,14 @@ pub fn init(
                 switch (request.attr) {
                     .ptr, .const_ptr => {
                         const error_message = std.fmt.comptimePrint(
-                            "Query include_type {s} cant be a pointer",
+                            "Query include_type {s} cant be pointer",
+                            .{@typeName(request.type)},
+                        );
+                        @compileError(error_message);
+                    },
+                    .optional_value, .optional_ptr, .optional_const_ptr => {
+                        const error_message = std.fmt.comptimePrint(
+                            "Query include_type {s} cant be optional",
                             .{@typeName(request.type)},
                         );
                         @compileError(error_message);
@@ -167,7 +181,14 @@ pub fn init(
                 switch (request.attr) {
                     .ptr, .const_ptr => {
                         const error_message = std.fmt.comptimePrint(
-                            "Query include_type {s} cant be a pointer",
+                            "Query exclude_type {s} cant be pointer",
+                            .{@typeName(request.type)},
+                        );
+                        @compileError(error_message);
+                    },
+                    .optional_value, .optional_ptr, .optional_const_ptr => {
+                        const error_message = std.fmt.comptimePrint(
+                            "Query exclude_type {s} cant be optional",
                             .{@typeName(request.type)},
                         );
                         @compileError(error_message);
@@ -239,6 +260,7 @@ pub fn init(
         .result_component_count = result_component_count,
         .exclude_type_start = exclude_type_start,
         .full_sparse_set_count = full_sparse_set_count,
+        .full_sparse_set_optional_count = full_sparse_set_optional_count,
         .tag_sparse_set_count = tag_sparse_set_count,
         .tag_include_start = tag_include_start,
         .tag_exclude_start = tag_exclude_start,
