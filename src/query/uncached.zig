@@ -2,16 +2,14 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const ztracy = @import("../ecez_ztracy.zig");
-const Color = @import("../misc.zig").Color;
-
-const CreateConfig = @import("CreateConfig.zig");
-const SubmitConfig = @import("SubmitConfig.zig");
-
-const set = @import("../sparse_set.zig");
 const entity_type = @import("../entity_type.zig");
 const Entity = entity_type.Entity;
 const EntityId = entity_type.EntityId;
+const Color = @import("../misc.zig").Color;
+const set = @import("../sparse_set.zig");
 const CompileReflect = @import("../storage.zig").CompileReflect;
+const CreateConfig = @import("CreateConfig.zig");
+const SubmitConfig = @import("SubmitConfig.zig");
 
 pub fn Create(comptime config: CreateConfig) type {
     if (config.query_components.len == 0) {
@@ -28,6 +26,8 @@ pub fn Create(comptime config: CreateConfig) type {
         // Read by dependency_chain
         pub const _exclude_types = config.query_components[config.exclude_type_start..];
 
+        const search_order_count = config.full_sparse_set_count - config.full_sparse_set_optional_count;
+
         pub const EcezType = CreateConfig.QueryAnyType;
 
         pub const ThisQuery = @This();
@@ -35,7 +35,7 @@ pub fn Create(comptime config: CreateConfig) type {
         sparse_cursors: EntityId,
         storage_entity_count_ptr: *const std.atomic.Value(EntityId),
 
-        full_set_search_order: [config.full_sparse_set_count]usize,
+        full_set_search_order: [search_order_count]usize,
         full_sparse_sets: [config.full_sparse_set_count]*const set.Sparse.Full,
 
         tag_sparse_sets_bits: EntityId,
@@ -80,11 +80,15 @@ pub fn Create(comptime config: CreateConfig) type {
 
             const number_of_entities = storage.created_entity_count.load(.monotonic);
 
+            // TODO: optional should always be last
             var current_index: usize = undefined;
             var current_min_value: usize = undefined;
             var last_min_value: usize = 0;
-            var full_set_search_order: [config.full_sparse_set_count]usize = undefined;
-            inline for (&full_set_search_order, 0..) |*search, search_index| {
+            var full_set_search_order: [search_order_count]usize = undefined;
+            inline for (&full_set_search_order, 0..) |
+                *search,
+                search_index,
+            | {
                 current_min_value = std.math.maxInt(usize);
 
                 comptime var sized_comp_index = 0;
@@ -122,7 +126,15 @@ pub fn Create(comptime config: CreateConfig) type {
                             }
                         };
 
-                        if (len_value <= current_min_value and len_value >= last_min_value) {
+                        const is_optional = check_result_optional_blk: {
+                            const is_result = q_comp_index < config.result_component_count;
+                            if (is_result) {
+                                const request = CompileReflect.compactComponentRequest(_result_fields[q_comp_index].type);
+                                break :check_result_optional_blk request.isOptional();
+                            }
+                            break :check_result_optional_blk false;
+                        };
+                        if (is_optional == false and len_value <= current_min_value and len_value >= last_min_value) {
                             current_index = sized_comp_index;
                             current_min_value = len_value;
                         }
@@ -171,11 +183,24 @@ pub fn Create(comptime config: CreateConfig) type {
 
                 const sparse_set = self.full_sparse_sets[result_field_index];
                 const dense_set = @field(self.dense_sets, @typeName(component_to_get.type));
-                const component_ptr = set.get(sparse_set, dense_set, self.sparse_cursors).?;
 
                 switch (component_to_get.attr) {
-                    .ptr, .const_ptr => @field(result, result_field.name) = component_ptr,
-                    .value => @field(result, result_field.name) = component_ptr.*,
+                    .value, .ptr, .const_ptr => {
+                        const component_ptr = set.get(sparse_set, dense_set, self.sparse_cursors).?;
+                        @field(result, result_field.name) = switch (component_to_get.attr) {
+                            .ptr, .const_ptr => component_ptr,
+                            .value => component_ptr.*,
+                            .optional_value, .optional_ptr, .optional_const_ptr => unreachable,
+                        };
+                    },
+                    .optional_value, .optional_ptr, .optional_const_ptr => {
+                        const component_ptr = set.get(sparse_set, dense_set, self.sparse_cursors);
+                        @field(result, result_field.name) = switch (component_to_get.attr) {
+                            .optional_ptr, .optional_const_ptr => component_ptr,
+                            .optional_value => if (component_ptr) |ptr| ptr.* else null,
+                            .ptr, .const_ptr, .value => unreachable,
+                        };
+                    },
                 }
             }
 

@@ -436,27 +436,37 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 const component_to_get = CompileReflect.compactComponentRequest(field.type);
 
                 const sparse_set = self.getSparseSetConstPtr(component_to_get.type);
-                if (@sizeOf(component_to_get.type) > 0) {
-                    const dense_set = self.getDenseSetConstPtr(component_to_get.type);
 
-                    const get_ptr = set.get(
-                        sparse_set,
-                        dense_set,
-                        entity.id,
-                    ) orelse return null;
-                    switch (component_to_get.attr) {
-                        .ptr, .const_ptr => @field(result, field.name) = get_ptr,
-                        .value => @field(result, field.name) = get_ptr.*,
+                @field(result, field.name) = get_field_blk: {
+                    if (@sizeOf(component_to_get.type) > 0) {
+                        const dense_set = self.getDenseSetConstPtr(component_to_get.type);
+
+                        // Return if get is null and user did not request optional
+                        const get_ptr = switch (component_to_get.attr) {
+                            .value, .ptr, .const_ptr => set.get(sparse_set, dense_set, entity.id) orelse return null,
+                            .optional_value, .optional_ptr, .optional_const_ptr => set.get(sparse_set, dense_set, entity.id),
+                        };
+
+                        break :get_field_blk switch (component_to_get.attr) {
+                            .ptr, .const_ptr, .optional_ptr, .optional_const_ptr => get_ptr,
+                            .value => get_ptr.*,
+                            .optional_value => if (get_ptr) |value_ptr| value_ptr.* else null,
+                        };
+                    } else {
+                        if (sparse_set.isSet(entity.id)) {
+                            break :get_field_blk switch (component_to_get.attr) {
+                                .ptr, .const_ptr, .optional_ptr, .optional_const_ptr => @ptrCast(@constCast(self)),
+                                .value, .optional_value => component_to_get.type{},
+                            };
+                        } else {
+                            if (component_to_get.isOptional() == false) {
+                                return null;
+                            }
+
+                            @field(result, field.name) = null;
+                        }
                     }
-                } else {
-                    if (sparse_set.isSet(entity.id) == false) {
-                        return null;
-                    }
-                    switch (component_to_get.attr) {
-                        .ptr, .const_ptr => @field(result, field.name) = @ptrCast(@constCast(self)),
-                        .value => @field(result, field.name) = component_to_get.type{},
-                    }
-                }
+                };
             }
 
             return result;
@@ -493,6 +503,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             const component_to_get = CompileReflect.compactComponentRequest(Component);
             const sparse_set = self.getSparseSetConstPtr(component_to_get.type);
 
+            const optional_error_message = "calling " ++ @src().fn_name ++ " with optional component is illegal";
             if (@sizeOf(component_to_get.type) > 0) {
                 const dense_set = self.getDenseSetConstPtr(component_to_get.type);
                 const get_ptr = set.get(
@@ -503,6 +514,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 switch (component_to_get.attr) {
                     .ptr, .const_ptr => return get_ptr,
                     .value => return get_ptr.*,
+                    .optional_value, .optional_ptr, .optional_const_ptr => @compileError(optional_error_message),
                 }
             } else {
                 if (!sparse_set.isSet(entity.id)) {
@@ -511,6 +523,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 switch (component_to_get.attr) {
                     .ptr, .const_ptr => return @ptrCast(@constCast(self)),
                     .value => return .{},
+                    .optional_value, .optional_ptr, .optional_const_ptr => @compileError(optional_error_message),
                 }
             }
         }
@@ -713,22 +726,47 @@ pub const CompileReflect = struct {
             value,
             ptr,
             const_ptr,
+            optional_value,
+            optional_ptr,
+            optional_const_ptr,
         };
 
         type: type,
         attr: Attr,
+
+        pub fn isOptional(comptime self: CompactComponentRequest) bool {
+            switch (self.attr) {
+                .value, .ptr, .const_ptr => return false,
+                .optional_value, .optional_ptr, .optional_const_ptr => return true,
+            }
+        }
     };
     pub fn compactComponentRequest(comptime ComponentPtrOrValueType: type) CompactComponentRequest {
-        const type_info = @typeInfo(ComponentPtrOrValueType);
+        const type_info: std.builtin.Type = @typeInfo(ComponentPtrOrValueType);
 
-        return switch (type_info) {
+        var @"type": type = ComponentPtrOrValueType;
+        var attr_values: [3]CompactComponentRequest.Attr = .{
+            .value,
+            .ptr,
+            .const_ptr,
+        };
+        return type_switch: switch (type_info) {
             .@"struct", .@"union", .@"enum" => .{
-                .type = ComponentPtrOrValueType,
-                .attr = .value,
+                .type = @"type",
+                .attr = attr_values[0],
             },
             .pointer => |ptr_info| .{
                 .type = ptr_info.child,
-                .attr = if (ptr_info.is_const) .const_ptr else .ptr,
+                .attr = if (ptr_info.is_const) attr_values[2] else attr_values[1],
+            },
+            .optional => |optional_info| {
+                @memcpy(&attr_values, &[_]CompactComponentRequest.Attr{
+                    .optional_value,
+                    .optional_ptr,
+                    .optional_const_ptr,
+                });
+                @"type" = optional_info.child;
+                continue :type_switch @typeInfo(optional_info.child);
             },
             else => @compileError(@typeName(ComponentPtrOrValueType) ++ " is not pointer, nor a struct."),
         };
@@ -908,10 +946,14 @@ pub const CompileReflect = struct {
                         .if_exitst_and_access => {
                             // If access is legal, continue to next inner
                             switch (inner_access.attr) {
-                                .ptr => if (outer_access.attr == .ptr) continue :inner_access_loop,
-                                .const_ptr, .value => continue :inner_access_loop,
+                                .ptr, .optional_ptr => {
+                                    switch (outer_access.attr) {
+                                        .ptr, .optional_ptr => continue :inner_access_loop,
+                                        .const_ptr, .value, .optional_value, .optional_const_ptr => {},
+                                    }
+                                },
+                                .const_ptr, .value, .optional_value, .optional_const_ptr => continue :inner_access_loop,
                             }
-                            std.debug.assert(inner_access.attr == .ptr and outer_access.attr != .ptr);
 
                             // We did not continue, illegal access occured
                             return InvalidAccessResult{
@@ -1463,6 +1505,41 @@ test "getComponents() can request const ptr" {
     }).?;
     try testing.expectEqual(a, stored.a.*);
     try testing.expectEqual(b, stored.b.*);
+}
+
+test "getComponents() can request optional" {
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    const a = Testing.Component.A{ .value = 32 };
+    const entity = try storage.createEntity(.{a});
+
+    {
+        const stored = storage.getComponents(entity, struct {
+            a: ?Testing.Component.A,
+            b: ?Testing.Component.B,
+        }).?;
+        try testing.expectEqual(a, stored.a.?);
+        try testing.expectEqual(@as(?Testing.Component.B, null), stored.b);
+    }
+
+    {
+        const stored = storage.getComponents(entity, struct {
+            a: ?*const Testing.Component.A,
+            b: ?*const Testing.Component.B,
+        }).?;
+        try testing.expectEqual(a, stored.a.?.*);
+        try testing.expectEqual(@as(?*const Testing.Component.B, null), stored.b);
+    }
+
+    {
+        const stored = storage.getComponents(entity, struct {
+            a: ?*Testing.Component.A,
+            b: ?*Testing.Component.B,
+        }).?;
+        try testing.expectEqual(a, stored.a.?.*);
+        try testing.expectEqual(@as(?*Testing.Component.B, null), stored.b);
+    }
 }
 
 test "clearRetainingCapacity() allow storage reuse" {
