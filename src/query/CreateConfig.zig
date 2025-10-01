@@ -18,16 +18,19 @@ const CreateConfig = @This();
 
 which_query: WhichQuery,
 ResultItem: type,
-result_fields: []const Type.StructField,
-include_fields: []const Type.StructField,
+
 query_components: []const type,
 
+result_fields: []const Type.StructField,
 result_start_index: comptime_int,
-result_end: comptime_int,
 result_component_count: comptime_int,
+
+include_fields: []const Type.StructField,
 exclude_type_start: comptime_int,
+
 full_sparse_set_count: comptime_int,
 full_sparse_set_optional_count: comptime_int,
+
 tag_sparse_set_count: comptime_int,
 tag_include_start: comptime_int,
 tag_exclude_start: comptime_int,
@@ -65,15 +68,16 @@ pub fn init(
         @compileError(error_message);
     }
 
-    const result_fields, const result_start_index, const result_end, const full_sparse_set_optional_count = check_for_entity_blk: {
-        var _result_fields: [fields.len]std.builtin.Type.StructField = undefined;
-        var _full_sparse_set_optional_count: usize = 0;
+    var full_sparse_set_optional_count: usize = 0;
 
-        var has_entity = false;
+    var has_entity = false;
+    const result_fields = reflect_result_fields_blk: {
+        var _result_fields: [fields.len]std.builtin.Type.StructField = undefined;
         for (&_result_fields, fields, 0..) |*result_field, field, field_index| {
             result_field.* = field;
 
             if (result_field.type == Entity) {
+
                 // Validate that there is only 1 entity field (Multiple Entity fields would not make sense)
                 if (has_entity) {
                     const error_message = std.fmt.comptimePrint(
@@ -86,31 +90,20 @@ pub fn init(
                 // Swap entity to index 0 for easier separation from component types.
                 std.mem.swap(std.builtin.Type.StructField, &_result_fields[0], &_result_fields[field_index]);
                 has_entity = true;
+            } else {
+                const request = CompileReflect.compactComponentRequest(result_field.type);
+                full_sparse_set_optional_count += if (request.isOptional()) 1 else 0;
             }
-
-            const request = CompileReflect.compactComponentRequest(result_field.type);
-            if (@sizeOf(request.type) == 0) {
-                const error_message = std.fmt.comptimePrint(
-                    "Query ResultItem '{s}'.{s} is illegal zero sized field. Use include parameter for tag types",
-                    .{ @typeName(ResultItem), result_field.name },
-                );
-                @compileError(error_message);
-            }
-
-            _full_sparse_set_optional_count += if (request.isOptional()) 1 else 0;
         }
 
-        // Check if an Entity was requested as well
-        // If it is, then we have our component queries from index 1
-        const _result_start_index = if (has_entity) 1 else 0;
-        break :check_for_entity_blk .{
-            _result_fields,
-            _result_start_index,
-            _result_fields.len,
-            _full_sparse_set_optional_count,
-        };
+        break :reflect_result_fields_blk _result_fields;
     };
-    const result_component_count = result_end - result_start_index;
+
+    // Check if an Entity was requested as well
+    // If it is, then we have our component queries from index 1
+    const result_start_index = if (has_entity) 1 else 0;
+
+    const result_component_count = result_fields.len - result_start_index;
 
     const query_components = reflect_on_query_blk: {
         const type_count = result_component_count + include_fields.len + exclude_fields.len;
@@ -256,7 +249,6 @@ pub fn init(
         .include_fields = include_fields,
         .query_components = &query_components,
         .result_start_index = result_start_index,
-        .result_end = result_end,
         .result_component_count = result_component_count,
         .exclude_type_start = exclude_type_start,
         .full_sparse_set_count = full_sparse_set_count,
