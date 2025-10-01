@@ -459,11 +459,13 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                                 .value, .optional_value => component_to_get.type{},
                             };
                         } else {
-                            if (component_to_get.isOptional() == false) {
+                            // If user did not request optional field
+                            if (comptime (component_to_get.isOptional() == false)) {
+                                // then result the request cant be fulfilled, return null
                                 return null;
+                            } else {
+                                @field(result, field.name) = null;
                             }
-
-                            @field(result, field.name) = null;
                         }
                     }
                 };

@@ -14,7 +14,7 @@ const SubmitConfig = @import("SubmitConfig.zig");
 pub fn Create(config: CreateConfig) type {
     return struct {
         // Read by dependency_chain
-        pub const _result_fields = config.result_fields[config.result_start_index..config.result_end];
+        pub const _result_fields = config.result_fields[config.result_start_index..];
         // Read by dependency_chain
         pub const _include_types = config.query_components[config.result_component_count..config.exclude_type_start];
         // Read by dependency_chain
@@ -29,6 +29,8 @@ pub fn Create(config: CreateConfig) type {
 
         full_sparse_sets: [config.full_sparse_set_count]*const set.Sparse.Full,
         dense_sets: CompileReflect.GroupDenseSetsConstPtr(config.query_components),
+
+        tag_sparse_sets: [config.tag_sparse_set_count]*const set.Sparse.Tag,
 
         result_entities_bit_count: EntityId,
         result_entities_bitmap: []const EntityId,
@@ -263,6 +265,7 @@ pub fn Create(config: CreateConfig) type {
                 .start_cursor = 0,
                 .full_sparse_sets = full_sparse_sets,
                 .dense_sets = dense_sets,
+                .tag_sparse_sets = tag_sparse_sets,
                 .result_entities_bit_count = biggest_set_len,
                 .result_entities_bitmap = result_entities_bitmap,
             };
@@ -304,25 +307,51 @@ pub fn Create(config: CreateConfig) type {
                 @field(result, config.result_fields[0].name) = Entity{ .id = self.sparse_cursors };
             }
 
-            inline for (config.result_fields[config.result_start_index..config.result_end], 0..) |result_field, result_field_index| {
+            comptime var full_sparse_index = 0;
+            comptime var tag_sparse_index = 0;
+            inline for (config.result_fields[config.result_start_index..]) |
+                result_field,
+            | {
                 const component_to_get = CompileReflect.compactComponentRequest(result_field.type);
 
-                const sparse_set = self.full_sparse_sets[result_field_index];
-                const dense_set = @field(self.dense_sets, @typeName(component_to_get.type));
+                if (@sizeOf(component_to_get.type) > 0) {
+                    defer full_sparse_index += 1;
 
-                const maybe_component_ptr = set.get(sparse_set, dense_set, self.sparse_cursors);
-                if (component_to_get.isOptional()) {
-                    @field(result, result_field.name) = switch (component_to_get.attr) {
-                        .optional_ptr, .optional_const_ptr => maybe_component_ptr,
-                        .optional_value => if (maybe_component_ptr) |ptr| ptr.* else null,
-                        .ptr, .const_ptr, .value => unreachable,
-                    };
+                    const sparse_set = self.full_sparse_sets[full_sparse_index];
+                    const dense_set = @field(self.dense_sets, @typeName(component_to_get.type));
+
+                    const maybe_component_ptr = set.get(sparse_set, dense_set, self.sparse_cursors);
+                    if (component_to_get.isOptional()) {
+                        @field(result, result_field.name) = switch (component_to_get.attr) {
+                            .optional_ptr, .optional_const_ptr => maybe_component_ptr,
+                            .optional_value => if (maybe_component_ptr) |ptr| ptr.* else null,
+                            .ptr, .const_ptr, .value => unreachable,
+                        };
+                    } else {
+                        @field(result, result_field.name) = switch (component_to_get.attr) {
+                            .ptr, .const_ptr => maybe_component_ptr.?,
+                            .value => maybe_component_ptr.?.*,
+                            .optional_value, .optional_ptr, .optional_const_ptr => unreachable,
+                        };
+                    }
                 } else {
-                    @field(result, result_field.name) = switch (component_to_get.attr) {
-                        .ptr, .const_ptr => maybe_component_ptr.?,
-                        .value => maybe_component_ptr.?.*,
-                        .optional_value, .optional_ptr, .optional_const_ptr => unreachable,
-                    };
+                    defer tag_sparse_index += 1;
+
+                    const sparse_set = self.tag_sparse_sets[tag_sparse_index];
+                    const is_set = sparse_set.isSet(self.sparse_cursors);
+
+                    if (is_set) {
+                        @field(result, result_field.name) = switch (component_to_get.attr) {
+                            .ptr, .const_ptr, .optional_const_ptr, .optional_ptr => @ptrCast(self),
+                            .value, .optional_value => component_to_get.type{},
+                        };
+                    } else {
+                        @field(result, result_field.name) = switch (component_to_get.attr) {
+                            .optional_value, .optional_ptr, .optional_const_ptr => null,
+                            // This should never happen, should be excluded when caching in submit!
+                            .ptr, .const_ptr, .value => unreachable,
+                        };
+                    }
                 }
             }
 
