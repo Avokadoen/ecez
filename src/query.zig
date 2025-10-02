@@ -731,6 +731,89 @@ test "query with single result component, single include and single (tag compone
     }
 }
 
+test "query with many excludes" {
+    var storage = try StorageStub.init(std.testing.allocator);
+    defer storage.deinit();
+
+    for (0..100) |index| {
+        _ = try storage.createEntity(.{
+            Testing.Component.A{ .value = @intCast(index) },
+            Testing.Component.B{ .value = @intCast(index) },
+            Testing.Component.C{},
+            Testing.Component.E{ .one = @intCast(index) },
+        });
+    }
+
+    for (100..200) |index| {
+        _ = try storage.createEntity(.{
+            Testing.Component.B{ .value = @intCast(index) },
+        });
+    }
+
+    {
+        const TQueries = Testing.QueryAndQueryAny(
+            struct { b: Testing.Component.B },
+            .{},
+            .{Testing.Component.A},
+        );
+        inline for (TQueries) |TQuery| {
+            var iter = try TQuery.submit(std.testing.allocator, &storage);
+            defer iter.deinit(std.testing.allocator);
+
+            var index: usize = 100;
+            while (iter.next()) |item| {
+                try std.testing.expectEqual(Testing.Component.B{
+                    .value = @intCast(index),
+                }, item.b);
+
+                index += 1;
+            }
+        }
+    }
+
+    {
+        const TQueries = Testing.QueryAndQueryAny(
+            struct { b: Testing.Component.B },
+            .{},
+            .{Testing.Component.E},
+        );
+        inline for (TQueries) |TQuery| {
+            var iter = try TQuery.submit(std.testing.allocator, &storage);
+            defer iter.deinit(std.testing.allocator);
+
+            var index: usize = 100;
+            while (iter.next()) |item| {
+                try std.testing.expectEqual(Testing.Component.B{
+                    .value = @intCast(index),
+                }, item.b);
+
+                index += 1;
+            }
+        }
+    }
+
+    {
+        const TQueries = Testing.QueryAndQueryAny(
+            struct { b: Testing.Component.B },
+            .{},
+            .{ Testing.Component.D, Testing.Component.E },
+        );
+        inline for (TQueries) |TQuery| {
+            var iter = try TQuery.submit(std.testing.allocator, &storage);
+            defer iter.deinit(std.testing.allocator);
+
+            var index: usize = 100;
+            while (iter.next()) |item| {
+                try std.testing.expectEqual(Testing.Component.B{
+                    .value = @intCast(index),
+                }, item.b);
+
+                index += 1;
+            }
+        }
+    }
+}
+
 test "query with entity only works" {
     var storage = try StorageStub.init(std.testing.allocator);
     defer storage.deinit();
