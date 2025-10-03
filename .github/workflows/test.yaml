@@ -18,68 +18,42 @@ permissions:
   contents: read
 
 jobs:
-  ubuntu-testing:
-    name: Ubuntu unit tests
-    if: github.event.pull_request.draft == false
-    timeout-minutes: 5
-    runs-on: ubuntu-latest
+  testing:
+    strategy:
+      fail-fast: false
+      matrix:
+        zig: [0.15.1] 
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          # Workaround #271
+          - os: ubuntu-latest
+            build_flags: -Doptimize=ReleaseFast
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v3
-      - uses: mlugg/setup-zig@v2
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
         with:
-          version: 0.15.1
+          version: ${{ matrix.zig }}
+
+      - name: Check Formatting
+        run: zig fmt --ast-check --check .
 
       - name: Build examples
-        #                                   | Workaround #271
-        run: zig build -Denable_ztracy=false -Doptimize=ReleaseFast
+        run: zig build -Denable_ztracy=false ${{ matrix.build_flags }}
 
-      # build examples with ztracy to check for compile issues
       - name: Build examples with ztracy
-        #                                    | Workaround #271
-        run: zig build -Denable_ztracy=true -Doptimize=ReleaseFast
+        run: zig build -Denable_ztracy=true ${{ matrix.build_flags }}
 
-      # build documentation
       - name: Build documentation
         run: zig build doc
 
-        # test library
       - name: Run tests
-        #                    | Workaround #271
-        run: zig build test -Doptimize=ReleaseFast
+        run: zig build test ${{ matrix.build_flags }}
 
-      # test readme example
       - name: Run readme
-        #                          | Workaround #271
-        run: zig build run-readme -Doptimize=ReleaseFast
-
-  windows-testing:
-    name: Windows unit tests
-    if: github.event.pull_request.draft == false
-    timeout-minutes: 5
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.1
-
-      - name: Build examples
-        run: zig build -Denable_ztracy=false
-
-      # build examples with ztracy to check for compile issues
-      - name: Build examples with ztracy
-        run: zig build -Denable_ztracy=true
-
-      # build documentation
-      - name: Build documentation
-        run: zig build doc
-
-        # test library
-      - name: Run tests
-        run: zig build test
-
-      # test readme example
-      - name: Run readme
-        run: zig build run-readme
-
+        run: zig build run-readme ${{ matrix.build_flags }}
+  
 
