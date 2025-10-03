@@ -34,7 +34,6 @@ pub const ezby = @import("ezby.zig");
 /// This may or may not be useful to you
 pub const StorageCompileReflect = storage.CompileReflect;
 
-
 test {
     _ = @import("dependency_chain.zig");
     _ = @import("ezby.zig");
