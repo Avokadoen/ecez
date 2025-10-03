@@ -136,7 +136,7 @@ ecez uses a custom byte format to convert storages into a slice of bytes.
 
 #### Example
 
-https://github.com/Avokadoen/ecez/blob/3ea8fd6741b96612a700eee1e69c1d4c004a9f5f/examples/readme/main.zig#221-L229
+https://github.com/Avokadoen/ecez/blob/3ea8fd6741b96612a700eee1e69c1d4c004a9f5f/examples/readme/main.zig#L221-L229
 
 ### Tracy integration using [ztracy](https://github.com/michal-z/zig-gamedev/tree/main/libs/ztracy)
 ![ztracy](media/ztracy.png)
