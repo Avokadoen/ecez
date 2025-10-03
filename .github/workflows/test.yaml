@@ -39,6 +39,7 @@ jobs:
           version: ${{ matrix.zig }}
 
       - name: Check Formatting
+        if: runner.os != 'Windows' # zig fmt failing on Windows CI due to CLRF vs LF, skip
         run: zig fmt --ast-check --check .
 
       - name: Build examples
