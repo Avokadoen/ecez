@@ -45,17 +45,16 @@ pub fn main() anyerror!void {
             // Any result item will be of this type
             struct {
                 health: *Component.Health, // health can be mutated because it's a pointer
-                pos: Component.Position, // pos is read-only acces as we are requesting the value, you can also request a const ptr as read-only
+                pos: Component.Position, // pos is read-only access as we are requesting the value
+                weapon: ?*const Component.Weapon, // may have weapon, weapon is read-only ptr
             },
             // include types:
             .{
-                // Any query result must have the following components, but they wont be included in the result struct
-                Component.HeartOrgan,
+                Component.HeartOrgan, // Any query result must have the following components, but they wont be included in the result struct
             },
             // exclude types:
             .{
-                // Exclude any entity with the following component
-                Component.DeadTag,
+                Component.DeadTag, // Exclude any entity with the following component
             },
         );
     };
@@ -79,8 +78,6 @@ pub fn main() anyerror!void {
         position: *Component.Position,
         health_organ: Component.HeartOrgan,
     }).?;
-
-    std.debug.assert(storage.hasComponents(my_living_entity, .{Component.Health}));
 
     // You can unset components (remove)
     storage.unsetComponents(my_living_entity, .{Component.Health});
@@ -188,20 +185,13 @@ pub fn main() anyerror!void {
     const MySecondEvent = ecez.Event(
         "mySecondEvent",
         .{
-            Systems.iterateLiving,
             Systems.spawnLivingTrail,
-            Systems.handleMouseEvent,
         },
-        .{
-            .EventArgument = MouseEvent,
-        },
+        .{},
     );
 
     // Create a scheduler type with our events
-    const Scheduler = ecez.CreateScheduler(Storage, .{
-        MyFirstEvent,
-        MySecondEvent,
-    });
+    const Scheduler = ecez.CreateScheduler(Storage, .{ MyFirstEvent, MySecondEvent });
 
     // Initialize a instance of our Scheduler type
     var scheduler = Scheduler.uninitialized;
