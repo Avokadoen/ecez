@@ -101,7 +101,7 @@ You will need a local server to serve the documentation since browsers will bloc
 
 The simplest solution to this is just using a basic python server:
 ```bash
-python -m http.server 8000 -d ecez/zig-out/doc/ecez # you can then access the documentation at http://localhost:8000/#ecez.main 
+python -m http.server 8000 -d ./zig-out/doc # you can then access the documentation at http://localhost:8000/#ecez 
 ```
 
 ## Features
