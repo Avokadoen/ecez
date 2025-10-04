@@ -1342,9 +1342,11 @@ test "query with optional component" {
                 }
 
                 try std.testing.expectEqual(Testing.Component.B{}, entity.b);
+                try std.testing.expectEqual(@as(?Testing.Component.C, null), entity.c);
 
                 index += 1;
             }
+            try std.testing.expectEqual(entities.len, index);
         }
     }
 
@@ -1374,9 +1376,11 @@ test "query with optional component" {
                 }
 
                 try std.testing.expectEqual(Testing.Component.B{}, entity.b);
+                try std.testing.expectEqual(@as(?*Testing.Component.C, null), entity.c);
 
                 index += 1;
             }
+            try std.testing.expectEqual(entities.len, index);
         }
     }
 
@@ -1406,9 +1410,11 @@ test "query with optional component" {
                 }
 
                 try std.testing.expectEqual(Testing.Component.B{}, entity.b);
+                try std.testing.expectEqual(@as(?*const Testing.Component.C, null), entity.c);
 
                 index += 1;
             }
+            try std.testing.expectEqual(entities.len, index);
         }
     }
 }
