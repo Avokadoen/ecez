@@ -158,4 +158,21 @@ pub fn calculateSearchOrder(
     return .{ full_set_search_order, full_set_is_include };
 }
 
+/// Assuming only result fields can hold optional tags (zero sized components)
+pub fn isQueryTypeOptionalTag(
+    comptime result_fields: []const std.builtin.Type.StructField,
+    comptime QueryType: type,
+) bool {
+    inline for (result_fields) |field| {
+        const request = CompileReflect.compactComponentRequest(field.type);
+        if (@sizeOf(request.type) != 0 or request.type != QueryType) {
+            continue;
+        }
+
+        return request.isOptional();
+    }
+
+    return false;
+}
+
 test calculateSearchOrder {}

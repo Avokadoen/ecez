@@ -32,6 +32,7 @@ full_sparse_set_count: comptime_int,
 full_sparse_set_optional_count: comptime_int,
 
 tag_sparse_set_count: comptime_int,
+tag_sparse_set_optional_count: comptime_int,
 tag_include_start: comptime_int,
 tag_exclude_start: comptime_int,
 
@@ -68,6 +69,7 @@ pub fn init(
         @compileError(error_message);
     }
 
+    var tag_sparse_set_optional_count: usize = 0;
     var full_sparse_set_optional_count: usize = 0;
 
     var has_entity = false;
@@ -92,7 +94,11 @@ pub fn init(
                 has_entity = true;
             } else {
                 const request = CompileReflect.compactComponentRequest(result_field.type);
-                full_sparse_set_optional_count += if (request.isOptional()) 1 else 0;
+                if (@sizeOf(request.type) == 0) {
+                    tag_sparse_set_optional_count += if (request.isOptional()) 1 else 0;
+                } else {
+                    full_sparse_set_optional_count += if (request.isOptional()) 1 else 0;
+                }
             }
         }
 
@@ -254,6 +260,7 @@ pub fn init(
         .full_sparse_set_count = full_sparse_set_count,
         .full_sparse_set_optional_count = full_sparse_set_optional_count,
         .tag_sparse_set_count = tag_sparse_set_count,
+        .tag_sparse_set_optional_count = tag_sparse_set_optional_count,
         .tag_include_start = tag_include_start,
         .tag_exclude_start = tag_exclude_start,
     };

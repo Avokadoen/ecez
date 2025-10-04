@@ -46,6 +46,12 @@ pub fn Create(config: CreateConfig) type {
             // Atomically load the current number of entities
             const number_of_entities = storage.created_entity_count.load(.monotonic);
 
+            // TODO: All logic regarding collecting these no optional sets needs a refactor
+            //       i.e if config.query_components holds some reflection info instead of only being the raw value type ...
+            // Store only non-optionals for caching to consider for an actual query hit
+            const no_optionals_tag_sparse_sets_len = config.tag_sparse_set_count - config.tag_sparse_set_optional_count;
+            var no_optionals_tag_sparse_sets: [no_optionals_tag_sparse_sets_len]*const set.Sparse.Tag = undefined;
+
             const biggest_set_len, const tag_sparse_sets, const full_sparse_sets, const dense_sets = retrieve_component_sets_blk: {
                 var _biggest_set_len: EntityId = 0;
                 var _tag_sparse_sets: [config.tag_sparse_set_count]*const set.Sparse.Tag = undefined;
@@ -54,6 +60,7 @@ pub fn Create(config: CreateConfig) type {
 
                 comptime var full_sparse_sets_index: u32 = 0;
                 comptime var tag_sparse_sets_index: u32 = 0;
+                comptime var no_optionals_tag_sparse_sets_index: u32 = 0;
                 inline for (config.query_components) |Component| {
                     const sparse_set_ptr = storage.getSparseSetConstPtr(Component);
 
@@ -69,6 +76,11 @@ pub fn Create(config: CreateConfig) type {
 
                         _tag_sparse_sets[tag_sparse_sets_index] = sparse_set_ptr;
                         tag_sparse_sets_index += 1;
+
+                        if (comptime common.isQueryTypeOptionalTag(_result_fields, Component) == false) {
+                            no_optionals_tag_sparse_sets[no_optionals_tag_sparse_sets_index] = sparse_set_ptr;
+                            no_optionals_tag_sparse_sets_index += 1;
+                        }
                     }
                 }
 
@@ -93,9 +105,9 @@ pub fn Create(config: CreateConfig) type {
             // each check will reduce result if a miss
             @memset(result_entities_bitmap, std.math.maxInt(EntityId));
 
-            // handle any tag components and store result
+            // handle any tag components that are not optional and store result
             if (comptime config.tag_sparse_set_count > 0) {
-                inline for (tag_sparse_sets, 0..) |tag_sparse_set, sparse_index| {
+                inline for (no_optionals_tag_sparse_sets, 0..) |tag_sparse_set, sparse_index| {
                     const is_include_set = sparse_index < config.tag_exclude_start;
                     const sparse_len = tag_sparse_set.sparse_len;
 
