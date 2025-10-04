@@ -1419,6 +1419,55 @@ test "query with optional component" {
     }
 }
 
+test "query with 2 optional tag components" {
+    const Tag0 = struct {};
+    const Tag1 = struct {};
+    const RepStorage = @import("storage.zig").CreateStorage(.{
+        Testing.Component.A,
+        Tag0,
+        Testing.Component.B,
+        Testing.Component.C,
+        Testing.Component.D,
+        Testing.Component.E,
+        Tag1,
+    });
+
+    var storage = try RepStorage.init(std.testing.allocator);
+    defer storage.deinit();
+
+    var entities: [128]Entity = undefined;
+    for (&entities) |*entity| {
+        entity.* = try storage.createEntity(.{ Testing.Component.A{}, Testing.Component.B{}, Tag0{} });
+    }
+
+    const TQueries = Testing.QueryAndQueryAny(
+        struct {
+            handle: Entity,
+            a: Testing.Component.A,
+            b: Testing.Component.B,
+            t0: ?Tag0,
+        },
+        .{},
+        .{Tag1},
+    );
+    inline for (TQueries) |TQuery| {
+        var iter = try TQuery.submit(std.testing.allocator, &storage);
+        defer iter.deinit(std.testing.allocator);
+
+        var index: u32 = 0;
+        while (iter.next()) |entity| {
+            try std.testing.expectEqual(index, entity.handle.id);
+
+            try std.testing.expectEqual(Testing.Component.A{}, entity.a);
+            try std.testing.expectEqual(Testing.Component.B{}, entity.b);
+            try std.testing.expectEqual(@as(?Tag0, Tag0{}), entity.t0);
+
+            index += 1;
+        }
+        try std.testing.expectEqual(entities.len, index);
+    }
+}
+
 test "reproducer: MineSweeper index out of bound caused by incorrect mapping of query to internal storage" {
     const transform = struct {
         const Position = struct {

@@ -28,7 +28,6 @@ pub fn Create(comptime config: CreateConfig) type {
         pub const _exclude_types = config.query_components[config.exclude_type_start..];
 
         const search_order_count = config.full_sparse_set_count - config.full_sparse_set_optional_count;
-        const no_optionals_tag_sparse_sets_len = config.tag_sparse_set_count - config.tag_sparse_set_optional_count;
 
         pub const EcezType = CreateConfig.QueryAnyType;
 
@@ -42,9 +41,7 @@ pub fn Create(comptime config: CreateConfig) type {
         full_sparse_sets: [config.full_sparse_set_count]*const set.Sparse.Full,
 
         tag_sparse_sets_bits: EntityId,
-        tag_sparse_sets: [config.tag_sparse_set_count]*const set.Sparse.Tag,
-
-        no_optionals_tag_sparse_sets: [no_optionals_tag_sparse_sets_len]*const set.Sparse.Tag,
+        tag_sparse_sets: [config.tag_sparse_set_count]common.TagSetReference,
 
         dense_sets: CompileReflect.GroupDenseSetsConstPtr(config.query_components),
 
@@ -60,13 +57,11 @@ pub fn Create(comptime config: CreateConfig) type {
             var dense_sets: CompileReflect.GroupDenseSetsConstPtr(config.query_components) = undefined;
 
             var full_sparse_sets: [config.full_sparse_set_count]*const set.Sparse.Full = undefined;
-            var tag_sparse_sets: [config.tag_sparse_set_count]*const set.Sparse.Tag = undefined;
-            var no_optionals_tag_sparse_sets: [no_optionals_tag_sparse_sets_len]*const set.Sparse.Tag = undefined;
+            var tag_sparse_sets: [config.tag_sparse_set_count]common.TagSetReference = undefined;
 
             {
                 comptime var full_sparse_sets_index: u32 = 0;
                 comptime var tag_sparse_sets_index: u32 = 0;
-                comptime var no_optionals_tag_sparse_sets_index: u32 = 0;
                 inline for (config.query_components) |Component| {
                     const sparse_set_ptr = storage.getSparseSetConstPtr(Component);
 
@@ -76,13 +71,11 @@ pub fn Create(comptime config: CreateConfig) type {
 
                         @field(dense_sets, @typeName(Component)) = storage.getDenseSetPtr(Component);
                     } else {
-                        tag_sparse_sets[tag_sparse_sets_index] = sparse_set_ptr;
+                        tag_sparse_sets[tag_sparse_sets_index] = .{
+                            .set = sparse_set_ptr,
+                            .is_optional = common.isQueryTypeOptionalTag(_result_fields, Component),
+                        };
                         tag_sparse_sets_index += 1;
-
-                        if (comptime common.isQueryTypeOptionalTag(_result_fields, Component) == false) {
-                            no_optionals_tag_sparse_sets[no_optionals_tag_sparse_sets_index] = sparse_set_ptr;
-                            no_optionals_tag_sparse_sets_index += 1;
-                        }
                     }
                 }
 
@@ -101,7 +94,6 @@ pub fn Create(comptime config: CreateConfig) type {
                 .full_set_is_include = full_set_is_include,
                 .tag_sparse_sets_bits = 0,
                 .tag_sparse_sets = tag_sparse_sets,
-                .no_optionals_tag_sparse_sets = no_optionals_tag_sparse_sets,
                 .dense_sets = dense_sets,
                 .mutex = null,
             };
@@ -160,7 +152,12 @@ pub fn Create(comptime config: CreateConfig) type {
                         const bit_index = @divFloor(self.sparse_cursors, @bitSizeOf(EntityId));
 
                         self.tag_sparse_sets_bits = 0;
-                        for (self.no_optionals_tag_sparse_sets, 0..) |tag_sparse_set, sparse_index| {
+                        tag_set_loop: for (self.tag_sparse_sets, 0..) |tag_sparse_set_ref, sparse_index| {
+                            if (tag_sparse_set_ref.is_optional) {
+                                continue :tag_set_loop;
+                            }
+                            const tag_sparse_set = tag_sparse_set_ref.set;
+
                             const bits = if (tag_sparse_set.sparse_bits.len > bit_index)
                                 tag_sparse_set.sparse_bits[bit_index]
                             else

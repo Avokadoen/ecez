@@ -6,6 +6,11 @@ const set = @import("../sparse_set.zig");
 const CompileReflect = @import("../storage.zig").CompileReflect;
 const CreateConfig = @import("CreateConfig.zig");
 
+pub const TagSetReference = struct {
+    set: *const set.Sparse.Tag,
+    is_optional: bool,
+};
+
 pub fn populateResult(self: anytype, comptime config: CreateConfig) config.ResultItem {
     var result: config.ResultItem = undefined;
     // if entity is first field
@@ -41,7 +46,7 @@ pub fn populateResult(self: anytype, comptime config: CreateConfig) config.Resul
         } else {
             defer tag_sparse_index += 1;
 
-            const sparse_set = self.tag_sparse_sets[tag_sparse_index];
+            const sparse_set = self.tag_sparse_sets[tag_sparse_index].set;
             const is_set = sparse_set.isSet(self.sparse_cursors);
 
             if (is_set) {
