@@ -1419,7 +1419,7 @@ test "query with optional component" {
     }
 }
 
-test "query with 2 optional tag components" {
+test "query with optional tag and exclude tag component" {
     const Tag0 = struct {};
     const Tag1 = struct {};
     const RepStorage = @import("storage.zig").CreateStorage(.{
