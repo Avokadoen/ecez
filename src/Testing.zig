@@ -1,6 +1,6 @@
 const CreateStorage = @import("storage.zig").CreateStorage;
-const query = @import("query.zig");
 const Entity = @import("entity_type.zig").Entity;
+const query = @import("query.zig");
 
 // Query + QueryAny
 pub const query_type_count = 2;
@@ -154,6 +154,14 @@ pub const Queries = struct {
     pub const WriteB = QueryAndQueryAny(
         struct {
             b: *Component.B,
+        },
+        .{},
+        .{},
+    );
+
+    pub const WriteD = QueryAndQueryAny(
+        struct {
+            d: *Component.D,
         },
         .{},
         .{},

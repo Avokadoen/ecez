@@ -48,11 +48,25 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
         break :init_system_count_array_blk _system_counts;
     };
 
+    // We need some memory to store each events error state
+    const ErrorInt = std.meta.Int(.unsigned, @bitSizeOf(anyerror));
+    const ErrorAtomic = std.atomic.Value(ErrorInt);
+    const EventErrorAtomics: type = CompileReflect.EventErrorAtomicStorageType(
+        event_count,
+        ErrorAtomic,
+    );
+
     // Calculate dependencies
     const Dependencies: type = CompileReflect.DependencyListsType(events, event_count);
 
     // Store each individual thread_pool_impl.Runnable
-    const EventsScheduler: type = CompileReflect.EventSchedulerType(event_count, events, &system_counts, Storage);
+    const EventsScheduler: type = CompileReflect.EventSchedulerType(
+        event_count,
+        events,
+        &system_counts,
+        Storage,
+        ErrorAtomic,
+    );
 
     // We need some memory to store the individual system interfaces
     const SystemSchedulerInterfaceStorage: type = CompileReflect.EventSystemStorageType(
@@ -82,6 +96,7 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
             .system_scheduler_interface_storage = undefined,
             .pre_req_inflight_storage = undefined,
             .events_systems_running = undefined,
+            .events_error_atomics = undefined,
             .dependencies = undefined,
         };
 
@@ -91,7 +106,8 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
         events_scheduler: EventsScheduler,
         system_scheduler_interface_storage: SystemSchedulerInterfaceStorage,
         pre_req_inflight_storage: PreReqInflightStorage,
-        events_systems_running: [event_count]std.atomic.Value(u32),
+        events_systems_running: [event_count]std.atomic.Value(i32),
+        events_error_atomics: EventErrorAtomics,
         dependencies: Dependencies,
 
         /// Initialized the system scheduler. User must make sure to call deinit
@@ -128,6 +144,7 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
                         .system_schedulers = system_scheduler_interfaces,
                         .prereq_jobs_inflights = prereq_jobs_inflights,
                         .systems_running = &scheduler.events_systems_running[event_index],
+                        .events_error_atomic = &scheduler.events_error_atomics[event_index],
                         .pool = thread_pool,
                         .execute_args = undefined, // Assigned in dispatch
                     };
@@ -144,6 +161,8 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
             const allocator = self.thread_pool.allocator;
             self.thread_pool.deinit();
             allocator.destroy(self.thread_pool);
+
+            self.* = .uninitialized;
         }
 
         /// Trigger an event asynchronously. The caller must make sure to call waitEvent with matching enum identifier
@@ -173,6 +192,9 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
             const event_index = @intFromEnum(event);
             const triggered_event = events[event_index];
 
+            // Set error state to void
+            _ = self.events_error_atomics[event_index].store(0, .monotonic);
+
             const event_dependencies: []const gen_dependency_chain.Dependency = &@field(self.dependencies, triggered_event._name);
             const prereq_jobs_inflights = &@field(self.pre_req_inflight_storage, triggered_event._name);
             const event_scheduler = &@field(self.events_scheduler, triggered_event._name);
@@ -181,7 +203,7 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
                 @branchHint(.likely);
 
                 self.events_systems_running[event_index].store(
-                    system_counts[event_index],
+                    0,
                     .monotonic,
                 );
 
@@ -205,6 +227,18 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
                     _ = &opaque_scheduler; // silence zig thinking opaque_scheduler is not a var
 
                     @TypeOf(system_scheduler.*).execute(opaque_scheduler);
+
+                    // If an error may occur for this event
+                    if (comptime triggered_event.GetErrorSet()) |_| {
+                        // catch error if any
+                        const event_error_value = system_scheduler.events_error_atomic.load(.monotonic);
+                        if (event_error_value > 0) {
+                            // Hint to the scheduler that wait is no longer needed
+                            system_scheduler.systems_running.store(0, .monotonic);
+
+                            return;
+                        }
+                    }
                 }
             } else {
                 @branchHint(.likely);
@@ -217,6 +251,11 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
                         _ = &opaque_scheduler; // silence zig thinking opaque_scheduler is not a var
 
                         try self.thread_pool.spawn(field_info.type.schedule, .{ opaque_scheduler, event_dependencies });
+
+                        _ = self.events_systems_running[event_index].fetchAdd(
+                            1,
+                            .monotonic,
+                        );
                     }
                 }
             }
@@ -224,14 +263,31 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
 
         /// Wait for all jobs from a dispatchEvent to finish by blocking the calling thread
         /// should only be called from the dispatchEvent thread
-        pub fn waitEvent(self: *Scheduler, comptime event: EventsEnum) void {
+        pub fn waitEvent(self: *Scheduler, comptime event: EventsEnum) return_type_blk: {
+            const event_index = @intFromEnum(event);
+            const wait_event = events[event_index];
+            break :return_type_blk wait_event.GetErrorUnion();
+        } {
             const tracy_zone_name = comptime std.fmt.comptimePrint("{s}: event {s}", .{ @src().fn_name, @tagName(event) });
             const zone = ztracy.ZoneNC(@src(), tracy_zone_name, Color.scheduler);
             defer zone.End();
 
-            // Spinlock :/
             const event_index = @intFromEnum(event);
+
+            // Spinlock :/
             while (self.events_systems_running[event_index].load(.monotonic) > 0) {}
+
+            const wait_event = events[event_index];
+            const EventErrorUnion = wait_event.GetErrorUnion();
+
+            if (comptime EventErrorUnion != void) {
+                // catch error if any
+                const event_error_value = self.events_error_atomics[event_index].load(.monotonic);
+                if (event_error_value > 0) {
+                    const err: EventErrorUnion = @errorCast(@errorFromInt(event_error_value - 1));
+                    return err;
+                }
+            }
         }
 
         /// Check if an event is currently being executed
@@ -301,6 +357,8 @@ fn SystemScheduler(
     comptime func: anytype,
     comptime Storage: type,
     comptime EventArgument: type,
+    comptime EventErrorUnion: type,
+    comptime ErrorAtomic: type,
 ) type {
     return struct {
         pub const Index = u32;
@@ -314,7 +372,9 @@ fn SystemScheduler(
         entry_index: Index,
         system_schedulers: []SystemSchedulerInterface,
         prereq_jobs_inflights: []std.atomic.Value(u32),
-        systems_running: *std.atomic.Value(u32),
+        systems_running: *std.atomic.Value(i32),
+
+        events_error_atomic: *ErrorAtomic,
 
         pool: *ThreadPool,
 
@@ -338,9 +398,19 @@ fn SystemScheduler(
 
             // Launch system
             execute(ctx);
+            defer {
+                // Decrement schedulers "system in-flight" count
+                _ = system_scheduler.systems_running.fetchSub(1, .acq_rel);
+            }
 
-            // Decrement schedulers "system in-flight" count
-            _ = system_scheduler.systems_running.fetchSub(1, .acq_rel);
+            // If an error may occur for this event
+            if (comptime EventErrorUnion != void) {
+                // catch error if any
+                const event_error_value = system_scheduler.events_error_atomic.load(.monotonic);
+                if (event_error_value > 0) {
+                    return;
+                }
+            }
 
             // Once done, loop all systems that depend on this system
             const signal_indices = dependencies[system_scheduler.entry_index].signal_indices;
@@ -349,6 +419,9 @@ fn SystemScheduler(
                 // Decrement blocking prerequisites count for these systems
                 const blocking_count = system_scheduler.prereq_jobs_inflights[signal_index].fetchSub(1, .monotonic);
                 if (blocking_count == 1) {
+                    // increment systems_running counter
+                    _ = system_scheduler.systems_running.fetchAdd(1, .acq_rel);
+
                     // Schedule depending systems that are no longer blocked
                     system_scheduler.pool.spawn(
                         SystemSchedulerInterface.schedule,
@@ -363,9 +436,9 @@ fn SystemScheduler(
             const execute_args = &system_scheduler.execute_args;
             const FuncType = @TypeOf(func);
             const param_types = comptime get_param_types_blk: {
-                const func_info = @typeInfo(FuncType);
-                var types: [func_info.@"fn".params.len]type = undefined;
-                for (&types, func_info.@"fn".params) |*Type, param| {
+                const func_info = @typeInfo(FuncType).@"fn";
+                var types: [func_info.params.len]type = undefined;
+                for (&types, func_info.params) |*Type, param| {
                     Type.* = param.type.?;
                 }
 
@@ -401,7 +474,14 @@ fn SystemScheduler(
 
             // if this is a debug build we do not want inline (to get better error messages), otherwise inline systems for performance
             const system_call_modidifer: std.builtin.CallModifier = if (@import("builtin").mode == .Debug) .never_inline else .auto;
-            @call(system_call_modidifer, func, arguments);
+            const return_error_type = CompileReflect.functionErrorSet(FuncType);
+            if (comptime return_error_type != null) {
+                @call(system_call_modidifer, func, arguments) catch |err| {
+                    system_scheduler.events_error_atomic.store(@intFromError(err) + 1, .monotonic);
+                };
+            } else {
+                @call(system_call_modidifer, func, arguments);
+            }
 
             // For each system argument, make sure to deinitialize any queries produced by system dispatch
             inline for (param_types, &arguments) |Param, *arg| {
@@ -465,6 +545,62 @@ pub fn Event(comptime name: []const u8, comptime systems: anytype, comptime conf
             }
 
             return system_count;
+        }
+
+        pub fn GetErrorSet() ?type {
+            const EmptyError = error{};
+            comptime var AllErrorSet = EmptyError;
+            const systems_info = @typeInfo(@TypeOf(ThisEvent._systems));
+            inline for (systems_info.@"struct".fields) |field_system| {
+                if (CompileReflect.functionErrorSet(field_system.type)) |error_set| {
+                    AllErrorSet = AllErrorSet || error_set;
+                }
+            }
+
+            if (AllErrorSet == EmptyError) {
+                return null;
+            }
+            return AllErrorSet;
+        }
+
+        pub fn GetErrorUnion() type {
+            return if (GetErrorSet()) |ErrorSet| ErrorSet!void else void;
+        }
+
+        test GetErrorSet {
+            const Systems = struct {
+                pub fn oom(a: *Testing.Queries.ReadA[0]) error{OutOfMemory}!void {
+                    while (a.next()) |_| {}
+                }
+
+                pub fn myError(a: *Testing.Queries.ReadA[0]) error{MyError}!void {
+                    while (a.next()) |_| {}
+                }
+
+                pub fn twoErrors(a: *Testing.Queries.ReadA[0]) error{ One, Two }!void {
+                    while (a.next()) |_| {}
+                }
+            };
+
+            const OnFooEvent = Event(
+                "on_foo",
+                .{
+                    Systems.oom,
+                    Systems.oom,
+                    Systems.myError,
+                    Systems.twoErrors,
+                },
+                .{},
+            );
+
+            const ErrorSet = OnFooEvent.GetErrorSet().?;
+            const error_set_info = @typeInfo(ErrorSet);
+            const error_set = error_set_info.error_set.?;
+            try testing.expectEqual(4, error_set_info.error_set.?.len);
+            try testing.expectEqual("OutOfMemory", error_set[0].name);
+            try testing.expectEqual("MyError", error_set[1].name);
+            try testing.expectEqual("One", error_set[2].name);
+            try testing.expectEqual("Two", error_set[3].name);
         }
     };
 }
@@ -588,6 +724,27 @@ pub const CompileReflect = struct {
         return @Type(enum_info);
     }
 
+    pub fn functionErrorSet(comptime @"fn": type) ?type {
+        const fn_info = @typeInfo(@"fn");
+        if (fn_info != .@"fn") {
+            return null;
+        }
+
+        const ReturnType = fn_info.@"fn".return_type orelse {
+            return null;
+        };
+
+        const return_type_info = @typeInfo(ReturnType);
+        if (return_type_info != .error_union) {
+            if (return_type_info != .void) {
+                @compileError("system '" ++ @typeName(@"fn") ++ "' is returning '" ++ @typeName(ReturnType) ++ "', systems must return void or error{}!void");
+            }
+            return null;
+        }
+
+        return return_type_info.error_union.error_set;
+    }
+
     pub fn DependencyListsType(comptime events: anytype, comptime event_count: u32) type {
         var dependency_lists_type_fields: [event_count]std.builtin.Type.StructField = undefined;
         for (&dependency_lists_type_fields, events) |*dependency_lists_type_field, event| {
@@ -617,6 +774,7 @@ pub const CompileReflect = struct {
         comptime events: anytype,
         comptime system_counts: []const u32,
         comptime Storage: type,
+        comptime ErrorAtomic: type,
     ) type {
         const Type = std.builtin.Type;
         var fields: [event_count]Type.StructField = undefined;
@@ -628,6 +786,8 @@ pub const CompileReflect = struct {
                     system,
                     Storage,
                     event._EventArgument,
+                    event.GetErrorUnion(),
+                    ErrorAtomic,
                 );
                 event_field.* = Type.StructField{
                     .name = field_name[0.. :0],
@@ -688,6 +848,31 @@ pub const CompileReflect = struct {
             .fields = &fields,
             .decls = &[0]Type.Declaration{},
             .is_tuple = false,
+        } });
+    }
+
+    pub fn EventErrorAtomicStorageType(
+        comptime event_count: u32,
+        comptime FieldType: type,
+    ) type {
+        const Type = std.builtin.Type;
+        var fields: [event_count]Type.StructField = undefined;
+        for (&fields, 0..) |*field, event_index| {
+            field.* = Type.StructField{
+                .name = std.fmt.comptimePrint("{d}", .{event_index}),
+                .type = FieldType,
+                .default_value_ptr = null,
+                .is_comptime = false,
+                .alignment = @alignOf(FieldType),
+            };
+        }
+
+        return @Type(Type{ .@"struct" = Type.Struct{
+            .layout = .auto,
+            .backing_integer = null,
+            .fields = &fields,
+            .decls = &[0]Type.Declaration{},
+            .is_tuple = true,
         } });
     }
 };
@@ -990,6 +1175,87 @@ test "system sub storage can mutate components" {
         Testing.Component.B{ .value = 42 },
         storage.getComponent(entity, Testing.Component.B).?,
     );
+}
+
+test "system can fail" {
+    const SystemStruct = struct {
+        pub fn mutateA(a_query: *Testing.Queries.WriteA[0]) error{Kaboom}!void {
+            while (a_query.next()) |entity| {
+                entity.a.value += 1;
+            }
+
+            return error.Kaboom;
+        }
+
+        // keep a system that is unrelated to the failure chain to invoke some
+        // none-determinsim (and potentially trigger scheduler bugs)
+        pub fn mutateD(d_query: *Testing.Queries.WriteD[0]) void {
+            while (d_query.next()) |entity| {
+                entity.d.* = .two;
+            }
+        }
+
+        pub fn mutateAB(barrier_a: *Testing.Queries.ReadA[0], b_query: *Testing.Queries.WriteB[0]) void {
+            _ = barrier_a;
+
+            while (b_query.next()) |entity| {
+                entity.b.value += 1;
+            }
+        }
+    };
+
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    const Scheduler = CreateScheduler(StorageStub, .{Event(
+        "on_foo",
+        .{
+            SystemStruct.mutateA,
+            SystemStruct.mutateD,
+            SystemStruct.mutateAB,
+        },
+        .{},
+    )});
+    var scheduler = Scheduler.uninitialized;
+
+    try scheduler.init(.{
+        .pool_allocator = std.testing.allocator,
+        .query_submit_allocator = std.testing.allocator,
+    });
+    defer scheduler.deinit();
+
+    // Repeat test incase we have non-deterministic behaviour
+    for (0..512) |_| {
+        var entities: [100]Entity = undefined;
+        for (&entities, 0..) |*entity, index| {
+            entity.* = try storage.createEntity(.{
+                Testing.Component.A{ .value = @intCast(index) },
+                Testing.Component.B{ .value = @intCast(index) },
+                Testing.Component.D.one,
+            });
+        }
+
+        try scheduler.dispatchEvent(&storage, .on_foo, {});
+
+        try testing.expectError(
+            error.Kaboom,
+            scheduler.waitEvent(.on_foo),
+        );
+
+        for (entities, 0..) |entity, index| {
+            const ab = storage.getComponents(entity, Testing.Structure.AB).?;
+            try testing.expectEqual(
+                Testing.Component.A{ .value = @intCast(index + 1) },
+                ab.a,
+            );
+            testing.expectEqual(
+                Testing.Component.B{ .value = @intCast(index) },
+                ab.b,
+            ) catch unreachable;
+        }
+
+        storage.clearRetainingCapacity(); // clear to repeat
+    }
 }
 
 test "Dispatch is determenistic (no race conditions)" {
