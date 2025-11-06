@@ -106,7 +106,7 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
         events_scheduler: EventsScheduler,
         system_scheduler_interface_storage: SystemSchedulerInterfaceStorage,
         pre_req_inflight_storage: PreReqInflightStorage,
-        events_systems_running: [event_count]std.atomic.Value(i32),
+        events_systems_running: [event_count]std.atomic.Value(u32),
         events_error_atomics: EventErrorAtomics,
         dependencies: Dependencies,
 
@@ -372,7 +372,7 @@ fn SystemScheduler(
         entry_index: Index,
         system_schedulers: []SystemSchedulerInterface,
         prereq_jobs_inflights: []std.atomic.Value(u32),
-        systems_running: *std.atomic.Value(i32),
+        systems_running: *std.atomic.Value(u32),
 
         events_error_atomic: *ErrorAtomic,
 
