@@ -169,7 +169,7 @@ pub fn main() anyerror!void {
     // A ecez scheduler consist of Events:
     const MyFirstEvent = ecez.Event(
         // A name is given, this will be used to dispatch a given event
-        "myFirstEvent",
+        "my_first_event",
         // A tuple of systems is then given. These will be dispatched in the given order (top to bottom),
         // However they may run in parrallel if there is limited dependencies between them.
         .{
@@ -182,7 +182,7 @@ pub fn main() anyerror!void {
 
     // Scheduler can have multiple events ...
     const MySecondEvent = ecez.Event(
-        "mySecondEvent",
+        "my_second_event",
         .{
             Systems.iterateLiving,
         },
@@ -203,21 +203,21 @@ pub fn main() anyerror!void {
     // Remember that one of our systems request MouseEvent which was not a component, but an EventArgument
     const mouse_event = MouseEvent{ .x = 99, .y = 98 };
 
-    // disaptch our first event which we name "myFirstEvent"
-    try scheduler.dispatchEvent(&storage, .myFirstEvent, mouse_event);
+    // disaptch our first event which we name "my_first_event"
+    try scheduler.dispatchEvent(&storage, .my_first_event, mouse_event);
 
     // events are async, so we must wait for it to complete
-    // NOTE: waitEvent(.myFirstEvent) return void!error{OutOfMemory} in this case since spawnLivingTrail could fail with said error
-    try scheduler.waitEvent(.myFirstEvent);
+    // NOTE: waitEvent(.my_first_event) return void!error{OutOfMemory} in this case since spawnLivingTrail could fail with said error
+    try scheduler.waitEvent(.my_first_event);
 
     // Like the first event we can also dispatch our second event
-    try scheduler.dispatchEvent(&storage, .mySecondEvent, mouse_event);
+    try scheduler.dispatchEvent(&storage, .my_second_event, mouse_event);
 
     // we can also check if the event is currently being executed
-    _ = scheduler.isEventInFlight(.mySecondEvent);
+    _ = scheduler.isEventInFlight(.my_second_event);
 
-    // NOTE: waitEvent(.myFirstEvent) return void since no system here can fail
-    scheduler.waitEvent(.mySecondEvent);
+    // NOTE: waitEvent(.my_first_event) return void since no system here can fail
+    scheduler.waitEvent(.my_second_event);
 
     // serialize the storage into a slice of bytes
     const bytes = try ezby.serialize(allocator, Storage, storage, .{});
