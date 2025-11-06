@@ -464,7 +464,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                                 // then result the request cant be fulfilled, return null
                                 return null;
                             } else {
-                                @field(result, field.name) = null;
+                                break :get_field_blk null;
                             }
                         }
                     }
@@ -1514,33 +1514,46 @@ test "getComponents() can request optional" {
     defer storage.deinit();
 
     const a = Testing.Component.A{ .value = 32 };
-    const entity = try storage.createEntity(.{a});
+    const f = Testing.Component.F{};
+    const entity = try storage.createEntity(.{ a, Testing.Component.F{} });
 
     {
         const stored = storage.getComponents(entity, struct {
             a: ?Testing.Component.A,
             b: ?Testing.Component.B,
+            c: ?Testing.Component.C,
+            f: ?Testing.Component.F,
         }).?;
         try testing.expectEqual(a, stored.a.?);
         try testing.expectEqual(@as(?Testing.Component.B, null), stored.b);
+        try testing.expectEqual(@as(?Testing.Component.C, null), stored.c);
+        try testing.expectEqual(Testing.Component.F{}, stored.f);
     }
 
     {
         const stored = storage.getComponents(entity, struct {
             a: ?*const Testing.Component.A,
             b: ?*const Testing.Component.B,
+            c: ?*const Testing.Component.C,
+            f: ?*const Testing.Component.F,
         }).?;
         try testing.expectEqual(a, stored.a.?.*);
         try testing.expectEqual(@as(?*const Testing.Component.B, null), stored.b);
+        try testing.expectEqual(@as(?*const Testing.Component.C, null), stored.c);
+        try testing.expectEqual(f, stored.f.?.*);
     }
 
     {
         const stored = storage.getComponents(entity, struct {
             a: ?*Testing.Component.A,
             b: ?*Testing.Component.B,
+            c: ?*Testing.Component.C,
+            f: ?*Testing.Component.F,
         }).?;
         try testing.expectEqual(a, stored.a.?.*);
         try testing.expectEqual(@as(?*Testing.Component.B, null), stored.b);
+        try testing.expectEqual(@as(?*Testing.Component.C, null), stored.c);
+        try testing.expectEqual(f, stored.f.?.*);
     }
 }
 
