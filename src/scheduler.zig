@@ -300,16 +300,6 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
             return self.events_systems_running[event_index].load(.monotonic) > 0;
         }
 
-        /// Force the storage to flush all current in flight jobs before continuing
-        pub fn waitIdle(self: *Scheduler) void {
-            const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.scheduler);
-            defer zone.End();
-
-            inline for (0..events.len) |event_enum_int| {
-                self.waitEvent(@enumFromInt(event_enum_int));
-            }
-        }
-
         /// Dump the dependency chain of systems to see which systems will wait on which previous systems
         pub fn dumpDependencyChain(comptime event: EventsEnum) []const gen_dependency_chain.Dependency {
             if (@inComptime() == false) {
@@ -1535,22 +1525,26 @@ test "Dispatch with multiple events works" {
         // ((0 + 1) * 2) + 1 = 3
         try scheduler.dispatchEvent(&storage, .on_a, {});
         try scheduler.dispatchEvent(&storage, .on_b, {});
-        scheduler.waitIdle();
+        scheduler.waitEvent(.on_a);
+        scheduler.waitEvent(.on_b);
 
         // ((3 + 1) * 2) + 1 = 9
         try scheduler.dispatchEvent(&storage, .on_a, {});
         try scheduler.dispatchEvent(&storage, .on_b, {});
-        scheduler.waitIdle();
+        scheduler.waitEvent(.on_a);
+        scheduler.waitEvent(.on_b);
 
         // ((9 + 1) * 2) + 1 = 21
         try scheduler.dispatchEvent(&storage, .on_a, {});
         try scheduler.dispatchEvent(&storage, .on_b, {});
-        scheduler.waitIdle();
+        scheduler.waitEvent(.on_a);
+        scheduler.waitEvent(.on_b);
 
         // ((21 + 1) * 2) + 1 = 45
         try scheduler.dispatchEvent(&storage, .on_a, {});
         try scheduler.dispatchEvent(&storage, .on_b, {});
-        scheduler.waitIdle();
+        scheduler.waitEvent(.on_a);
+        scheduler.waitEvent(.on_b);
 
         const expected_value = 45;
         for (entities) |entity| {
@@ -1657,7 +1651,7 @@ test "Dispatch with destroyEntity is determenistic" {
         }
 
         try scheduler.dispatchEvent(&storage, .incr_destroy, {});
-        scheduler.waitIdle();
+        scheduler.waitEvent(.incr_destroy);
 
         for (&entity_a0, 0..) |entity, index| {
             const a = storage.getComponent(entity, Testing.Component.A).?;
