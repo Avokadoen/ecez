@@ -1258,6 +1258,71 @@ test "system can fail" {
     }
 }
 
+test "system error value is correct" {
+    const Errors = error{
+        Kaboom,
+        Bim,
+        Bam,
+        Cool,
+    };
+    const WhichErrors = struct {
+        which: Errors,
+    };
+
+    const SystemStruct = struct {
+        pub fn returnsError(a_query: *Testing.Queries.WriteA[0], which_error: WhichErrors) Errors!void {
+            while (a_query.next()) |entity| {
+                entity.a.value += 1;
+            }
+
+            return which_error.which;
+        }
+    };
+
+    var storage = try StorageStub.init(testing.allocator);
+    defer storage.deinit();
+
+    const Scheduler = CreateScheduler(StorageStub, .{Event(
+        "on_foo",
+        .{
+            SystemStruct.returnsError,
+        },
+        .{
+            .EventArgument = WhichErrors,
+        },
+    )});
+    var scheduler = Scheduler.uninitialized;
+
+    try scheduler.init(.{
+        .pool_allocator = std.testing.allocator,
+        .query_submit_allocator = std.testing.allocator,
+    });
+    defer scheduler.deinit();
+
+    // Repeat test incase we have non-deterministic behaviour
+    _ = try storage.createEntity(.{
+        Testing.Component.A{ .value = 0 },
+    });
+
+    for ([_]Errors{
+        error.Kaboom,
+        error.Bim,
+        error.Bam,
+        error.Cool,
+    }) |error_value| {
+        try scheduler.dispatchEvent(
+            &storage,
+            .on_foo,
+            WhichErrors{ .which = error_value },
+        );
+
+        try testing.expectError(
+            error_value,
+            scheduler.waitEvent(.on_foo),
+        );
+    }
+}
+
 test "Dispatch is determenistic (no race conditions)" {
     const AbSubStorage = StorageStub.Subset(.{
         *Testing.Component.A,
