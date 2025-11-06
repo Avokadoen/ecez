@@ -250,12 +250,11 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
                         var opaque_scheduler: *anyopaque = @ptrCast(system_scheduler);
                         _ = &opaque_scheduler; // silence zig thinking opaque_scheduler is not a var
 
-                        try self.thread_pool.spawn(field_info.type.schedule, .{ opaque_scheduler, event_dependencies });
-
                         _ = self.events_systems_running[event_index].fetchAdd(
                             1,
                             .monotonic,
                         );
+                        try self.thread_pool.spawn(field_info.type.schedule, .{ opaque_scheduler, event_dependencies });
                     }
                 }
             }
