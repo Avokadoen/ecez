@@ -26,6 +26,7 @@ pub const Component = struct {
         one: u8,
         two: u32,
     };
+    pub const F = struct {};
 };
 
 pub const Structure = struct {
@@ -62,6 +63,7 @@ pub const AllComponentsTuple = .{
     Component.C,
     Component.D,
     Component.E,
+    Component.F,
 };
 
 pub const StorageStub = CreateStorage(AllComponentsTuple);
