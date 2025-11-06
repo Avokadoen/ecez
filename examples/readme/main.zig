@@ -141,10 +141,11 @@ pub fn main() anyerror!void {
         }
 
         // Systems can also have multiple query arguments, and Storage.Subsets
-        pub fn spawnLivingTrail(living_query: *Queries.Living, subset: *StorageSubset) void {
+        pub fn spawnLivingTrail(living_query: *Queries.Living, subset: *StorageSubset) error{OutOfMemory}!void {
             while (living_query.next()) |item| {
                 // For each living, create a new entity at the living pos
-                const new_entity = subset.createEntity(.{ item.pos, Component.Velocity{} }) catch @panic("oom");
+                // NOTE: the system can fail if createEntity returns OutOfMemory in this case
+                const new_entity = try subset.createEntity(.{ item.pos, Component.Velocity{} });
 
                 // we can read health from the storage subset, but no write operation would be allowed (compile error)
                 // Write operations include:
@@ -183,7 +184,7 @@ pub fn main() anyerror!void {
     const MySecondEvent = ecez.Event(
         "mySecondEvent",
         .{
-            Systems.spawnLivingTrail,
+            Systems.iterateLiving,
         },
         .{ .EventArgument = MouseEvent },
     );
@@ -206,7 +207,8 @@ pub fn main() anyerror!void {
     try scheduler.dispatchEvent(&storage, .myFirstEvent, mouse_event);
 
     // events are async, so we must wait for it to complete
-    scheduler.waitEvent(.myFirstEvent);
+    // NOTE: waitEvent(.myFirstEvent) return void!error{OutOfMemory} in this case since spawnLivingTrail could fail with said error
+    try scheduler.waitEvent(.myFirstEvent);
 
     // Like the first event we can also dispatch our second event
     try scheduler.dispatchEvent(&storage, .mySecondEvent, mouse_event);
@@ -214,6 +216,7 @@ pub fn main() anyerror!void {
     // we can also check if the event is currently being executed
     _ = scheduler.isEventInFlight(.mySecondEvent);
 
+    // NOTE: waitEvent(.myFirstEvent) return void since no system here can fail
     scheduler.waitEvent(.mySecondEvent);
 
     // serialize the storage into a slice of bytes
