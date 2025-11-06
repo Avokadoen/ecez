@@ -177,12 +177,12 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
         /// const Scheduler = ecez.CreateScheduler(
         ///     Storage,
         ///     .{
-        ///         ecez.Event("onMouse", .{onMouseSystem}, .{ .EventArgument = EventArgument}),
+        ///         ecez.Event("on_mouse", .{onMouseSystem}, .{ .EventArgument = EventArgument}),
         ///     },
         /// );
         /// // ... storage creation etc ...
         /// // trigger mouse handle
-        /// try scheduler.dispatchEvent(&storage, .onMouse, @as(MouseArg, mouse));
+        /// try scheduler.dispatchEvent(&storage, .on_mouse, @as(MouseArg, mouse));
         /// ```
         pub fn dispatchEvent(self: *Scheduler, storage: *Storage, comptime event: EventsEnum, event_argument: getEventArgumentType(event)) error{OutOfMemory}!void {
             const tracy_zone_name = comptime std.fmt.comptimePrint("dispatchEvent {s}", .{@tagName(event)});
@@ -902,7 +902,7 @@ test "system query can mutate components" {
         defer storage.deinit();
 
         const OnFooEvent = Event(
-            "onFoo",
+            "on_foo",
             .{SystemStruct.mutateStuff},
             .{},
         );
@@ -915,8 +915,8 @@ test "system query can mutate components" {
         });
         defer scheduler.deinit();
 
-        try scheduler.dispatchEvent(&storage, .onFoo, {});
-        scheduler.waitEvent(.onFoo);
+        try scheduler.dispatchEvent(&storage, .on_foo, {});
+        scheduler.waitEvent(.on_foo);
 
         const initial_state = AbEntityType{
             .a = Testing.Component.A{ .value = 1 },
@@ -924,8 +924,8 @@ test "system query can mutate components" {
         };
         const entity = try storage.createEntity(initial_state);
 
-        try scheduler.dispatchEvent(&storage, .onFoo, {});
-        scheduler.waitEvent(.onFoo);
+        try scheduler.dispatchEvent(&storage, .on_foo, {});
+        scheduler.waitEvent(.on_foo);
 
         try testing.expectEqual(
             Testing.Component.A{ .value = 3 },
@@ -997,7 +997,7 @@ test "system SubStorage can spawn new entites (and no race hazards)" {
         defer storage.deinit();
 
         var scheduler = CreateScheduler(StorageStub, .{Event(
-            "onFoo",
+            "on_foo",
             .{
                 SystemStruct.incrB,
                 SystemStruct.decrB,
@@ -1029,8 +1029,8 @@ test "system SubStorage can spawn new entites (and no race hazards)" {
             }
 
             var spawned_entites: SpawnedEntities = undefined;
-            try scheduler.dispatchEvent(&storage, .onFoo, &spawned_entites);
-            scheduler.waitEvent(.onFoo);
+            try scheduler.dispatchEvent(&storage, .on_foo, &spawned_entites);
+            scheduler.waitEvent(.on_foo);
 
             for (&initial_entites, 0..) |entity, iter| {
                 try testing.expectEqual(
@@ -1092,7 +1092,7 @@ test "Thread count 0 works" {
         defer storage.deinit();
 
         var scheduler = CreateScheduler(StorageStub, .{Event(
-            "onFoo",
+            "on_foo",
             .{
                 SystemStruct.incrB,
                 SystemStruct.decrB,
@@ -1117,8 +1117,8 @@ test "Thread count 0 works" {
             });
         }
 
-        try scheduler.dispatchEvent(&storage, .onFoo, {});
-        scheduler.waitEvent(.onFoo);
+        try scheduler.dispatchEvent(&storage, .on_foo, {});
+        scheduler.waitEvent(.on_foo);
 
         for (entities, 0..) |entity, iter| {
             const b = storage.getComponent(entity, Testing.Component.B).?;
@@ -1149,7 +1149,7 @@ test "system sub storage can mutate components" {
     defer storage.deinit();
 
     var scheduler = CreateScheduler(StorageStub, .{Event(
-        "onFoo",
+        "on_foo",
         .{SystemStruct.mutateStuff},
         .{},
     )}).uninitialized;
@@ -1160,16 +1160,16 @@ test "system sub storage can mutate components" {
     });
     defer scheduler.deinit();
 
-    try scheduler.dispatchEvent(&storage, .onFoo, {});
-    scheduler.waitEvent(.onFoo);
+    try scheduler.dispatchEvent(&storage, .on_foo, {});
+    scheduler.waitEvent(.on_foo);
 
     const initial_state = AbEntityType{
         .a = Testing.Component.A{ .value = 42 },
     };
     const entity = try storage.createEntity(initial_state);
 
-    try scheduler.dispatchEvent(&storage, .onFoo, {});
-    scheduler.waitEvent(.onFoo);
+    try scheduler.dispatchEvent(&storage, .on_foo, {});
+    scheduler.waitEvent(.on_foo);
 
     try testing.expectEqual(
         Testing.Component.B{ .value = 42 },
@@ -1333,7 +1333,7 @@ test "Dispatch is determenistic (no race conditions)" {
 
             var scheduler = CreateScheduler(StorageStub, .{
                 Event(
-                    "onFoo",
+                    "on_foo",
                     .{
                         SystemStruct.storageZeroAZeroB,
                         SystemStruct.incrA,
@@ -1367,8 +1367,8 @@ test "Dispatch is determenistic (no race conditions)" {
             // (((0 + 1) * 2) + 1) * 2 + 1 = 7
             const expected_value = 7;
 
-            try scheduler.dispatchEvent(&storage, .onFoo, {});
-            scheduler.waitEvent(.onFoo);
+            try scheduler.dispatchEvent(&storage, .on_foo, {});
+            scheduler.waitEvent(.on_foo);
 
             for (entities) |entity| {
                 const ab = storage.getComponents(entity, Testing.Structure.AB).?;
@@ -1383,8 +1383,8 @@ test "Dispatch is determenistic (no race conditions)" {
             }
 
             // (((0 + 1) * 2) + 1) * 2 + 1 = 7
-            try scheduler.dispatchEvent(&storage, .onFoo, {});
-            scheduler.waitEvent(.onFoo);
+            try scheduler.dispatchEvent(&storage, .on_foo, {});
+            scheduler.waitEvent(.on_foo);
 
             for (entities) |entity| {
                 const ab = storage.getComponents(entity, Testing.Structure.AB).?;
@@ -1434,7 +1434,7 @@ test "Dispatch with multiple events works" {
 
         var scheduler = CreateScheduler(StorageStub, .{
             Event(
-                "onA",
+                "on_a",
                 .{
                     SystemStruct.incrA,
                     SystemStruct.doubleA,
@@ -1443,7 +1443,7 @@ test "Dispatch with multiple events works" {
                 .{},
             ),
             Event(
-                "onB",
+                "on_b",
                 .{
                     SystemStruct.incrB,
                     SystemStruct.doubleB,
@@ -1469,23 +1469,23 @@ test "Dispatch with multiple events works" {
         }
 
         // ((0 + 1) * 2) + 1 = 3
-        try scheduler.dispatchEvent(&storage, .onA, {});
-        try scheduler.dispatchEvent(&storage, .onB, {});
+        try scheduler.dispatchEvent(&storage, .on_a, {});
+        try scheduler.dispatchEvent(&storage, .on_b, {});
         scheduler.waitIdle();
 
         // ((3 + 1) * 2) + 1 = 9
-        try scheduler.dispatchEvent(&storage, .onA, {});
-        try scheduler.dispatchEvent(&storage, .onB, {});
+        try scheduler.dispatchEvent(&storage, .on_a, {});
+        try scheduler.dispatchEvent(&storage, .on_b, {});
         scheduler.waitIdle();
 
         // ((9 + 1) * 2) + 1 = 21
-        try scheduler.dispatchEvent(&storage, .onA, {});
-        try scheduler.dispatchEvent(&storage, .onB, {});
+        try scheduler.dispatchEvent(&storage, .on_a, {});
+        try scheduler.dispatchEvent(&storage, .on_b, {});
         scheduler.waitIdle();
 
         // ((21 + 1) * 2) + 1 = 45
-        try scheduler.dispatchEvent(&storage, .onA, {});
-        try scheduler.dispatchEvent(&storage, .onB, {});
+        try scheduler.dispatchEvent(&storage, .on_a, {});
+        try scheduler.dispatchEvent(&storage, .on_b, {});
         scheduler.waitIdle();
 
         const expected_value = 45;
@@ -1542,7 +1542,7 @@ test "Dispatch with destroyEntity is determenistic" {
 
         var scheduler = CreateScheduler(StorageStub, .{
             Event(
-                "incrDestroy",
+                "incr_destroy",
                 .{
                     SystemStruct.incrA,
                     SystemStruct.destroyEntityWithC,
@@ -1592,7 +1592,7 @@ test "Dispatch with destroyEntity is determenistic" {
             }});
         }
 
-        try scheduler.dispatchEvent(&storage, .incrDestroy, {});
+        try scheduler.dispatchEvent(&storage, .incr_destroy, {});
         scheduler.waitIdle();
 
         for (&entity_a0, 0..) |entity, index| {
@@ -1663,7 +1663,7 @@ test "dumpDependencyChain" {
 
         const Scheduler = CreateScheduler(StorageStub, .{
             Event(
-                "onA",
+                "on_a",
                 .{
                     SystemStruct.incrA,
                     SystemStruct.doubleA,
@@ -1672,7 +1672,7 @@ test "dumpDependencyChain" {
                 .{},
             ),
             Event(
-                "onB",
+                "on_b",
                 .{
                     SystemStruct.incrB,
                     SystemStruct.incrA,
@@ -1689,7 +1689,7 @@ test "dumpDependencyChain" {
                 .{ .prereq_count = 1, .signal_indices = &[_]u32{2} },
                 .{ .prereq_count = 1, .signal_indices = &[_]u32{} },
             };
-            const actualDumpOnA = comptime Scheduler.dumpDependencyChain(.onA);
+            const actualDumpOnA = comptime Scheduler.dumpDependencyChain(.on_a);
             for (&expectedDumpOnA, actualDumpOnA) |expected, actual| {
                 try std.testing.expectEqual(
                     expected.prereq_count,
@@ -1710,7 +1710,7 @@ test "dumpDependencyChain" {
                 .{ .prereq_count = 1, .signal_indices = &[_]u32{3} },
                 .{ .prereq_count = 1, .signal_indices = &[_]u32{} },
             };
-            const actualDumpOnB = comptime Scheduler.dumpDependencyChain(.onB);
+            const actualDumpOnB = comptime Scheduler.dumpDependencyChain(.on_b);
             for (&expectedDumpOnB, actualDumpOnB) |expected, actual| {
                 try std.testing.expectEqual(
                     expected.prereq_count,
@@ -1747,7 +1747,7 @@ test "systems can accepts event related data" {
 
         var scheduler = CreateScheduler(StorageStub, .{
             Event(
-                "onFoo",
+                "on_foo",
                 .{System.addToA},
                 .{
                     .EventArgument = AddValue,
@@ -1764,8 +1764,8 @@ test "systems can accepts event related data" {
         const entity = try storage.createEntity(.{Testing.Component.A{ .value = 0 }});
 
         const value = 42;
-        try scheduler.dispatchEvent(&storage, .onFoo, AddValue{ .v = value });
-        scheduler.waitEvent(.onFoo);
+        try scheduler.dispatchEvent(&storage, .on_foo, AddValue{ .v = value });
+        scheduler.waitEvent(.on_foo);
 
         try testing.expectEqual(
             Testing.Component.A{ .value = value },
@@ -1794,7 +1794,7 @@ test "systems can mutate event argument" {
 
         var scheduler = CreateScheduler(StorageStub, .{
             Event(
-                "onFoo",
+                "on_foo",
                 .{System.addToA},
                 .{
                     .EventArgument = *AddValue,
@@ -1812,8 +1812,8 @@ test "systems can mutate event argument" {
         _ = try storage.createEntity(.{Testing.Component.A{ .value = value }});
 
         var event_argument = AddValue{ .v = 0 };
-        try scheduler.dispatchEvent(&storage, .onFoo, &event_argument);
-        scheduler.waitEvent(.onFoo);
+        try scheduler.dispatchEvent(&storage, .on_foo, &event_argument);
+        scheduler.waitEvent(.on_foo);
 
         try testing.expectEqual(
             value,
@@ -1843,7 +1843,7 @@ test "system can contain two queries" {
         defer storage.deinit();
 
         var scheduler = CreateScheduler(StorageStub, .{Event(
-            "onFoo",
+            "on_foo",
             .{
                 SystemStruct.eventSystem,
             },
@@ -1858,8 +1858,8 @@ test "system can contain two queries" {
 
         const entity = try storage.createEntity(.{Testing.Component.A{ .value = fail_value }});
 
-        try scheduler.dispatchEvent(&storage, .onFoo, {});
-        scheduler.waitEvent(.onFoo);
+        try scheduler.dispatchEvent(&storage, .on_foo, {});
+        scheduler.waitEvent(.on_foo);
 
         try testing.expectEqual(
             Testing.Component.A{ .value = pass_value },
@@ -1890,8 +1890,8 @@ test "event caching works" {
         defer storage.deinit();
 
         var scheduler = CreateScheduler(StorageStub, .{
-            Event("onIncA", .{Systems.incA}, .{}),
-            Event("onIncB", .{Systems.incB}, .{}),
+            Event("on_inc_a", .{Systems.incA}, .{}),
+            Event("on_inc_b", .{Systems.incB}, .{}),
         }).uninitialized;
 
         try scheduler.init(.{
@@ -1902,8 +1902,8 @@ test "event caching works" {
 
         const entity1 = try storage.createEntity(.{Testing.Component.A{ .value = 0 }});
 
-        try scheduler.dispatchEvent(&storage, .onIncA, {});
-        scheduler.waitEvent(.onIncA);
+        try scheduler.dispatchEvent(&storage, .on_inc_a, {});
+        scheduler.waitEvent(.on_inc_a);
 
         try testing.expectEqual(
             Testing.Component.A{ .value = 1 },
@@ -1913,16 +1913,16 @@ test "event caching works" {
         // move entity to archetype A, B
         try storage.setComponents(entity1, .{Testing.Component.B{ .value = 0 }});
 
-        try scheduler.dispatchEvent(&storage, .onIncA, {});
-        scheduler.waitEvent(.onIncA);
+        try scheduler.dispatchEvent(&storage, .on_inc_a, {});
+        scheduler.waitEvent(.on_inc_a);
 
         try testing.expectEqual(
             Testing.Component.A{ .value = 2 },
             storage.getComponent(entity1, Testing.Component.A).?,
         );
 
-        try scheduler.dispatchEvent(&storage, .onIncB, {});
-        scheduler.waitEvent(.onIncB);
+        try scheduler.dispatchEvent(&storage, .on_inc_b, {});
+        scheduler.waitEvent(.on_inc_b);
 
         try testing.expectEqual(
             Testing.Component.B{ .value = 1 },
@@ -1938,16 +1938,16 @@ test "event caching works" {
             break :blk try storage.createEntity(initial_state);
         };
 
-        try scheduler.dispatchEvent(&storage, .onIncA, {});
-        scheduler.waitEvent(.onIncA);
+        try scheduler.dispatchEvent(&storage, .on_inc_a, {});
+        scheduler.waitEvent(.on_inc_a);
 
         try testing.expectEqual(
             Testing.Component.A{ .value = 1 },
             storage.getComponent(entity2, Testing.Component.A).?,
         );
 
-        try scheduler.dispatchEvent(&storage, .onIncB, {});
-        scheduler.waitEvent(.onIncB);
+        try scheduler.dispatchEvent(&storage, .on_inc_b, {});
+        scheduler.waitEvent(.on_inc_b);
 
         try testing.expectEqual(
             Testing.Component.B{ .value = 1 },
@@ -1970,7 +1970,7 @@ test "Event with no archetypes does not crash" {
         defer storage.deinit();
 
         var scheduler = CreateScheduler(StorageStub, .{Event(
-            "onFoo",
+            "on_foo",
             .{
                 Systems.incA,
             },
@@ -1984,8 +1984,8 @@ test "Event with no archetypes does not crash" {
         defer scheduler.deinit();
 
         for (0..100) |_| {
-            try scheduler.dispatchEvent(&storage, .onFoo, {});
-            scheduler.waitEvent(.onFoo);
+            try scheduler.dispatchEvent(&storage, .on_foo, {});
+            scheduler.waitEvent(.on_foo);
         }
     }
 }
@@ -2015,7 +2015,7 @@ test "event in flight" {
     defer storage.deinit();
 
     var scheduler = CreateScheduler(StorageStub, .{
-        Event("onFoo", .{
+        Event("on_foo", .{
             Systems.first,
             Systems.second,
             Systems.third,
@@ -2032,26 +2032,26 @@ test "event in flight" {
 
     var resets = Resets{};
 
-    try scheduler.dispatchEvent(&storage, .onFoo, &resets);
+    try scheduler.dispatchEvent(&storage, .on_foo, &resets);
 
-    try std.testing.expect(scheduler.isEventInFlight(.onFoo));
+    try std.testing.expect(scheduler.isEventInFlight(.on_foo));
     resets.start[0].set();
     resets.stop[0].wait();
 
-    try std.testing.expect(scheduler.isEventInFlight(.onFoo));
+    try std.testing.expect(scheduler.isEventInFlight(.on_foo));
     resets.start[1].set();
     resets.stop[1].wait();
 
-    try std.testing.expect(scheduler.isEventInFlight(.onFoo));
+    try std.testing.expect(scheduler.isEventInFlight(.on_foo));
     resets.start[2].set();
     resets.stop[2].wait();
 
     // Even though we wait on resets.stop[2], this ResetEvent is signaled by the system.
-    // We dont have any guarantee that scheduler's internal tracking of onFoo will actually propagate as done
+    // We dont have any guarantee that scheduler's internal tracking of on_foo will actually propagate as done
     // before sampling event status with 'isEventInFlight'.
-    scheduler.waitEvent(.onFoo);
+    scheduler.waitEvent(.on_foo);
 
-    try std.testing.expect(!scheduler.isEventInFlight(.onFoo));
+    try std.testing.expect(!scheduler.isEventInFlight(.on_foo));
 }
 
 // this reproducer never had an issue filed, so no issue number
@@ -2071,7 +2071,7 @@ test "reproducer: Scheduler does not include new components to systems previousl
 
         const RepStorage = CreateStorage(Testing.AllComponentsTuple);
         const Scheduler = CreateScheduler(RepStorage, .{Event(
-            "onFoo",
+            "on_foo",
             .{Systems.addToTracker},
             .{
                 .EventArgument = *Tracker,
@@ -2094,14 +2094,14 @@ test "reproducer: Scheduler does not include new components to systems previousl
 
         var tracker = Tracker{ .count = 0 };
 
-        try scheduler.dispatchEvent(&storage, .onFoo, &tracker);
-        scheduler.waitEvent(.onFoo);
+        try scheduler.dispatchEvent(&storage, .on_foo, &tracker);
+        scheduler.waitEvent(.on_foo);
 
         _ = try storage.createEntity(inital_state);
         _ = try storage.createEntity(inital_state);
 
-        try scheduler.dispatchEvent(&storage, .onFoo, &tracker);
-        scheduler.waitEvent(.onFoo);
+        try scheduler.dispatchEvent(&storage, .on_foo, &tracker);
+        scheduler.waitEvent(.on_foo);
 
         // at this point we expect tracker to have a count of:
         // t1: 1 + 1 = 2
