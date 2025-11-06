@@ -152,6 +152,13 @@ Currently the project has two simple examples in the [example folder](https://gi
 
  There is also [wizard rampage](https://github.com/Avokadoen/wizard_rampage) which is closer to actual game code. This was originally a game jam so some of the code is "hacky" but the ecez usage should be a practical example
 
+### External projects using ecez
+
+There are currently two projects that I know of that use ecez to some extent:
+
+- [Dizc](https://codeberg.org/hubidubi/dizc) A scene containing a hex map, rendering with raylib
+- [Lucens](https://github.com/QuentinTessier/Lucens) A custom game engine written in opengl
+
 ### Test Driven Development
 
 The codebase also utilize TDD to ensure a certain level of robustness, altough I can assure you that there are many bugs to find yet! ;)
