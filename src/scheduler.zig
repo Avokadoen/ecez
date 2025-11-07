@@ -95,9 +95,9 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
             .events_scheduler = undefined,
             .system_scheduler_interface_storage = undefined,
             .pre_req_inflight_storage = undefined,
-            .events_systems_running = undefined,
             .events_error_atomics = undefined,
             .dependencies = undefined,
+            .events_wait_group = undefined,
         };
 
         query_submit_allocator: std.mem.Allocator,
@@ -106,7 +106,7 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
         events_scheduler: EventsScheduler,
         system_scheduler_interface_storage: SystemSchedulerInterfaceStorage,
         pre_req_inflight_storage: PreReqInflightStorage,
-        events_systems_running: [event_count]std.atomic.Value(u32),
+        events_wait_group: [event_count]std.Thread.WaitGroup,
         events_error_atomics: EventErrorAtomics,
         dependencies: Dependencies,
 
@@ -126,8 +126,8 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
             scheduler.query_submit_allocator = config.query_submit_allocator;
             scheduler.thread_pool = thread_pool;
             scheduler.dependencies = .{};
-            for (&scheduler.events_systems_running) |*systems_running| {
-                systems_running.* = .init(0);
+            for (&scheduler.events_wait_group) |*wait_group| {
+                wait_group.* = .{};
             }
 
             var events_scheduler: *EventsScheduler = &scheduler.events_scheduler;
@@ -143,9 +143,9 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
                         .entry_index = system_index,
                         .system_schedulers = system_scheduler_interfaces,
                         .prereq_jobs_inflights = prereq_jobs_inflights,
-                        .systems_running = &scheduler.events_systems_running[event_index],
                         .events_error_atomic = &scheduler.events_error_atomics[event_index],
                         .pool = thread_pool,
+                        .wait_group = &scheduler.events_wait_group[event_index],
                         .execute_args = undefined, // Assigned in dispatch
                     };
 
@@ -202,11 +202,6 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
             if (run_on_main_thread == false) {
                 @branchHint(.likely);
 
-                self.events_systems_running[event_index].store(
-                    0,
-                    .monotonic,
-                );
-
                 for (prereq_jobs_inflights, 0..) |*prereq_jobs_inflight, system_index| {
                     const system_dep_count = event_dependencies[system_index].prereq_count;
                     prereq_jobs_inflight.store(system_dep_count, .monotonic);
@@ -230,12 +225,9 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
 
                     // If an error may occur for this event
                     if (comptime triggered_event.GetErrorSet()) |_| {
-                        // catch error if any
+                        // catch error and return if any
                         const event_error_value = system_scheduler.events_error_atomic.load(.monotonic);
                         if (event_error_value > 0) {
-                            // Hint to the scheduler that wait is no longer needed
-                            system_scheduler.systems_running.store(0, .monotonic);
-
                             return;
                         }
                     }
@@ -250,11 +242,7 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
                         var opaque_scheduler: *anyopaque = @ptrCast(system_scheduler);
                         _ = &opaque_scheduler; // silence zig thinking opaque_scheduler is not a var
 
-                        _ = self.events_systems_running[event_index].fetchAdd(
-                            1,
-                            .monotonic,
-                        );
-                        try self.thread_pool.spawn(field_info.type.schedule, .{ opaque_scheduler, event_dependencies });
+                        self.thread_pool.spawnWg(&self.events_wait_group[event_index], field_info.type.schedule, .{ opaque_scheduler, event_dependencies });
                     }
                 }
             }
@@ -273,8 +261,8 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
 
             const event_index = @intFromEnum(event);
 
-            // Spinlock :/
-            while (self.events_systems_running[event_index].load(.monotonic) > 0) {}
+            self.events_wait_group[event_index].wait();
+            self.events_wait_group[event_index].reset();
 
             const wait_event = events[event_index];
             const EventErrorUnion = wait_event.GetErrorUnion();
@@ -297,7 +285,7 @@ pub fn CreateScheduler(comptime Storage: type, comptime events: anytype) type {
             defer zone.End();
 
             const event_index = @intFromEnum(event);
-            return self.events_systems_running[event_index].load(.monotonic) > 0;
+            return !self.events_wait_group[event_index].isDone();
         }
 
         /// Dump the dependency chain of systems to see which systems will wait on which previous systems
@@ -361,11 +349,11 @@ fn SystemScheduler(
         entry_index: Index,
         system_schedulers: []SystemSchedulerInterface,
         prereq_jobs_inflights: []std.atomic.Value(u32),
-        systems_running: *std.atomic.Value(u32),
 
         events_error_atomic: *ErrorAtomic,
 
         pool: *ThreadPool,
+        wait_group: *std.Thread.WaitGroup,
 
         execute_args: SystemExecute,
 
@@ -387,10 +375,6 @@ fn SystemScheduler(
 
             // Launch system
             execute(ctx);
-            defer {
-                // Decrement schedulers "system in-flight" count
-                _ = system_scheduler.systems_running.fetchSub(1, .acq_rel);
-            }
 
             // If an error may occur for this event
             if (comptime EventErrorUnion != void) {
@@ -408,14 +392,12 @@ fn SystemScheduler(
                 // Decrement blocking prerequisites count for these systems
                 const blocking_count = system_scheduler.prereq_jobs_inflights[signal_index].fetchSub(1, .monotonic);
                 if (blocking_count == 1) {
-                    // increment systems_running counter
-                    _ = system_scheduler.systems_running.fetchAdd(1, .acq_rel);
-
                     // Schedule depending systems that are no longer blocked
-                    system_scheduler.pool.spawn(
+                    system_scheduler.pool.spawnWg(
+                        system_scheduler.wait_group,
                         SystemSchedulerInterface.schedule,
                         .{ other_event_schedulers[signal_index], dependencies },
-                    ) catch @panic("failed to spawn system");
+                    );
                 }
             }
         }
