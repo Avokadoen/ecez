@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        zig: [0.15.1] 
+        zig: [0.15.1]
         os: [ubuntu-latest, windows-latest, macos-latest]
         include:
           # Workaround #271
@@ -56,5 +56,57 @@ jobs:
 
       - name: Run readme
         run: zig build run-readme ${{ matrix.build_flags }}
-  
+
+  # TODO: this will only run on linux, a simple bash scripts should be better than writing all this logic in yaml.
+  performance:
+    strategy:
+      fail-fast: false
+      matrix:
+        zig: [0.15.1]
+        os: [ubuntu-latest]
+        build_flags: [-Doptimize=ReleaseSafe, -Doptimize=ReleaseFast ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2 # Fetch at least two commits to access the parent
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ matrix.zig }}
+
+      - name: Build on patch
+        run: zig build ${{ matrix.build_flags }}
+
+      - name: Move patch binary
+        run: mv zig-out/bin/root_tests zig-out/bin/patch_root_tests
+
+      - name: Get parent commit SHA
+        id: get_parent_sha
+        run: echo "PARENT_SHA=$(git rev-parse HEAD^)" >> $GITHUB_OUTPUT
+
+      - name: Checkout parent commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.get_parent_sha.outputs.PARENT_SHA }}
+
+      - name: Build on head
+        run: zig build ${{ matrix.build_flags }}
+
+      - name: Move head binary
+        run: mv zig-out/bin/root_tests zig-out/bin/head_root_tests
+
+      - name: Checkout poop
+        uses: actions/checkout@v4
+        with:
+          repository: andrewrk/poop
+          path: poop
+
+      - name: Build poop
+        run: cd poop && zig build -Doptimize=Debug
+
+      - name: Benchmark revision
+        run: echo ${{ secrets.USERPWD }} | sudo -S poop/zig-out/bin/poop ../zig-out/bin/head_root_tests ../zig-out/bin/patch_root_tests
 
