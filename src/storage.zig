@@ -35,7 +35,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         sparse_sets: GroupSparseSets,
         dense_sets: GroupDenseSets,
 
-        created_entity_count: std.atomic.Value(entity_type.EntityId) = .{ .raw = 0 },
+        created_entity_count: std.atomic.Value(entity_type.EntityId) = .init(0),
 
         inactive_entity_lock: std.Thread.Mutex = .{},
         inactive_entities: std.ArrayListUnmanaged(entity_type.EntityId) = .empty,
@@ -105,6 +105,10 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             }
         }
 
+        const CreateEntityError = error{
+            OutOfMemory,
+            OutOfMemoryInvalidStorageState,
+        };
         /// Create an entity and returns the entity handle
         ///
         /// Parameters:
@@ -119,13 +123,28 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///    });
         /// ```
         ///
-        pub fn createEntity(self: *Storage, entity_state: anytype) error{OutOfMemory}!Entity {
+        pub fn createEntity(self: *Storage, entity_state: anytype) CreateEntityError!Entity {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
 
-            try self.ensureUnusedCapacity(@TypeOf(entity_state), 1);
+            const new_entity = Entity{
+                .id = self.getNextEntityId(),
+            };
 
-            return self.createEntityAssumeCapacity(entity_state);
+            self.setComponents(new_entity, entity_state) catch |err| {
+                self.inactive_entity_lock.lock();
+                defer self.inactive_entity_lock.unlock();
+
+                self.inactive_entities.append(self.allocator, new_entity.id) catch {
+                    // if setComponents failed due to oom, and inactive_entities can not store the lost
+                    // entity then the storage will be in an invalid state
+                    return CreateEntityError.OutOfMemoryInvalidStorageState;
+                };
+
+                return err;
+            };
+
+            return new_entity;
         }
 
         /// Create entity and assume storage has sufficient capacity
@@ -144,26 +163,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         /// ```
         ///
         pub fn createEntityAssumeCapacity(self: *Storage, entity_state: anytype) Entity {
-            const this_id = get_id_blk: {
-                if (self.inactive_entities.items.len > 0) {
-                    @branchHint(.unlikely);
-
-                    self.inactive_entity_lock.lock();
-                    defer self.inactive_entity_lock.unlock();
-
-                    if (self.inactive_entities.pop()) |inactive| {
-                        @branchHint(.likely);
-                        break :get_id_blk inactive;
-                    }
-                }
-
-                break :get_id_blk self.created_entity_count.fetchAdd(1, .acq_rel);
-            };
-
             const EntityState = @TypeOf(entity_state);
             const field_info = @typeInfo(EntityState);
 
             // For each component in the new entity
+            const this_id = self.getNextEntityId();
             inline for (field_info.@"struct".fields) |field| {
                 const Component = field.type;
                 const component: Component = @field(
@@ -586,7 +590,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                 storage: *Storage,
 
-                pub fn createEntity(self: *ThisSubset, entity_state: anytype) error{OutOfMemory}!Entity {
+                pub fn createEntity(self: *ThisSubset, entity_state: anytype) CreateEntityError!Entity {
                     // Validate that the correct access was requested in subset type
                     comptime verifyAccess(@TypeOf(entity_state));
 
@@ -718,6 +722,22 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 storage.sparse_sets,
                 @typeName(Component),
             );
+        }
+
+        fn getNextEntityId(storage: *Storage) entity_type.EntityId {
+            if (storage.inactive_entities.items.len > 0) {
+                @branchHint(.unlikely);
+
+                storage.inactive_entity_lock.lock();
+                defer storage.inactive_entity_lock.unlock();
+
+                if (storage.inactive_entities.pop()) |inactive| {
+                    @branchHint(.likely);
+                    return inactive;
+                }
+            }
+
+            return storage.created_entity_count.fetchAdd(1, .acq_rel);
         }
     };
 }
