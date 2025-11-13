@@ -105,7 +105,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             }
         }
 
-        const CreateEntityError = error{
+        pub const CreateEntityError = error{
             OutOfMemory,
             OutOfMemoryInvalidStorageState,
         };
@@ -608,7 +608,9 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                 storage: *Storage,
 
-                pub fn createEntity(self: *ThisSubset, entity_state: anytype) CreateEntityError!Entity {
+                pub const CreateEntityError = Storage.CreateEntityError;
+
+                pub fn createEntity(self: *ThisSubset, entity_state: anytype) Storage.CreateEntityError!Entity {
                     // Validate that the correct access was requested in subset type
                     comptime verifyAccess(@TypeOf(entity_state));
 
