@@ -149,6 +149,8 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
         /// Create entity and assume storage has sufficient capacity
         ///
+        /// Hazards: This function is not thread safe
+        ///
         /// Parameters:
         ///
         ///     - entity_state: the components that the new entity should be assigned
@@ -210,6 +212,22 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         }
 
         /// Ensure any sparse and dense sets related to the components in EntityState have sufficient space for additional_count
+        ///
+        /// Hazards: This function is not thread safe
+        ///
+        /// Parameters:
+        ///
+        ///     - EntityState: A tuple of component types to ensure storage capacity on
+        ///     - additional_count: the minimum unused capacity that is required
+        ///
+        /// Example:
+        /// ```
+        ///     try storage.ensureUnusedCapacity(.{Component.A, Component.B}, 200);
+        ///     for (abs[0..200]) |ab| {
+        ///         const entity = storage.createEntityAssumeCapacity(ab);
+        ///         _ = entity;
+        ///     }
+        /// ```
         pub fn ensureUnusedCapacity(self: *Storage, comptime EntityState: type, additional_count: entity_type.EntityId) error{OutOfMemory}!void {
             const zone = ztracy.ZoneNC(@src(), @src().fn_name, Color.storage);
             defer zone.End();
