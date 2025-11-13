@@ -755,7 +755,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 }
             }
 
-            return storage.created_entity_count.fetchAdd(1, .acq_rel);
+            return storage.created_entity_count.fetchAdd(1, .monotonic);
         }
     };
 }
