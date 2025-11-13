@@ -141,7 +141,7 @@ pub fn main() anyerror!void {
         }
 
         // Systems can also have multiple query arguments, and Storage.Subsets
-        pub fn spawnLivingTrail(living_query: *Queries.Living, subset: *StorageSubset) error{OutOfMemory}!void {
+        pub fn spawnLivingTrail(living_query: *Queries.Living, subset: *StorageSubset) StorageSubset.CreateEntityError!void {
             while (living_query.next()) |item| {
                 // For each living, create a new entity at the living pos
                 // NOTE: the system can fail if createEntity returns OutOfMemory in this case
