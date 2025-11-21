@@ -109,7 +109,7 @@ python -m http.server 8000 -d ./zig-out/doc # you can then access the documentat
 ### Compile time based and type safe API
 Zig's comptime feature is utilized to perform static reflection on the usage of the API to validate usage and report useful messages to the user (in theory :)). 
 
-https://github.com/Avokadoen/ecez/blob/2db3a087365b87b9314a10e9ef165e2abd3dde4c/examples/readme/main.zig#L13-L217
+https://github.com/Avokadoen/ecez/blob/5d20e77e1760132c99d44f717486bff60252d7c1/examples/readme/main.zig#L13-L217
 
 ### System arguments
 
@@ -136,7 +136,7 @@ ecez uses a custom byte format to convert storages into a slice of bytes.
 
 #### Example
 
-https://github.com/Avokadoen/ecez/blob/2db3a087365b87b9314a10e9ef165e2abd3dde4c/examples/readme/main.zig#L221-L229
+https://github.com/Avokadoen/ecez/blob/5d20e77e1760132c99d44f717486bff60252d7c1/examples/readme/main.zig#L221-L229
 
 ### Tracy integration using [ztracy](https://github.com/michal-z/zig-gamedev/tree/main/libs/ztracy)
 ![ztracy](media/ztracy.png)
