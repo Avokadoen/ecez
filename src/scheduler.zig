@@ -1545,7 +1545,7 @@ test "Dispatch with multiple events works" {
 
 test "Dispatch with destroyEntity is determenistic" {
     const ASubset = StorageStub.Subset(&[_]type{*Testing.Component.A});
-    const AllSubset = StorageStub.Subset(StorageStub.AllComponentWriteAccess);
+    const AllSubset = StorageStub.Subset(StorageStub.all_components_write_access);
     inline for (Queries.WriteA, Queries.ReadC, Queries.ReadB) |WriteA, ReadC, ReadB| {
         const SystemStruct = struct {
             pub fn incrA(q: *WriteA) void {

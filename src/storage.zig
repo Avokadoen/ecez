@@ -34,7 +34,7 @@ pub fn CreateStorage(comptime all_components: []const type) type {
 
         pub const component_type_slice = all_components;
 
-        pub const AllComponentWriteAccess: []const type = &CompileReflect.AllWriteAccessType(all_components);
+        pub const all_components_write_access: []const type = &CompileReflect.AllWriteAccessType(all_components);
         pub const GroupDenseSets = CompileReflect.GroupDenseSets(all_components);
         pub const GroupSparseSets = CompileReflect.GroupSparseSets(all_components);
 
@@ -625,10 +625,10 @@ pub fn CreateStorage(comptime all_components: []const type) type {
                 }
 
                 /// Destroy entity and all components
-                /// destroyEntity require subset of `Storage.Subset(Storage.AllComponentWriteAccess)`
+                /// destroyEntity require subset of `Storage.Subset(Storage.all_components_write_access)`
                 pub fn destroyEntity(self: *ThisSubset, entity: Entity) error{OutOfMemory}!void {
-                    if (component_subset.ptr != AllComponentWriteAccess.ptr) {
-                        @compileError("destroyEntity require subset of `Storage.Subset(Storage.AllComponentWriteAccess)`");
+                    if (component_subset.ptr != all_components_write_access.ptr) {
+                        @compileError("destroyEntity require subset of `Storage.Subset(Storage.all_components_write_access)`");
                     }
 
                     return self.storage.destroyEntity(entity);
@@ -690,7 +690,7 @@ pub fn CreateStorage(comptime all_components: []const type) type {
 
                 fn verifyAccess(comptime components: anytype) void {
                     // If subset has all access, no point in verifying anything
-                    if (@TypeOf(component_subset) == @TypeOf(AllComponentWriteAccess)) {
+                    if (@TypeOf(component_subset) == @TypeOf(all_components_write_access)) {
                         return;
                     }
 

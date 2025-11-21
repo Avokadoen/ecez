@@ -504,7 +504,7 @@ test buildDependencyList {
 
         const ReadAWriteBReadC = StorageStub.Subset(&[_]type{ Testing.Component.A, *Testing.Component.B, Testing.Component.C });
 
-        const All = StorageStub.Subset(StorageStub.AllComponentWriteAccess);
+        const All = StorageStub.Subset(StorageStub.all_components_write_access);
     };
 
     const SingleQuerySystems = [2]type{
