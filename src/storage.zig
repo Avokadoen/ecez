@@ -17,16 +17,26 @@ const ztracy = @import("ecez_ztracy.zig");
 pub const StorageType = struct {};
 pub const SubsetType = struct {};
 
-pub fn CreateStorage(comptime all_components: anytype) type {
+pub fn CreateStorage(comptime all_components: []const type) type {
+    // Initial component type sanity checking
+    for (all_components) |Component| {
+        const component_info = @typeInfo(Component);
+        switch (component_info) {
+            .@"struct", .pointer, .@"union", .@"enum" => {},
+            else => {
+                @compileError("component types must be 'struct', 'pointer', 'union' or 'enum', '" ++ @typeName(Component) ++ "' is a " ++ @tagName(component_info));
+            },
+        }
+    }
+
     return struct {
         pub const EcezType = StorageType;
 
-        // a flat array of the type of each field in the components tuple
-        pub const component_type_array = CompileReflect.verifyComponentTuple(all_components);
+        pub const component_type_slice = all_components;
 
-        pub const AllComponentWriteAccess = CompileReflect.AllWriteAccessType(&component_type_array){};
-        pub const GroupDenseSets = CompileReflect.GroupDenseSets(&component_type_array);
-        pub const GroupSparseSets = CompileReflect.GroupSparseSets(&component_type_array);
+        pub const AllComponentWriteAccess: []const type = &CompileReflect.AllWriteAccessType(all_components);
+        pub const GroupDenseSets = CompileReflect.GroupDenseSets(all_components);
+        pub const GroupSparseSets = CompileReflect.GroupSparseSets(all_components);
 
         const Storage = @This();
 
@@ -63,7 +73,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             defer zone.End();
 
             // deinit all dense sets
-            inline for (component_type_array) |Component| {
+            inline for (all_components) |Component| {
                 // only sized components has dense sets
                 if (@sizeOf(Component) > 0) {
                     const dense_set = self.getDenseSetPtr(Component);
@@ -72,7 +82,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             }
 
             // deinit all sparse sets
-            inline for (component_type_array) |Component| {
+            inline for (all_components) |Component| {
                 const sparse_set = self.getSparseSetPtr(Component);
                 sparse_set.deinit(self.allocator);
             }
@@ -90,7 +100,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             self.inactive_entities.clearRetainingCapacity();
 
             // clear all dense sets
-            inline for (component_type_array) |Component| {
+            inline for (all_components) |Component| {
                 // only sized components has dense sets
                 if (@sizeOf(Component) > 0) {
                     const dense_set = self.getDenseSetPtr(Component);
@@ -99,7 +109,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             }
 
             // clear all sparse sets
-            inline for (component_type_array) |Component| {
+            inline for (all_components) |Component| {
                 const sparse_set = self.getSparseSetPtr(Component);
                 sparse_set.clearRetainingCapacity();
             }
@@ -208,7 +218,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 try self.inactive_entities.append(self.allocator, entity.id);
             }
 
-            self.unsetComponents(entity, all_components);
+            self.unsetComponents(entity, CompileReflect.componentsTuple(all_components));
         }
 
         /// Ensure any sparse and dense sets related to the components in EntityState have sufficient space for additional_count
@@ -233,7 +243,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             defer zone.End();
 
             comptime {
-                if (CompileReflect.verifyInnerIsInSlice(&component_type_array, EntityState, .if_exist_only)) |invalid_access| {
+                if (CompileReflect.verifyInnerIsInSlice(all_components, EntityState, .if_exist_only)) |invalid_access| {
                     @compileError(@typeName(invalid_access.type) ++ " is not part of storage components");
                 }
             }
@@ -289,7 +299,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             defer zone.End();
 
             comptime {
-                if (CompileReflect.verifyInnerIsInSlice(&component_type_array, @TypeOf(struct_of_components), .if_exist_only)) |invalid_access| {
+                if (CompileReflect.verifyInnerIsInSlice(all_components, @TypeOf(struct_of_components), .if_exist_only)) |invalid_access| {
                     @compileError(@typeName(invalid_access.type) ++ " is not part of storage components");
                 }
             }
@@ -354,7 +364,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             defer zone.End();
 
             comptime {
-                if (CompileReflect.verifyInnerIsInSlice(&component_type_array, struct_of_remove_components, .if_exist_only)) |invalid_access| {
+                if (CompileReflect.verifyInnerIsInSlice(all_components, struct_of_remove_components, .if_exist_only)) |invalid_access| {
                     @compileError(@typeName(invalid_access.type) ++ " is not part of storage components");
                 }
             }
@@ -397,7 +407,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             defer zone.End();
 
             comptime {
-                if (CompileReflect.verifyInnerIsInSlice(&component_type_array, components, .if_exist_only)) |invalid_access| {
+                if (CompileReflect.verifyInnerIsInSlice(all_components, components, .if_exist_only)) |invalid_access| {
                     @compileError(@typeName(invalid_access.type) ++ " is not part of storage components");
                 }
             }
@@ -443,7 +453,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             defer zone.End();
 
             comptime {
-                if (CompileReflect.verifyInnerIsInSlice(&component_type_array, Components, .if_exist_only)) |invalid_access| {
+                if (CompileReflect.verifyInnerIsInSlice(all_components, Components, .if_exist_only)) |invalid_access| {
                     @compileError(@typeName(invalid_access.type) ++ " is not part of storage components");
                 }
             }
@@ -519,7 +529,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             defer zone.End();
 
             comptime {
-                if (CompileReflect.verifyInnerIsInSlice(&component_type_array, .{Component}, .if_exist_only)) |invalid_access| {
+                if (CompileReflect.verifyInnerIsInSlice(all_components, .{Component}, .if_exist_only)) |invalid_access| {
                     @compileError(@typeName(invalid_access.type) ++ " is not part of storage components");
                 }
             }
@@ -586,14 +596,11 @@ pub fn CreateStorage(comptime all_components: anytype) type {
         ///         },
         ///     );
         /// ```
-        pub fn Subset(comptime component_subset: anytype) type {
-
-            // Check if tuple is valid and get array of types instead if valid
-            const comp_types = CompileReflect.verifyComponentTuple(component_subset);
-
+        pub fn Subset(comptime component_subset: []const type) type {
+            const tuple = CompileReflect.componentsTuple(component_subset);
             // Check that each component type is part of the storage
             comptime {
-                if (CompileReflect.verifyInnerIsInSlice(&component_type_array, component_subset, .if_exist_only)) |invalid_access| {
+                if (CompileReflect.verifyInnerIsInSlice(all_components, tuple, .if_exist_only)) |invalid_access| {
                     @compileError(@typeName(invalid_access.type) ++ " is not part of storage components");
                 }
             }
@@ -601,8 +608,8 @@ pub fn CreateStorage(comptime all_components: anytype) type {
             return struct {
                 pub const EcezType = SubsetType;
 
-                pub const component_subset_tuple = component_subset;
-                pub const component_access = comp_types;
+                pub const component_subset_tuple = tuple;
+                pub const component_access = component_subset;
 
                 pub const ThisSubset = @This();
 
@@ -620,7 +627,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                 /// Destroy entity and all components
                 /// destroyEntity require subset of `Storage.Subset(Storage.AllComponentWriteAccess)`
                 pub fn destroyEntity(self: *ThisSubset, entity: Entity) error{OutOfMemory}!void {
-                    if (@TypeOf(component_subset) != @TypeOf(AllComponentWriteAccess)) {
+                    if (component_subset.ptr != AllComponentWriteAccess.ptr) {
                         @compileError("destroyEntity require subset of `Storage.Subset(Storage.AllComponentWriteAccess)`");
                     }
 
@@ -641,7 +648,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
 
                 pub fn hasComponents(self: *const ThisSubset, entity: Entity, comptime components: anytype) bool {
                     comptime {
-                        if (CompileReflect.verifyInnerIsInSlice(&comp_types, components, .if_exist_only)) |invalid_access| {
+                        if (CompileReflect.verifyInnerIsInSlice(component_subset, components, .if_exist_only)) |invalid_access| {
                             @compileError(@typeName(invalid_access.type) ++ " is not part of " ++ simplifiedTypeName());
                         }
                     }
@@ -688,7 +695,7 @@ pub fn CreateStorage(comptime all_components: anytype) type {
                     }
 
                     if (CompileReflect.verifyInnerIsInSlice(
-                        &comp_types,
+                        component_subset,
                         components,
                         .if_exitst_and_access,
                     )) |invalid_access| {
@@ -894,58 +901,34 @@ pub const CompileReflect = struct {
         return @Type(group_type);
     }
 
-    /// Generate a tuple containing all component types as pointers
-    pub fn AllWriteAccessType(comptime components: []const type) type {
+    /// Generate an array containing all component types as pointers
+    pub fn AllWriteAccessType(comptime components: []const type) [components.len]type {
         @setEvalBranchQuota(10_000);
 
-        var struct_fields: [components.len]std.builtin.Type.StructField = undefined;
-        inline for (&struct_fields, components, 0..) |*struct_field, Component, index| {
+        var write_components: [components.len]type = undefined;
+        inline for (&write_components, components) |*WriteComponent, Component| {
             const TypeValue = *compactComponentRequest(Component).type;
-            struct_field.* = std.builtin.Type.StructField{
-                .name = std.fmt.comptimePrint("{d}", .{index}),
-                .type = type,
-                .default_value_ptr = @ptrCast(&TypeValue),
-                .is_comptime = true,
-                .alignment = @alignOf(type),
-            };
+            WriteComponent.* = TypeValue;
         }
-        const group_type = std.builtin.Type{ .@"struct" = .{
-            .layout = .auto,
-            .fields = &struct_fields,
-            .decls = &[_]std.builtin.Type.Declaration{},
-            .is_tuple = true,
-        } };
-        return @Type(group_type);
+        return write_components;
     }
 
-    /// Produce a flat array of component types if the 'components' tuple is valid
-    fn verifyComponentTuple(comptime components: anytype) return_type_blk: {
-        const components_info = @typeInfo(@TypeOf(components));
-        if (components_info != .@"struct") {
-            @compileError("components was not a tuple of types");
-        }
-
-        break :return_type_blk [components_info.@"struct".fields.len]type;
+    /// Get a tuple of component type slice
+    ///
+    /// Example: &[_]type{A, B} => .{A, B}
+    fn componentsTuple(comptime components: []const type) return_type_blk: {
+        // Create an array of types with value type
+        const type_arr = [_]type{type} ** components.len;
+        break :return_type_blk std.meta.Tuple(&type_arr);
     } {
-        const components_info = @typeInfo(@TypeOf(components));
-        var field_types: [components_info.@"struct".fields.len]type = undefined;
-        for (&field_types, components_info.@"struct".fields, 0..) |*field_type, field, component_index| {
-            if (@typeInfo(field.type) != .type) {
-                @compileError("components must be a struct of types, field '" ++ field.name ++ "' was " ++ @typeName(field.type));
-            }
+        const type_arr = [_]type{type} ** components.len;
+        const AllComponentsTuple = std.meta.Tuple(&type_arr);
 
-            const compo_field_info = @typeInfo(components[component_index]);
-            switch (compo_field_info) {
-                .@"struct", .pointer, .@"union", .@"enum" => {},
-                else => {
-                    @compileError("component types must be a struct or pointer, field '" ++ field.name ++ "' was '" ++ @typeName(components[component_index]));
-                },
-            }
-
-            field_type.* = components[component_index];
+        var all_components_tuple: AllComponentsTuple = undefined;
+        for (&all_components_tuple, components) |*tuple_field, Component| {
+            tuple_field.* = Component;
         }
-
-        return field_types;
+        return all_components_tuple;
     }
 
     const VerifyType = enum {
@@ -1270,7 +1253,7 @@ test "setComponents() can add new components to entity" {
 
 test "storage with 0 size component is valid" {
     const ZeroComp = struct {};
-    var storage = try CreateStorage(.{ZeroComp}).init(testing.allocator);
+    var storage = try CreateStorage(&[_]type{ZeroComp}).init(testing.allocator);
     defer storage.deinit();
 
     const entity = try storage.createEntity(.{});
@@ -1682,7 +1665,7 @@ test "Subset createEntity" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const Subset = StorageStub.Subset(.{
+    const Subset = StorageStub.Subset(&[_]type{
         *Testing.Component.A,
         *Testing.Component.B,
     });
@@ -1705,7 +1688,7 @@ test "Subset setComponents() can reassign multiple components" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const Subset = StorageStub.Subset(.{
+    const Subset = StorageStub.Subset(&[_]type{
         *Testing.Component.A,
         *Testing.Component.B,
     });
@@ -1735,7 +1718,7 @@ test "Subset setComponents() can add new components to entity" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const Subset = StorageStub.Subset(.{
+    const Subset = StorageStub.Subset(&[_]type{
         *Testing.Component.A,
         *Testing.Component.B,
     });
@@ -1761,7 +1744,7 @@ test "Subset unsetComponents() removes the component as expected" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const Subset = StorageStub.Subset(.{
+    const Subset = StorageStub.Subset(&[_]type{
         *Testing.Component.A,
         *Testing.Component.B,
     });
@@ -1791,7 +1774,7 @@ test "Subset read only getComponent(s)" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const Subset = StorageStub.Subset(.{
+    const Subset = StorageStub.Subset(&[_]type{
         Testing.Component.A,
         Testing.Component.B,
     });
@@ -1848,7 +1831,10 @@ test "reproducer: component data is mangled by adding additional components to e
         };
     };
 
-    const RepStorage = CreateStorage(.{ Editor.InstanceHandle, RenderContext.ObjectMetadata });
+    const RepStorage = CreateStorage(&[_]type{
+        Editor.InstanceHandle,
+        RenderContext.ObjectMetadata,
+    });
 
     var storage = try RepStorage.init(testing.allocator);
     defer storage.deinit();
@@ -1895,7 +1881,10 @@ test "reproducer: component data is mangled by having more than one entity" {
         };
     };
 
-    const RepStorage = CreateStorage(.{ Editor.InstanceHandle, RenderContext.ObjectMetadata });
+    const RepStorage = CreateStorage(&[_]type{
+        Editor.InstanceHandle,
+        RenderContext.ObjectMetadata,
+    });
 
     var storage = try RepStorage.init(testing.allocator);
     defer storage.deinit();
@@ -1969,7 +1958,7 @@ test "reproducer: Removing component cause storage to become in invalid state" {
         c: [64]u8,
     };
 
-    const RepStorage = CreateStorage(.{
+    const RepStorage = CreateStorage(&[_]type{
         ObjectMetadata,
         Transform,
         Position,
@@ -2098,25 +2087,25 @@ test "Subset.downCast() works" {
     var storage = try StorageStub.init(testing.allocator);
     defer storage.deinit();
 
-    const WriteAB = StorageStub.Subset(.{
+    const WriteAB = StorageStub.Subset(&[_]type{
         *Testing.Component.A,
         *Testing.Component.B,
     });
-    const MixedAB = StorageStub.Subset(.{
+    const MixedAB = StorageStub.Subset(&[_]type{
         *Testing.Component.A,
         Testing.Component.B,
     });
-    const ReadAB = StorageStub.Subset(.{
+    const ReadAB = StorageStub.Subset(&[_]type{
         Testing.Component.A,
         Testing.Component.B,
     });
-    const WriteA = StorageStub.Subset(.{
+    const WriteA = StorageStub.Subset(&[_]type{
         *Testing.Component.A,
     });
-    const ReadA = StorageStub.Subset(.{
+    const ReadA = StorageStub.Subset(&[_]type{
         Testing.Component.A,
     });
-    const ReadB = StorageStub.Subset(.{
+    const ReadB = StorageStub.Subset(&[_]type{
         Testing.Component.B,
     });
 

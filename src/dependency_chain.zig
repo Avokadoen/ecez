@@ -324,7 +324,7 @@ fn globalArrayVariableRefWorkaround(comptime array: anytype, comptime len: u32) 
 const Testing = @import("Testing.zig");
 
 const D = struct { value: u128 };
-const StorageStub = storage.CreateStorage(.{
+const StorageStub = storage.CreateStorage(&[_]type{
     Testing.Component.A,
     Testing.Component.B,
     Testing.Component.C,
@@ -488,21 +488,21 @@ test buildDependencyList {
     };
 
     const SubStorages = struct {
-        const ReadA = StorageStub.Subset(.{Testing.Component.A});
+        const ReadA = StorageStub.Subset(&[_]type{Testing.Component.A});
 
-        const WriteA = StorageStub.Subset(.{*Testing.Component.A});
+        const WriteA = StorageStub.Subset(&[_]type{*Testing.Component.A});
 
-        const WriteB = StorageStub.Subset(.{*Testing.Component.B});
+        const WriteB = StorageStub.Subset(&[_]type{*Testing.Component.B});
 
-        const WriteC = StorageStub.Subset(.{*Testing.Component.C});
+        const WriteC = StorageStub.Subset(&[_]type{*Testing.Component.C});
 
-        const WriteAB = StorageStub.Subset(.{ *Testing.Component.A, *Testing.Component.B });
+        const WriteAB = StorageStub.Subset(&[_]type{ *Testing.Component.A, *Testing.Component.B });
 
-        const WriteABC = StorageStub.Subset(.{ *Testing.Component.A, *Testing.Component.B, *Testing.Component.C });
+        const WriteABC = StorageStub.Subset(&[_]type{ *Testing.Component.A, *Testing.Component.B, *Testing.Component.C });
 
-        const ReadABC = StorageStub.Subset(.{ Testing.Component.A, Testing.Component.B, Testing.Component.C });
+        const ReadABC = StorageStub.Subset(&[_]type{ Testing.Component.A, Testing.Component.B, Testing.Component.C });
 
-        const ReadAWriteBReadC = StorageStub.Subset(.{ Testing.Component.A, *Testing.Component.B, Testing.Component.C });
+        const ReadAWriteBReadC = StorageStub.Subset(&[_]type{ Testing.Component.A, *Testing.Component.B, Testing.Component.C });
 
         const All = StorageStub.Subset(StorageStub.AllComponentWriteAccess);
     };

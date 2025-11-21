@@ -848,7 +848,7 @@ pub const CompileReflect = struct {
     }
 };
 
-const StorageStub = CreateStorage(Testing.AllComponentsTuple);
+const StorageStub = Testing.StorageStub;
 
 test "system query can mutate components" {
     const QueryTypes = Testing.QueryAndQueryAny(
@@ -906,8 +906,8 @@ test "system query can mutate components" {
 }
 
 test "system SubStorage can spawn new entites (and no race hazards)" {
-    const SubsetA = StorageStub.Subset(.{*Testing.Component.A});
-    const SubsetB = StorageStub.Subset(.{*Testing.Component.B});
+    const SubsetA = StorageStub.Subset(&[_]type{*Testing.Component.A});
+    const SubsetB = StorageStub.Subset(&[_]type{*Testing.Component.B});
 
     const initial_entity_count = 100;
     // This would probably be better as data stored in components instead of EventArgument
@@ -1099,7 +1099,7 @@ test "Thread count 0 works" {
 }
 
 test "system sub storage can mutate components" {
-    const SubStorage = StorageStub.Subset(.{
+    const SubStorage = StorageStub.Subset(&[_]type{
         *Testing.Component.A,
         *Testing.Component.B,
     });
@@ -1295,7 +1295,7 @@ test "system error value is correct" {
 }
 
 test "Dispatch is determenistic (no race conditions)" {
-    const AbSubStorage = StorageStub.Subset(.{
+    const AbSubStorage = StorageStub.Subset(&[_]type{
         *Testing.Component.A,
         *Testing.Component.B,
     });
@@ -1544,7 +1544,7 @@ test "Dispatch with multiple events works" {
 }
 
 test "Dispatch with destroyEntity is determenistic" {
-    const ASubset = StorageStub.Subset(.{*Testing.Component.A});
+    const ASubset = StorageStub.Subset(&[_]type{*Testing.Component.A});
     const AllSubset = StorageStub.Subset(StorageStub.AllComponentWriteAccess);
     inline for (Queries.WriteA, Queries.ReadC, Queries.ReadB) |WriteA, ReadC, ReadB| {
         const SystemStruct = struct {
@@ -2109,8 +2109,7 @@ test "reproducer: Scheduler does not include new components to systems previousl
             }
         };
 
-        const RepStorage = CreateStorage(Testing.AllComponentsTuple);
-        const Scheduler = CreateScheduler(RepStorage, .{Event(
+        const Scheduler = CreateScheduler(StorageStub, .{Event(
             "on_foo",
             .{Systems.addToTracker},
             .{
@@ -2118,7 +2117,7 @@ test "reproducer: Scheduler does not include new components to systems previousl
             },
         )});
 
-        var storage = try RepStorage.init(testing.allocator);
+        var storage = try StorageStub.init(testing.allocator);
         defer storage.deinit();
 
         var scheduler = Scheduler.uninitialized;
@@ -2168,8 +2167,7 @@ test "reproducer: single threaded dispatch with a waitForEvent is idempotent" {
             }
         };
 
-        const RepStorage = CreateStorage(Testing.AllComponentsTuple);
-        const Scheduler = CreateScheduler(RepStorage, .{Event(
+        const Scheduler = CreateScheduler(StorageStub, .{Event(
             "on_foo",
             .{
                 Systems.writeA,
@@ -2179,7 +2177,7 @@ test "reproducer: single threaded dispatch with a waitForEvent is idempotent" {
             .{},
         )});
 
-        var storage = try RepStorage.init(testing.allocator);
+        var storage = try StorageStub.init(testing.allocator);
         defer storage.deinit();
 
         var scheduler = Scheduler.uninitialized;

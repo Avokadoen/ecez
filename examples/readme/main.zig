@@ -26,7 +26,7 @@ pub fn main() anyerror!void {
     };
 
     // Given a set of components, we can store them in a storage defined by the component set.
-    const Storage = ecez.CreateStorage(.{
+    const Storage = ecez.CreateStorage(&[_]type{
         Component.Health,
         Component.DeadTag,
         Component.Weapon,
@@ -118,7 +118,7 @@ pub fn main() anyerror!void {
     // You can define subsets of the storage.
     // This is used to track what components systems will read/write
     const StorageSubset = Storage.Subset(
-        .{
+        &[_]type{
             *Component.Position, // Request Position by pointer access (subset has write and read access for this type)
             *Component.Velocity, // Also request velocity with write access
             Component.Health, // Request Health by value only (subset has read only access for this type)

@@ -77,7 +77,7 @@ pub fn serialize(
             total_size += storage.inactive_entities.items.len * @sizeOf(EntityId);
         }
 
-        inline for (Storage.component_type_array) |Component| {
+        inline for (Storage.component_type_slice) |Component| {
             const cull_component = comptime check_if_cull_needed_blk: {
                 for (comptime_config.culled_component_types) |CullComponent| {
                     if (Component == CullComponent) {
@@ -161,7 +161,7 @@ pub fn serialize(
             }
         }
 
-        inline for (Storage.component_type_array, 0..) |Component, comp_index| {
+        inline for (Storage.component_type_slice, 0..) |Component, comp_index| {
             const sparse_set = storage.getSparseSetConstPtr(Component);
 
             const cull_component = comptime check_if_cull_needed_blk: {
@@ -258,7 +258,7 @@ pub fn serialize(
             }
 
             // if its not the last chunk, align cursor
-            if (Storage.component_type_array.len - 1 != comp_index) {
+            if (Storage.component_type_slice.len - 1 != comp_index) {
                 byte_cursor = std.mem.alignForward(usize, byte_cursor, alignment);
             }
         }
@@ -332,7 +332,7 @@ pub fn deserialize(
             &component_bytes,
         );
 
-        inline for (Storage.component_type_array) |Component| {
+        inline for (Storage.component_type_slice) |Component| {
             const type_hash = comptime hashTypeName(Component);
             if (type_hash == comp.type_name_hash) {
                 if (comp.type_size != @sizeOf(Component)) {
@@ -554,7 +554,7 @@ pub const Chunk = struct {
     }
 };
 
-const StorageStub = CreateStorage(Testing.AllComponentsTuple);
+const StorageStub = Testing.StorageStub;
 
 test "serializing then using Chunk.parseEzby produce expected EZBY chunk" {
     var storage = try StorageStub.init(std.testing.allocator);
@@ -589,6 +589,7 @@ test "Chunk.parseComp" {
             Testing.Component.C{},
             Testing.Component.D.one,
             Testing.Component.E{ .one = 1 },
+            Testing.Component.F{},
         });
     }
 
@@ -752,7 +753,7 @@ test "deserialized single entity works" {
 test "serialize and deserialized with types of higher alignment works" {
     const Vector = struct { v: @Vector(8, u64) };
 
-    const TestStorage = @import("storage.zig").CreateStorage(.{
+    const TestStorage = @import("storage.zig").CreateStorage(&[_]type{
         Testing.Component.A,
         Testing.Component.B,
         Vector,
@@ -1075,7 +1076,7 @@ test "serialize with culled_component_types config can be deserialized by other 
 }
 
 test "serialize Storage A into Storage AB works" {
-    const StorageB = CreateStorage(.{
+    const StorageB = CreateStorage(&[_]type{
         Testing.Component.A,
     });
     var from_storage = try StorageB.init(std.testing.allocator);
@@ -1103,7 +1104,7 @@ test "serialize Storage A into Storage AB works" {
     const bytes = try serialize(std.testing.allocator, StorageB, from_storage, .{});
     defer std.testing.allocator.free(bytes);
 
-    const StorageAB = CreateStorage(.{
+    const StorageAB = CreateStorage(&[_]type{
         Testing.Component.A,
         Testing.Component.B,
     });
@@ -1130,7 +1131,7 @@ test "serialize Storage A into Storage AB works" {
 }
 
 test "serialize Storage B into Storage AB works" {
-    const StorageB = CreateStorage(.{
+    const StorageB = CreateStorage(&[_]type{
         Testing.Component.B,
     });
     var from_storage = try StorageB.init(std.testing.allocator);
@@ -1158,7 +1159,7 @@ test "serialize Storage B into Storage AB works" {
     const bytes = try serialize(std.testing.allocator, StorageB, from_storage, .{});
     defer std.testing.allocator.free(bytes);
 
-    const StorageAB = CreateStorage(.{
+    const StorageAB = CreateStorage(&[_]type{
         Testing.Component.A,
         Testing.Component.B,
     });

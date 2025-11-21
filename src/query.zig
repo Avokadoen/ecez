@@ -1422,7 +1422,7 @@ test "query with optional component" {
 test "query with optional tag and exclude tag component" {
     const Tag0 = struct {};
     const Tag1 = struct {};
-    const RepStorage = @import("storage.zig").CreateStorage(.{
+    const RepStorage = @import("storage.zig").CreateStorage(&[_]type{
         Testing.Component.A,
         Tag0,
         Testing.Component.B,
@@ -1494,7 +1494,7 @@ test "reproducer: MineSweeper index out of bound caused by incorrect mapping of 
         a: u256 = 0,
     };
 
-    const RepStorage = @import("storage.zig").CreateStorage(.{
+    const RepStorage = @import("storage.zig").CreateStorage(&[_]type{
         transform.Position,
         transform.Rotation,
         transform.Scale,

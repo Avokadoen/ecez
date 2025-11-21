@@ -55,18 +55,10 @@ pub const AllComponentsArr = [_]type{
     Component.C,
     Component.D,
     Component.E,
-};
-
-pub const AllComponentsTuple = .{
-    Component.A,
-    Component.B,
-    Component.C,
-    Component.D,
-    Component.E,
     Component.F,
 };
 
-pub const StorageStub = CreateStorage(AllComponentsTuple);
+pub const StorageStub = CreateStorage(&AllComponentsArr);
 
 pub const Queries = struct {
     pub const Entities = query.Query(

@@ -45,7 +45,7 @@ const GridConfig = struct {
     cell_count: usize,
 };
 
-const Storage = ecez.CreateStorage(.{
+const Storage = ecez.CreateStorage(&[_]type{
     Components.GridPos,
     Components.Health,
     Components.LinePos,
@@ -175,7 +175,7 @@ pub fn main() anyerror!void {
 }
 
 const RenderTargetWriteView = Storage.Subset(
-    .{*Components.RenderTarget},
+    &[_]type{*Components.RenderTarget},
 );
 const RenderCellQuery = ecez.Query(
     struct {
@@ -259,7 +259,7 @@ pub fn busyWorkSystem(query: *GridPosQuery) void {
 }
 
 const RenderTargetReadView = Storage.Subset(
-    .{Components.RenderTarget},
+    &[_]type{Components.RenderTarget},
 );
 pub fn flushBufferSystem(
     render_view: *RenderTargetReadView,
@@ -281,7 +281,7 @@ const PosHealthQuery = ecez.Query(
     .{},
 );
 const HealthView = Storage.Subset(
-    .{Components.Health},
+    &[_]type{Components.Health},
 );
 pub fn updateCellSystem(
     pos_health_query: *PosHealthQuery,
