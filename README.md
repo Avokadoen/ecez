@@ -1,5 +1,9 @@
 ![Test](https://github.com/Avokadoen/ecez/actions/workflows/test.yaml/badge.svg)
 
+# MOVED TO CODEBERG
+
+Repository has moved to codeberg: https://codeberg.org/avokado/ecez
+
 # ECEZ - An ECS API
 
 This is a ECS (Entity Component System) API for Zig.
